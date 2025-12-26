@@ -14,6 +14,17 @@ app.get("/health", (req, res) => {
   });
 });
 
+app.post("/ingest", (req, res) => {
+  console.log("OMEN INGEST HIT");
+  console.log("Payload:", req.body);
+
+  res.json({
+    status: "ok",
+    anchor_loaded: true,
+    received_at: new Date().toISOString()
+  });
+});
+
 app.post("/chat", async (req, res) => {
   try {
     const { message } = req.body;
