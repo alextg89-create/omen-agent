@@ -3,7 +3,13 @@ import cors from "cors";
 import { runAgent } from "./agent.js";
 
 const app = express();
-app.use(cors());
+
+app.use(cors({
+  origin: '*',
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type']
+}));
+
 app.use(express.json());
 
 app.get("/health", (req, res) => {
