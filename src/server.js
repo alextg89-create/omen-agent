@@ -40,12 +40,21 @@ app.post("/chat", async (req, res) => {
     }
 
     const response = await runAgent(message);
-    res.json({ response });
+
+    res.json({
+      response: response,
+      omen: {
+        id: "omen-core-v1",
+        intent: "general_assistance",
+        decision: "respond_to_user",
+        confidence: 0.85
+      }
+    });
 
   } catch (err) {
     console.error(err);
     res.status(500).json({
-      response: "I’m having trouble right now. Please try again shortly."
+      response: "I'm having trouble right now. Please try again."
     });
   }
 });
