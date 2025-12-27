@@ -92,11 +92,21 @@ export async function runAgent(userMessage) {
     max_tokens: 400
   });
 
-  const output = completion.choices[0]?.message?.content;
+  // 🔒 NORMALIZE OUTPUT — ALWAYS STRING
+  const rawOutput = completion.choices[0]?.message?.content;
+  const output =
+    typeof rawOutput === "string"
+      ? rawOutput
+      : String(rawOutput || "");
 
   if (!output) {
+    const refusalText =
+      typeof REFUSAL_RESPONSE === "string"
+        ? REFUSAL_RESPONSE
+        : String(REFUSAL_RESPONSE);
+
     return {
-      response: REFUSAL_RESPONSE,
+      response: refusalText,
       omen: {
         id: "omen-core-v1",
         intent,
@@ -128,5 +138,6 @@ export async function runAgent(userMessage) {
     }
   };
 }
+
 
 
