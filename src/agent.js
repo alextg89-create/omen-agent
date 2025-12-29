@@ -1,143 +1,110 @@
-import OpenAI from "openai";
-import { SYSTEM_ANCHOR, REFUSAL_RESPONSE } from "./anchors.js";
-import { getMenu } from "./tools/menuTool.js";
+export async function runAgent({ message, catalog }) {
+  console.log("OMEN AGENT START");
 
-/* -------------------------
-   Intent Definitions
-------------------------- */
-const INTENTS = {
-  PRODUCT_DISCOVERY: "product_discovery",
-  PRICING: "pricing",
-  AVAILABILITY: "availability",
-  GENERAL: "general",
-  OUT_OF_SCOPE: "out_of_scope"
-};
+  try {
+    const intent = classifyIntent(message);
 
-/* -------------------------
-   Intent Classifier
-   (Rule-based, deterministic)
-------------------------- */
-function classifyIntent(message) {
-  const text = message.toLowerCase();
+    // ===== Catalog Context (OVERRIDES menu when present) =====
+    let catalogContext = "";
+    let menuContext = "";
 
-  if (text.includes("price") || text.includes("cost") || text.includes("$")) {
-    return INTENTS.PRICING;
-  }
+    if (Array.isArray(catalog) && catalog.length > 0) {
+      catalogContext = `
+PRODUCT CATALOG (LIVE STORE — SOURCE OF TRUTH)
 
-  if (
-    text.includes("available") ||
-    text.includes("in stock") ||
-    text.includes("have")
-  ) {
-    return INTENTS.AVAILABILITY;
-  }
+Rules:
+- Use ONLY this catalog to answer product availability questions
+- If a product is marked SOLD OUT, say it is sold out
+- If NO products are sold out, say that clearly
+- Do NOT invent products, prices, or quantities
+- Ignore any menu data if it conflicts
 
-  if (
-    text.includes("recommend") ||
-    text.includes("looking for") ||
-    text.includes("suggest")
-  ) {
-    return INTENTS.PRODUCT_DISCOVERY;
-  }
-
-  if (
-    text.includes("cure") ||
-    text.includes("medical") ||
-    text.includes("treat")
-  ) {
-    return INTENTS.OUT_OF_SCOPE;
-  }
-
-  return INTENTS.GENERAL;
-}
-
-/* -------------------------
-   Light Memory (Session)
-------------------------- */
-const MEMORY_LIMIT = 4;
-let memoryBuffer = [];
-
-/* -------------------------
-   OpenAI Client
-------------------------- */
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY
-});
-
-/* -------------------------
-   Main Agent Function
-------------------------- */
-export async function runAgent(userMessage) {
-  const menu = await getMenu();
-  const intent = classifyIntent(userMessage);
-
-  const messages = [
-    {
-      role: "system",
-      content:
-        SYSTEM_ANCHOR +
-        "\n\nDetected Intent: " + intent +
-        "\n\nMenu:\n" + menu
-    },
-    ...memoryBuffer,
-    {
-      role: "user",
-      content: userMessage
+Catalog:
+${catalog.map(p =>
+  `- ${p.name} (${p.category}) — ${p.inStock ? "IN STOCK" : "SOLD OUT"}`
+).join("\n")}
+`;
+    } else {
+      const menu = await getMenu();
+      menuContext = `\n\nMenu:\n${menu}`;
     }
-  ];
 
-  const completion = await openai.chat.completions.create({
-    model: "gpt-4o-mini",
-    messages,
-    max_tokens: 400
-  });
+    const messages = [
+      {
+        role: "system",
+        content:
+          SYSTEM_ANCHOR +
+          `\n\nDetected Intent: ${intent}` +
+          (catalogContext || menuContext)
+      },
+      ...memoryBuffer,
+      {
+        role: "user",
+        content: message
+      }
+    ];
 
-  // 🔒 NORMALIZE OUTPUT — ALWAYS STRING
-  const rawOutput = completion.choices[0]?.message?.content;
-  const output =
-    typeof rawOutput === "string"
-      ? rawOutput
-      : String(rawOutput || "");
+    // ===== HARD TIME BOUND =====
+    const completion = await Promise.race([
+      openai.chat.completions.create({
+        model: "gpt-4o-mini",
+        messages,
+        max_tokens: 400
+      }),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("LLM timeout")), 6000)
+      )
+    ]);
 
-  if (!output) {
-    const refusalText =
-      typeof REFUSAL_RESPONSE === "string"
-        ? REFUSAL_RESPONSE
+    const rawOutput =
+      completion?.choices?.[0]?.message?.content ?? "";
+
+    const output =
+      typeof rawOutput === "string" && rawOutput.trim()
+        ? rawOutput
         : String(REFUSAL_RESPONSE);
 
+    // ===== Memory update =====
+    memoryBuffer.push(
+      { role: "user", content: message },
+      { role: "assistant", content: output }
+    );
+
+    while (memoryBuffer.length > MEMORY_LIMIT * 2) {
+      memoryBuffer.shift();
+    }
+
+    console.log("OMEN AGENT END");
+
     return {
-      response: refusalText,
+      response: output,
       omen: {
         id: "omen-core-v1",
         intent,
-        decision: "refuse_no_output",
-        confidence: 0.25
+        decision: "respond_to_user",
+        confidence: 0.85
+      }
+    };
+
+  } catch (err) {
+    console.error("OMEN AGENT FAILURE:", err);
+
+    return {
+      response:
+        typeof REFUSAL_RESPONSE === "string"
+          ? REFUSAL_RESPONSE
+          : "OMEN is temporarily unavailable.",
+      omen: {
+        id: "omen-core-v1",
+        intent: INTENTS.GENERAL,
+        decision: "fail-safe",
+        confidence: 0.2
       }
     };
   }
-
-  /* -------------------------
-     Update Light Memory
-  ------------------------- */
-  memoryBuffer.push(
-    { role: "user", content: userMessage },
-    { role: "assistant", content: output }
-  );
-
-  while (memoryBuffer.length > MEMORY_LIMIT) {
-    memoryBuffer.shift();
-  }
-
-  return {
-    response: output,
-    omen: {
-      id: "omen-core-v1",
-      intent,
-      decision: "respond_to_user",
-      confidence: 0.85
-    }
-  };
 }
+
+
 
 
 

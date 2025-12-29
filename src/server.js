@@ -33,22 +33,17 @@ app.post("/ingest", (req, res) => {
 
 app.post("/chat", async (req, res) => {
   try {
-    const { message } = req.body;
+    const { message, catalog } = req.body;
 
     if (!message) {
       return res.status(400).json({ error: "Message required" });
     }
 
-    const response = await runAgent(message);
+    const response = await runAgent({ message, catalog });
 
     res.json({
-      response: response,
-      omen: {
-        id: "omen-core-v1",
-        intent: "general_assistance",
-        decision: "respond_to_user",
-        confidence: 0.85
-      }
+      response: response.response,
+      omen: response.omen
     });
 
   } catch (err) {
