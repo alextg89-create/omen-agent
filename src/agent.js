@@ -5,11 +5,13 @@ export async function runAgent({ message, catalog }) {
     const intent = classifyIntent(message);
 
     // ===== Catalog Context (OVERRIDES menu when present) =====
-    let catalogContext = "";
-    let menuContext = "";
+let catalogContext = "";
+let menuContext = "";
 
-    if (Array.isArray(catalog) && catalog.length > 0) {
-      catalogContext = `
+catalog = Array.isArray(catalog) ? catalog : [];
+
+if (catalog.length > 0) {
+  catalogContext = `
 PRODUCT CATALOG (LIVE STORE — SOURCE OF TRUTH)
 
 Rules:
@@ -24,10 +26,10 @@ ${catalog.map(p =>
   `- ${p.name} (${p.category}) — ${p.inStock ? "IN STOCK" : "SOLD OUT"}`
 ).join("\n")}
 `;
-    } else {
-      const menu = await getMenu();
-      menuContext = `\n\nMenu:\n${menu}`;
-    }
+} else {
+  const menu = await getMenu();
+  menuContext = `\n\nMenu:\n${menu}`;
+}
 
     const messages = [
       {
