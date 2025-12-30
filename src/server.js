@@ -1,25 +1,28 @@
-process.on("uncaughtException", (err) => {
-  console.error("UNCAUGHT EXCEPTION:", err);
-});
-
-process.on("unhandledRejection", (reason) => {
-  console.error("UNHANDLED PROMISE REJECTION:", reason);
-});
-
 import express from "express";
 import cors from "cors";
-import { runAgent } from "./agent.js";
+
+/**
+ * ===============================
+ * OMEN SERVER — STABLE BASELINE
+ * ===============================
+ * - No agent logic yet
+ * - No try/catch blocks
+ * - Guaranteed to boot
+ * - Guaranteed to return JSON
+ */
 
 const app = express();
 
+/* ---------- Middleware ---------- */
 app.use(cors({
-  origin: '*',
-  methods: ['GET', 'POST', 'OPTIONS'],
-  allowedHeaders: ['Content-Type']
+  origin: "*",
+  methods: ["GET", "POST", "OPTIONS"],
+  allowedHeaders: ["Content-Type"]
 }));
 
 app.use(express.json());
 
+/* ---------- Health Check ---------- */
 app.get("/health", (req, res) => {
   res.json({
     status: "ok",
@@ -28,6 +31,7 @@ app.get("/health", (req, res) => {
   });
 });
 
+/* ---------- Ingest (optional, safe) ---------- */
 app.post("/ingest", (req, res) => {
   console.log("OMEN INGEST HIT");
   console.log("Payload:", req.body);
@@ -39,25 +43,22 @@ app.post("/ingest", (req, res) => {
   });
 });
 
+/* ---------- Chat Endpoint (Wix calls this) ---------- */
 app.post("/chat", (req, res) => {
   console.log("OMEN CHAT HIT");
   console.log("Payload:", req.body);
 
   res.json({
     response: "Test response from OMEN. Connection successful.",
-    catalogCount: req.body.catalog?.length ?? 0
+    catalogCount: Array.isArray(req.body.catalog)
+      ? req.body.catalog.length
+      : 0
   });
 });
 
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({
-      response: "I'm having trouble right now. Please try again."
-    });
-  }
-});
-
+/* ---------- Start Server ---------- */
 const PORT = process.env.PORT || 3000;
+
 app.listen(PORT, () => {
-  console.log(`OMEN running on port ${PORT}`);
+  console.log(`OMEN server running on port ${PORT}`);
 });
