@@ -45,14 +45,27 @@ app.post("/ingest", (req, res) => {
 
 /* ---------- Chat Endpoint (Wix calls this) ---------- */
 app.post("/chat", (req, res) => {
-  console.log("OMEN CHAT HIT");
-  console.log("Payload:", req.body);
+  const { message, inventory } = req.body;
 
+  console.log("OMEN CHAT HIT");
+  console.log("Message:", message);
+  console.log("Inventory count:", Array.isArray(inventory) ? inventory.length : 0);
+
+  // If inventory is provided, use it
+  if (Array.isArray(inventory) && inventory.length > 0) {
+    const inStockItems = inventory.filter(i => i.inStock);
+
+    const names = inStockItems.slice(0, 5).map(i => i.name).join(", ");
+
+    res.json({
+      response: `Here’s what I currently have in stock: ${names}.`
+    });
+    return;
+  }
+
+  // Default response (no inventory needed)
   res.json({
-    response: "Test response from OMEN. Connection successful.",
-    catalogCount: Array.isArray(req.body.catalog)
-      ? req.body.catalog.length
-      : 0
+    response: "How can I help you today?"
   });
 });
 
@@ -61,4 +74,15 @@ const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
   console.log(`OMEN server running on port ${PORT}`);
+});
+
+app.post("/inventory", (req, res) => {
+  const { items, question } = req.body;
+
+  // TEMP: Just echo what we received
+  res.json({
+    message: "Inventory received",
+    itemCount: Array.isArray(items) ? items.length : 0,
+    question
+  });
 });
