@@ -1,3 +1,11 @@
+process.on("uncaughtException", (err) => {
+  console.error("UNCAUGHT EXCEPTION:", err);
+});
+
+process.on("unhandledRejection", (reason) => {
+  console.error("UNHANDLED PROMISE REJECTION:", reason);
+});
+
 import express from "express";
 import cors from "cors";
 import { runAgent } from "./agent.js";
@@ -32,19 +40,14 @@ app.post("/ingest", (req, res) => {
 });
 
 app.post("/chat", async (req, res) => {
-  try {
-    const { message, catalog } = req.body;
+  console.log("OMEN CHAT HIT");
+  console.log("Payload:", req.body);
 
-    if (!message) {
-      return res.status(400).json({ error: "Message required" });
-    }
-
-    const response = await runAgent({ message, catalog });
-
-    res.json({
-      response: response.response,
-      omen: response.omen
-    });
+  res.json({
+    response: "Test response from OMEN. Connection successful.",
+    catalogCount: req.body.catalog?.length ?? 0
+  });
+});
 
   } catch (err) {
     console.error(err);
