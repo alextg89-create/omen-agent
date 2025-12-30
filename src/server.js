@@ -39,7 +39,7 @@ app.post("/ingest", (req, res) => {
   });
 });
 
-app.post("/chat", async (req, res) => {
+app.post("/chat", (req, res) => {
   console.log("OMEN CHAT HIT");
   console.log("Payload:", req.body);
 
