@@ -43,6 +43,21 @@ app.post("/ingest", (req, res) => {
   });
 });
 
+/* ---------- DEV LOGIN (TEMPORARY) ---------- */
+app.post("/auth/dev-login", (req, res) => {
+  console.log("DEV LOGIN HIT");
+
+  res.json({
+    token: "dev-token",
+    businesses: [
+      {
+        id: "dev-biz-1",
+        name: "NJWeedWizard (Dev)"
+      }
+    ]
+  });
+});
+
 /* ---------- Chat Endpoint (Wix calls this) ---------- */
 app.post("/chat", (req, res) => {
   const { message, inventory } = req.body;
