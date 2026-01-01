@@ -1,7 +1,8 @@
 import express from "express";
 import cors from "cors";
+import { intelligenceRouter } from "./intelligenceRouter.js";
 
-/**
+/*
  * ===============================
  * OMEN SERVER — STABLE BASELINE
  * ===============================
@@ -31,6 +32,15 @@ app.get("/health", (req, res) => {
     status: "ok",
     service: "omen-agent",
     timestamp: new Date().toISOString()
+  });
+});
+
+app.post("/router", (req, res) => {
+  const decision = intelligenceRouter(req.body);
+
+  res.json({
+    status: "ok",
+    router: decision,
   });
 });
 
