@@ -97,20 +97,36 @@ app.post("/chat", (req, res) => {
   });
 });
 
-/* ---------- Start Server ---------- */
-const PORT = process.env.PORT || 3000;
+/* ---------- Middleware ---------- */
+app.use(express.json());
 
-app.listen(PORT, () => {
-  console.log(`OMEN server running on port ${PORT}`);
+/* ---------- Routes ---------- */
+
+app.post("/route", (req, res) => {
+  try {
+    const result = intelligenceRouter(req.body);
+    res.json({ ok: true, result });
+  } catch (err) {
+    res.status(500).json({
+      ok: false,
+      error: err.message,
+    });
+  }
 });
 
 app.post("/inventory", (req, res) => {
   const { items, question } = req.body;
 
-  // TEMP: Just echo what we received
   res.json({
     message: "Inventory received",
     itemCount: Array.isArray(items) ? items.length : 0,
-    question
+    question,
   });
+});
+
+/* ---------- Start Server ---------- */
+const PORT = process.env.PORT || 3000;
+
+app.listen(PORT, () => {
+  console.log(`OMEN server running on port ${PORT}`);
 });
