@@ -2,6 +2,8 @@ import express from "express";
 import cors from "cors";
 import crypto from "crypto";
 import { intelligenceRouter } from "./intelligenceRouter.js";
+const OMEN_MAX_TIER = Number(process.env.OMEN_MAX_TIER ?? 1);
+const OMEN_ALLOW_EXECUTION = process.env.OMEN_ALLOW_EXECUTION === "true";
 
 /*
  * ===============================
@@ -50,6 +52,18 @@ app.post("/route", (req, res) => {
 
   try {
     const result = intelligenceRouter(req.body);
+    // 🔐 Phase 3 enforcement: global safety limits
+
+// Enforce global tier ceiling
+if (result.maxTier > OMEN_MAX_TIER) {
+  result.maxTier = OMEN_MAX_TIER;
+  result.executionAllowed = false;
+}
+
+// Enforce global execution kill switch
+if (!OMEN_ALLOW_EXECUTION) {
+  result.executionAllowed = false;
+}
 
     console.log("🚦 [OMEN] Routing decision", {
       requestId,
