@@ -1,3 +1,4 @@
+import { makeDecision } from "./decisionEngine.js";
 import { callLLM } from "./llm.js";
 import express from "express";
 import cors from "cors";
@@ -68,36 +69,39 @@ app.post("/route", async (req, res) => {
       result.executionAllowed = false;
     }
 
-    // 🔮 3. PHASE 4 — LLM EXPLANATION (READ-ONLY)
-    let llmResponse = null;
+    // 🧠 3. PHASE 4 — LLM EXPLANATION (READ-ONLY)
+let llmResponse = null;
 
-    if (result.executionAllowed) {
-      llmResponse = await callLLM({
-        system:
-          "You are OMEN, an intelligence router. Briefly explain the routing decision.",
-        user: JSON.stringify(req.body),
-        maxTokens: 300,
-      });
-    }
+if (result.executionAllowed) {
+  llmResponse = await callLLM({
+    system: "You are OMEN. Briefly explain the routing decision.",
+    user: JSON.stringify(req.body),
+    maxTokens: 300,
+  });
+}
 
-    // 🔍 4. LOG FINAL, ENFORCED DECISION
-    console.log("🚦 [OMEN] Routing decision", {
-      requestId,
-      timestamp,
-      decision: {
-        allowedIntelligences: result.allowedIntelligences,
-        maxTier: result.maxTier,
-        executionAllowed: result.executionAllowed,
-      },
-    });
+// 🧭 4. DECISION ENGINE (AUTHORITATIVE)
+const decision = makeDecision({
+  routerResult: result,
+  llmExplanation: llmResponse,
+});
+
+// 🟢 5. LOG FINAL DECISION
+console.log("🟢 [OMEN] Final decision", {
+  requestId,
+  timestamp,
+  decision,
+});
 
     // 🚀 5. RESPOND
-    res.json({
-      ok: true,
-      requestId,
-      result,
-      llmResponse,
-    });
+  res.json({
+  ok: true,
+  requestId,
+  router: result,
+  decision,
+  explanation: llmResponse,
+});
+
   } catch (err) {
     console.error("❌ [OMEN] Routing error", {
       requestId,
@@ -139,26 +143,46 @@ app.post("/auth/dev-login", (req, res) => {
   });
 });
 
-/* ---------- Chat Endpoint (Wix) ---------- */
+/* ---------- Conversational Interface ---------- */
 app.post("/chat", (req, res) => {
+  const requestId = createRequestId();
   const { message, inventory } = req.body;
 
   console.log("💬 [OMEN] CHAT HIT", {
+    requestId,
     message,
     inventoryCount: Array.isArray(inventory) ? inventory.length : 0,
   });
 
+  // Inventory-aware response
   if (Array.isArray(inventory) && inventory.length > 0) {
     const inStockItems = inventory.filter(i => i.inStock);
     const names = inStockItems.slice(0, 5).map(i => i.name).join(", ");
 
     return res.json({
       response: `Here’s what I currently have in stock: ${names}.`,
+      confidence: "high",
+      reason: "Live inventory data provided",
+      nextBestAction: null,
+      meta: {
+        requestId,
+        decision: "RESPOND_DIRECT",
+        executionAllowed: true,
+      },
     });
   }
 
-  res.json({
+  // Default safe response (no inventory)
+  return res.json({
     response: "How can I help you today?",
+    confidence: "medium",
+    reason: "No inventory data provided",
+    nextBestAction: null,
+    meta: {
+      requestId,
+      decision: "RESPOND_DIRECT",
+      executionAllowed: true,
+    },
   });
 });
 
