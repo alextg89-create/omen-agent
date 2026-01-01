@@ -1,3 +1,4 @@
+import { callLLM } from "./llm.js";
 import express from "express";
 import cors from "cors";
 import crypto from "crypto";
@@ -40,7 +41,7 @@ app.get("/health", (req, res) => {
 });
 
 /* ---------- Intelligence Routing (CANONICAL) ---------- */
-app.post("/route", (req, res) => {
+app.post("/route", async (req, res) => {
   const requestId = createRequestId();
   const timestamp = new Date().toISOString();
 
@@ -51,20 +52,35 @@ app.post("/route", (req, res) => {
   });
 
   try {
+    // 🧠 1. ROUTER DECISION
     const result = intelligenceRouter(req.body);
-    // 🔐 Phase 3 enforcement: global safety limits
 
-// Enforce global tier ceiling
-if (result.maxTier > OMEN_MAX_TIER) {
-  result.maxTier = OMEN_MAX_TIER;
-  result.executionAllowed = false;
-}
+    // 🔐 2. PHASE 3 — GLOBAL SAFETY ENFORCEMENT
 
-// Enforce global execution kill switch
-if (!OMEN_ALLOW_EXECUTION) {
-  result.executionAllowed = false;
-}
+    // Enforce tier ceiling
+    if (result.maxTier > OMEN_MAX_TIER) {
+      result.maxTier = OMEN_MAX_TIER;
+      result.executionAllowed = false;
+    }
 
+    // Enforce global execution kill switch
+    if (!OMEN_ALLOW_EXECUTION) {
+      result.executionAllowed = false;
+    }
+
+    // 🔮 3. PHASE 4 — LLM EXPLANATION (READ-ONLY)
+    let llmResponse = null;
+
+    if (result.executionAllowed) {
+      llmResponse = await callLLM({
+        system:
+          "You are OMEN, an intelligence router. Briefly explain the routing decision.",
+        user: JSON.stringify(req.body),
+        maxTokens: 300,
+      });
+    }
+
+    // 🔍 4. LOG FINAL, ENFORCED DECISION
     console.log("🚦 [OMEN] Routing decision", {
       requestId,
       timestamp,
@@ -75,10 +91,12 @@ if (!OMEN_ALLOW_EXECUTION) {
       },
     });
 
+    // 🚀 5. RESPOND
     res.json({
       ok: true,
       requestId,
       result,
+      llmResponse,
     });
   } catch (err) {
     console.error("❌ [OMEN] Routing error", {
