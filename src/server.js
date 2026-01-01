@@ -143,26 +143,41 @@ app.post("/auth/dev-login", (req, res) => {
   });
 });
 
-/* ---------- Conversational Interface ---------- */
+/* ---------- Chat Endpoint ---------- */
 app.post("/chat", (req, res) => {
   const requestId = createRequestId();
   const { message, inventory } = req.body;
 
-  console.log("💬 [OMEN] CHAT HIT", {
-    requestId,
-    message,
-    inventoryCount: Array.isArray(inventory) ? inventory.length : 0,
-  });
+  try {
+    console.log("💬 [OMEN] CHAT HIT", {
+      requestId,
+      message,
+      inventoryCount: Array.isArray(inventory) ? inventory.length : 0,
+    });
 
-  // Inventory-aware response
-  if (Array.isArray(inventory) && inventory.length > 0) {
-    const inStockItems = inventory.filter(i => i.inStock);
-    const names = inStockItems.slice(0, 5).map(i => i.name).join(", ");
+    // Inventory-aware response
+    if (Array.isArray(inventory) && inventory.length > 0) {
+      const inStockItems = inventory.filter(i => i.inStock);
+      const names = inStockItems.slice(0, 5).map(i => i.name).join(", ");
 
+      return res.json({
+        response: `Here’s what I currently have in stock: ${names}.`,
+        confidence: "high",
+        reason: "Live inventory data provided",
+        nextBestAction: null,
+        meta: {
+          requestId,
+          decision: "RESPOND_DIRECT",
+          executionAllowed: true,
+        },
+      });
+    }
+
+    // Default safe response (no inventory)
     return res.json({
-      response: `Here’s what I currently have in stock: ${names}.`,
-      confidence: "high",
-      reason: "Live inventory data provided",
+      response: "How can I help you today?",
+      confidence: "medium",
+      reason: "No inventory data provided",
       nextBestAction: null,
       meta: {
         requestId,
@@ -170,27 +185,26 @@ app.post("/chat", (req, res) => {
         executionAllowed: true,
       },
     });
-  }
 
-  // Default safe response (no inventory)
-  return res.json({
-    response: "How can I help you today?",
-    confidence: "medium",
-    reason: "No inventory data provided",
-    nextBestAction: null,
-    meta: {
+  } catch (err) {
+    console.error("[OMEN] CHAT ERROR", {
       requestId,
-      decision: "RESPOND_DIRECT",
-      executionAllowed: true,
-    },
-  });
+      error: err.message,
+    });
+
+    return res.status(500).json({
+      ok: false,
+      requestId,
+      error: "Chat handler failed safely",
+    });
+  }
 });
 
 /* ---------- Inventory ---------- */
 app.post("/inventory", (req, res) => {
   const { items, question } = req.body;
 
-  res.json({
+  return res.json({
     message: "Inventory received",
     itemCount: Array.isArray(items) ? items.length : 0,
     question,
@@ -203,3 +217,4 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`OMEN server running on port ${PORT}`);
 });
+
