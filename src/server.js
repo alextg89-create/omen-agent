@@ -214,6 +214,15 @@ app.post("/inventory", (req, res) => {
 /* ---------- Start Server (LAST) ---------- */
 const PORT = process.env.PORT || 3000;
 
+app.post("/omen/run-daily", async (req, res) => {
+  console.log("OMEN daily run hit", req.body);
+
+  res.json({
+    status: "ok",
+    message: "OMEN daily check completed"
+  });
+});
+
 app.listen(PORT, () => {
   console.log(`OMEN server running on port ${PORT}`);
 });
