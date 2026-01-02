@@ -1,3 +1,4 @@
+import { sampleInventory } from "./mocks/inventory.sample.js";
 import { makeDecision } from "./decisionEngine.js";
 import { callLLM } from "./llm.js";
 import express from "express";
@@ -215,11 +216,13 @@ app.post("/inventory", (req, res) => {
 const PORT = process.env.PORT || 3000;
 
 app.post("/omen/run-daily", async (req, res) => {
-  console.log("OMEN daily run hit", req.body);
+  console.log("🧠 OMEN daily run");
+
+  const inventory = sampleInventory;
 
   res.json({
     status: "ok",
-    message: "OMEN daily check completed"
+    inventoryCount: inventory.length,
   });
 });
 

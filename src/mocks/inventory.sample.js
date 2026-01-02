@@ -1,0 +1,38 @@
+export const sampleInventory = [
+  {
+    sku: "ABC123",
+    name: "Blue Dream 3.5g",
+    category: "Flower",
+    onHand: 42,
+    unitCost: 12,
+    unitPrice: 35,
+    avgDailySales: 3.2,
+    lastSoldAt: "2026-01-28T18:32:00Z",
+    lastRestockedAt: "2026-01-10T09:00:00Z",
+    daysOnShelf: 18,
+    vendor: "West Coast Growers",
+    flags: {
+      expired: false,
+      promo: false,
+      seasonal: false,
+    },
+  },
+  {
+    sku: "EDB778",
+    name: "Mango Gummies 10pk",
+    category: "Edible",
+    onHand: 6,
+    unitCost: 8,
+    unitPrice: 24,
+    avgDailySales: 1.9,
+    lastSoldAt: "2026-01-29T20:10:00Z",
+    lastRestockedAt: "2026-01-05T09:00:00Z",
+    daysOnShelf: 24,
+    vendor: "Sweet Labs",
+    flags: {
+      expired: false,
+      promo: true,
+      seasonal: false,
+    },
+  },
+];
