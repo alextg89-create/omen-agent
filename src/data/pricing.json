@@ -1,0 +1,137 @@
+[
+  {
+    "Product ID": "FLW-001",
+    "Category": "FLOWER",
+    "Quality": "WIZARD OZ",
+    "Weight (g)": "28 G",
+    "Cost": "$35",
+    "Retail Price": "$88",
+    "Sale Price": "$99"
+  },
+  {
+    "Product ID": "FLW-003",
+    "Category": "FLOWER",
+    "Quality": "STANDARD",
+    "Weight (g)": "3.5 G",
+    "Cost": "$7",
+    "Retail Price": "$18",
+    "Sale Price": "$30"
+  },
+  {
+    "Product ID": "FLW-004",
+    "Category": "FLOWER",
+    "Quality": "STANDARD",
+    "Weight (g)": "7 G",
+    "Cost": "$13",
+    "Retail Price": "$33",
+    "Sale Price": "$50"
+  },
+  {
+    "Product ID": "FLW-005",
+    "Category": "FLOWER",
+    "Quality": "STANDARD",
+    "Weight (g)": "14 G",
+    "Cost": "$25",
+    "Retail Price": "$63",
+    "Sale Price": "$95"
+  },
+  {
+    "Product ID": "FLW-006",
+    "Category": "FLOWER",
+    "Quality": "STANDARD",
+    "Weight (g)": "28 G",
+    "Cost": "$50",
+    "Retail Price": "$125",
+    "Sale Price": "$150"
+  },
+  {
+    "Product ID": "FLW-008",
+    "Category": "FLOWER",
+    "Quality": "MID SHELF",
+    "Weight (g)": "3.5 G",
+    "Cost": "$9",
+    "Retail Price": "$23",
+    "Sale Price": "$45"
+  },
+  {
+    "Product ID": "FLW-009",
+    "Category": "FLOWER",
+    "Quality": "MID SHELF",
+    "Weight (g)": "7 G",
+    "Cost": "$17",
+    "Retail Price": "$43",
+    "Sale Price": "$80"
+  },
+  {
+    "Product ID": "FLW-010",
+    "Category": "FLOWER",
+    "Quality": "MID SHELF",
+    "Weight (g)": "14 G",
+    "Cost": "$33",
+    "Retail Price": "$83",
+    "Sale Price": "$140"
+  },
+  {
+    "Product ID": "FLW-011",
+    "Category": "FLOWER",
+    "Quality": "MID SHELF",
+    "Weight (g)": "28 G",
+    "Cost": "$65",
+    "Retail Price": "$163",
+    "Sale Price": "$250"
+  },
+  {
+    "Product ID": "FLW-013",
+    "Category": "FLOWER",
+    "Quality": "TOP SHELF",
+    "Weight (g)": "3.5 G",
+    "Cost": "$10",
+    "Retail Price": "$25",
+    "Sale Price": "$55"
+  },
+  {
+    "Product ID": "FLW-014",
+    "Category": "FLOWER",
+    "Quality": "TOP SHELF",
+    "Weight (g)": "7 G",
+    "Cost": "$19",
+    "Retail Price": "$48",
+    "Sale Price": "$100"
+  },
+  {
+    "Product ID": "FLW-015",
+    "Category": "FLOWER",
+    "Quality": "TOP SHELF",
+    "Weight (g)": "14 G",
+    "Cost": "$38",
+    "Retail Price": "$95",
+    "Sale Price": "$180"
+  },
+  {
+    "Product ID": "FLW-016",
+    "Category": "FLOWER",
+    "Quality": "TOP SHELF",
+    "Weight (g)": "28 G",
+    "Cost": "$75",
+    "Retail Price": "$188",
+    "Sale Price": "$325"
+  },
+  {
+    "Product ID": "FLW-018",
+    "Category": "FLOWER",
+    "Quality": "EXOTIC/DESIGN",
+    "Weight (g)": "3.5 G",
+    "Cost": "$12",
+    "Retail Price": "$30",
+    "Sale Price": "$65"
+  },
+  {
+    "Product ID": "FLW-020",
+    "Category": "FLOWER",
+    "Quality": "EXOTIC/DESIGN",
+    "Weight (g)": "14 G",
+    "Cost": "$45",
+    "Retail Price": "$113",
+    "Sale Price": "$200"
+  }
+]

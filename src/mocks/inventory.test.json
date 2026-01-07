@@ -1,0 +1,14 @@
+{
+  "items": [
+    {
+      "sku": "FORCE_PROOF",
+      "name": "Test Velocity Drop",
+      "category": "Flower",
+      "onHand": 10,
+      "avgDailySales": 1,
+      "units_sold_7d": 2,
+      "units_sold_30d": 30
+    }
+  ]
+}
+

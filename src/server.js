@@ -1,4 +1,14 @@
-import { sampleInventory } from "./mocks/inventory.sample.js";
+import applyPricing from "./tools/applyPricing.js";
+import { saveInventory, getInventory } from "./tools/inventoryStore.js";
+import { aggregateInventory } from "./aggregateInventory.js";
+import { detectLowStock } from "./inventorySignals.js";
+import { persistInventory } from "./persistInventory.js";
+import { ingestNjWeedWizardCsv } from "./njweedwizardCsvIngest.js";
+import { summarizeDay } from "./summarizeDay.js";
+import { frameActions } from "./frameActions.js";
+import { normalizeInventory } from "./normalizeInventory.js";
+import { analyzeInventory } from "./inventoryAnalyzer.js";
+import { sampleInventory as mockInventory } from "./mocks/inventory.sample.js";
 import { makeDecision } from "./decisionEngine.js";
 import { callLLM } from "./llm.js";
 import express from "express";
@@ -7,6 +17,7 @@ import crypto from "crypto";
 import { intelligenceRouter } from "./intelligenceRouter.js";
 const OMEN_MAX_TIER = Number(process.env.OMEN_MAX_TIER ?? 1);
 const OMEN_ALLOW_EXECUTION = process.env.OMEN_ALLOW_EXECUTION === "true";
+const USE_MOCK_INVENTORY = process.env.OMEN_USE_MOCKS === "true";
 
 /*
  * ===============================
@@ -19,6 +30,19 @@ const OMEN_ALLOW_EXECUTION = process.env.OMEN_ALLOW_EXECUTION === "true";
  */
 
 const app = express();
+
+/**
+ * DEBUG — Inspect live inventory snapshot
+ */
+app.get("/debug/inventory", (req, res) => {
+  const inventory = getInventory("NJWeedWizard");
+
+  res.json({
+    ok: true,
+    count: inventory ? inventory.length : 0,
+    sample: inventory ? inventory.slice(0, 5) : [],
+  });
+});
 
 /* ---------- Middleware ---------- */
 app.use(cors({
@@ -118,15 +142,80 @@ console.log("🟢 [OMEN] Final decision", {
   }
 });
 
-/* ---------- Ingest (optional, safe) ---------- */
-app.post("/ingest", (req, res) => {
-  console.log("📥 [OMEN] INGEST HIT", req.body);
+/* ---------- NJWeedWizard Inventory Ingest ---------- */
+app.post("/ingest/njweedwizard", (req, res) => {
+  try {
+    console.log("INGEST HIT:", req.body);
+    const rows =
+  Array.isArray(req.body?.rows) ? req.body.rows :
+  Array.isArray(req.body?.data) ? req.body.data :
+  Array.isArray(req.body) ? req.body :
+  [];
 
-  res.json({
-    status: "ok",
-    anchor_loaded: true,
-    received_at: new Date().toISOString(),
+  if (!Array.isArray(rows) || rows.length === 0) {
+  return res.status(400).json({
+    ok: false,
+    error: "No ingestable rows found in payload",
+    receivedType: typeof req.body,
   });
+}
+    // 🔹 Strip empty spacer rows (VERY IMPORTANT)
+const cleanRows = rows.filter(
+  r =>
+    r &&
+    typeof r.strain === "string" && r.strain.trim() !== "" &&
+    typeof r.quality === "string" && r.quality.trim() !== "" &&
+    typeof r.unit === "string" && r.unit.trim() !== "" &&
+    Number(r.quantity) > 0
+);
+
+    // 1️⃣ Normalize raw ingest
+// If rows already look normalized, skip CSV ingest
+const normalized =
+  typeof cleanRows[0]?.strain === "string" &&
+  typeof cleanRows[0]?.unit === "string"
+    ? cleanRows
+    : ingestNjWeedWizardCsv(cleanRows);
+    
+    // 2️⃣ Aggregate / enrich inventory (pricing, stock, discounts)
+    const aggregated = applyPricing(normalized);
+    console.log(
+  "PRICING SAMPLE:",
+  aggregated.slice(0, 3).map(i => ({
+    strain: i.strain,
+    unit: i.unit,
+    pricingMatch: i.pricingMatch,
+    pricing: i.pricing
+  }))
+);
+
+    // 3️⃣ Analyze enriched inventory (proofs ONLY)
+    const proofs = analyzeInventory(aggregated);
+
+    // 4️⃣ Persist enriched inventory (builds snapshot internally)
+    const storage = persistInventory(aggregated);
+
+    // 5️⃣ Save enriched inventory to in-memory store
+    saveInventory("NJWeedWizard", aggregated);
+
+    // 6️⃣ Optional signals
+    const lowStock = detectLowStock(aggregated);
+
+    return res.json({
+      ok: true,
+      store: "NJWeedWizard",
+      itemCount: aggregated.length,
+      stored: true,
+      updated_at: new Date().toISOString(),
+      proofs,
+    });
+  } catch (err) {
+    console.error("NJWeedWizard ingest failed", err);
+    return res.status(500).json({
+      ok: false,
+      error: err.message,
+    });
+  }
 });
 
 /* ---------- DEV LOGIN (TEMPORARY) ---------- */
@@ -205,10 +294,25 @@ app.post("/chat", (req, res) => {
 app.post("/inventory", (req, res) => {
   const { items, question } = req.body;
 
+  const inventoryItems = normalizeInventory(
+    USE_MOCK_INVENTORY ? mockInventory : items
+  );
+
+  if (!Array.isArray(inventoryItems)) {
+    return res.status(400).json({ error: "items must be an array" });
+  }
+
+  const proofs = analyzeInventory(inventoryItems);
+  const actions = frameActions(proofs);
+
   return res.json({
-    message: "Inventory received",
-    itemCount: Array.isArray(items) ? items.length : 0,
-    question,
+    message: USE_MOCK_INVENTORY
+      ? "Inventory analyzed (mock)"
+      : "Inventory analyzed",
+    itemCount: inventoryItems.length,
+    proofs,
+    actions,
+    question
   });
 });
 
@@ -218,7 +322,7 @@ const PORT = process.env.PORT || 3000;
 app.post("/omen/run-daily", async (req, res) => {
   console.log("🧠 OMEN daily run");
 
-  const inventory = sampleInventory;
+  const inventory = mockInventory;
 
   res.json({
     status: "ok",
