@@ -106,7 +106,7 @@ if (result.executionAllowed) {
 }
 
 // 🧭 4. DECISION ENGINE (AUTHORITATIVE)
-const decision = makeDecision({
+const decision = await makeDecision({
   routerResult: result,
   llmExplanation: llmResponse,
 });

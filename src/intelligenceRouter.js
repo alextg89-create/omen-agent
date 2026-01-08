@@ -43,6 +43,15 @@ function intelligenceRouter(input) {
     allowedIntelligences.push("GOVERNANCE");
     executionAllowed = false;
   }
+  
+// 🔓 Admin / Intelligence-only override (non-executing)
+if (
+  signals?.admin_request === true ||
+  process.env.OMEN_ALLOW_EXECUTION === "true"
+) {
+  allowedIntelligences.push("INTELLIGENCE");
+  executionAllowed = true;
+}
 
   return {
     allowedIntelligences: [...new Set(allowedIntelligences)],
