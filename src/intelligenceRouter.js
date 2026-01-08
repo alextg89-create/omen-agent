@@ -38,13 +38,7 @@ function intelligenceRouter(input) {
     executionAllowed = true;
   }
 
-  // Governance override
-  if (riskLevel === "HIGH") {
-    allowedIntelligences.push("GOVERNANCE");
-    executionAllowed = false;
-  }
-  
-// 🔓 Admin / Intelligence-only override (non-executing)
+  // 🔓 Admin / Intelligence-only override (non-executing)
 if (
   signals?.admin_request === true ||
   process.env.OMEN_ALLOW_EXECUTION === "true"
@@ -52,6 +46,11 @@ if (
   allowedIntelligences.push("INTELLIGENCE");
   executionAllowed = true;
 }
+  // Governance override
+  if (riskLevel === "HIGH") {
+    allowedIntelligences.push("GOVERNANCE");
+    executionAllowed = false;
+  }
 
   return {
     allowedIntelligences: [...new Set(allowedIntelligences)],
