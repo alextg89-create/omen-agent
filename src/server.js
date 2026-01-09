@@ -417,9 +417,9 @@ function calculateInventoryMetrics(inventory) {
   // Filter items with valid pricing data
   const itemsWithPricing = inventory.filter(item =>
     item.pricing &&
-    typeof item.pricing.retailPrice === "number" &&
+    typeof item.pricing.retail === "number" &&
     typeof item.pricing.cost === "number" &&
-    item.pricing.retailPrice > 0
+    item.pricing.retail > 0
   );
 
   if (itemsWithPricing.length === 0) {
@@ -431,12 +431,12 @@ function calculateInventoryMetrics(inventory) {
 
   // Calculate margins
   const margins = itemsWithPricing.map(item => {
-    const margin = ((item.pricing.retailPrice - item.pricing.cost) / item.pricing.retailPrice) * 100;
+    const margin = ((item.pricing.retail - item.pricing.cost) / item.pricing.retail) * 100;
     return {
       strain: item.strain,
       unit: item.unit,
       cost: item.pricing.cost,
-      retailPrice: item.pricing.retailPrice,
+      retailPrice: item.pricing.retail,
       margin: margin,
       quantity: item.quantity || 0,
     };
@@ -445,7 +445,7 @@ function calculateInventoryMetrics(inventory) {
   const avgMargin = margins.reduce((sum, m) => sum + m.margin, 0) / margins.length;
 
   const totalRevenue = itemsWithPricing.reduce((sum, item) =>
-    sum + (item.pricing.retailPrice * (item.quantity || 0)), 0
+    sum + (item.pricing.retail * (item.quantity || 0)), 0
   );
 
   const totalCost = itemsWithPricing.reduce((sum, item) =>
