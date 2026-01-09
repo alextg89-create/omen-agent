@@ -1,6 +1,11 @@
 // src/decisionEngine.js
 
 import { callLLM } from "./llm.js";
+import {
+  evaluateGovernanceState,
+  mayExecute,
+  currentExecutionMode,
+} from "./governance/governanceController.js";
 
 // TEMP: Contract disabled until finalized
 // import { DecisionContract } from "./contracts/DecisionContract.js";
@@ -19,7 +24,31 @@ export async function makeDecision({
   anchors,
   priorDecisions = [],
 }) {
-  // Hard block always wins
+  // 🛡️ HOOK #3: Governance execution guard (Phase 3)
+  // Feature flag: OMEN_GOVERNANCE_ENABLED (default: false)
+  if (process.env.OMEN_GOVERNANCE_ENABLED === "true") {
+    evaluateGovernanceState({
+      routerResult,
+      signals,
+      riskLevel: signals?.riskLevel,
+      adminSignal: signals?.adminOverride || false,
+      confidenceGate: true, // Will be refined by decision confidence
+      decisionIntent: routerResult.executionAllowed ? "ACT" : "NONE",
+    });
+
+    // Override executionAllowed with governance decision
+    // If governance blocks (mayExecute() = false), enforce block
+    if (!mayExecute()) {
+      return {
+        decision: "BLOCK",
+        confidence: 0.95,
+        requiresHuman: true,
+        reason: `Execution blocked by governance (mode: ${currentExecutionMode()})`,
+      };
+    }
+  }
+
+  // Hard block always wins (original logic preserved)
   if (!routerResult.executionAllowed) {
     return {
       decision: "BLOCK",

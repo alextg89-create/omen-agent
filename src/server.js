@@ -11,6 +11,10 @@ import { analyzeInventory } from "./inventoryAnalyzer.js";
 import { sampleInventory as mockInventory } from "./mocks/inventory.sample.js";
 import { makeDecision } from "./decisionEngine.js";
 import { callLLM } from "./llm.js";
+import {
+  evaluateGovernanceState,
+  currentExecutionMode,
+} from "./governance/governanceController.js";
 import express from "express";
 import cors from "cors";
 import crypto from "crypto";
@@ -111,11 +115,33 @@ const decision = await makeDecision({
   llmExplanation: llmResponse,
 });
 
+// 🛡️ HOOK #1: Governance state evaluation at request entry (Phase 3)
+// Feature flag: OMEN_GOVERNANCE_ENABLED (default: false)
+if (process.env.OMEN_GOVERNANCE_ENABLED === "true") {
+  evaluateGovernanceState({
+    routerResult: result,
+    decision,
+    riskLevel: req.body.riskLevel,
+    adminSignal: req.headers["x-admin-override"] === "true",
+    confidenceGate: decision.confidence >= 0.7,
+    decisionIntent:
+      decision.decision === "RESPOND_DIRECT" ||
+      decision.decision === "ASK_CLARIFYING_QUESTION"
+        ? "SPEAK"
+        : decision.decision === "BLOCK"
+        ? "NONE"
+        : "ACT",
+  });
+}
+
 // 🟢 5. LOG FINAL DECISION
 console.log("🟢 [OMEN] Final decision", {
   requestId,
   timestamp,
   decision,
+  ...(process.env.OMEN_GOVERNANCE_ENABLED === "true" && {
+    governanceMode: currentExecutionMode(),
+  }),
 });
 
     // 🚀 5. RESPOND
