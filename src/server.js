@@ -271,15 +271,17 @@ app.post("/chat", async (req, res) => {
       historyLength: conversationHistory.length,
     });
 
-    // 1️⃣ INTENT DETECTION - Check if inventory data is required
+    // 1️⃣ INTENT DETECTION
     const needsInventory = detectInventoryIntent(message);
+    const needsRecommendations = detectRecommendationIntent(message);
 
     let inventoryData = null;
     let inventoryContext = null;
+    let recommendations = null;
 
-    // 2️⃣ FETCH INVENTORY (only when needed)
-    if (needsInventory) {
-      console.log("💬 [OMEN] Inventory required for query", { requestId });
+    // 2️⃣ FETCH INVENTORY (when needed for inventory or recommendations)
+    if (needsInventory || needsRecommendations) {
+      console.log("💬 [OMEN] Inventory required for query", { requestId, needsRecommendations });
 
       // Reuse existing inventory store logic
       inventoryData = getInventory("NJWeedWizard");
@@ -314,16 +316,42 @@ app.post("/chat", async (req, res) => {
         itemCount: inventoryData.length,
         metrics: Object.keys(inventoryContext),
       });
+
+      // 4️⃣ GENERATE RECOMMENDATIONS (if user is asking for them)
+      if (needsRecommendations) {
+        recommendations = generateRecommendations(inventoryData, inventoryContext);
+        console.log("💬 [OMEN] Recommendations generated", {
+          requestId,
+          promotions: recommendations.promotions.length,
+          pricing: recommendations.pricing.length,
+          inventory: recommendations.inventory.length
+        });
+      }
     }
 
-    // 4️⃣ GENERATE LLM RESPONSE (with or without inventory)
-    const systemPrompt = needsInventory && inventoryContext
-      ? buildInventoryAwareSystemPrompt(inventoryContext)
-      : "You are OMEN, an inventory intelligence assistant. Answer the user's question clearly and concisely.";
+    // 5️⃣ GENERATE LLM RESPONSE
+    let systemPrompt = "You are OMEN, an inventory intelligence assistant. Answer the user's question clearly and concisely.";
+    let userPrompt = message;
 
-    const userPrompt = needsInventory && inventoryContext
-      ? `User Question: ${message}\n\nInventory Data:\n${JSON.stringify(inventoryContext, null, 2)}`
-      : message;
+    if (needsRecommendations && recommendations) {
+      systemPrompt = `You are OMEN, an inventory intelligence assistant with access to business recommendations.
+
+When answering:
+- Explain recommendations clearly and concisely
+- Prioritize by confidence level
+- Give specific actionable advice
+- Reference the triggering metrics when helpful
+
+Current Recommendations Available:
+- ${recommendations.promotions.length} promotion opportunities
+- ${recommendations.pricing.length} pricing actions
+- ${recommendations.inventory.length} inventory actions`;
+
+      userPrompt = `User Question: ${message}\n\nRecommendations:\n${JSON.stringify(recommendations, null, 2)}`;
+    } else if (needsInventory && inventoryContext) {
+      systemPrompt = buildInventoryAwareSystemPrompt(inventoryContext);
+      userPrompt = `User Question: ${message}\n\nInventory Data:\n${JSON.stringify(inventoryContext, null, 2)}`;
+    }
 
     let llmResponse = await callLLM({
       system: systemPrompt,
@@ -331,31 +359,35 @@ app.post("/chat", async (req, res) => {
       maxTokens: 500,
     });
 
-    // 5️⃣ FALLBACK FOR DEV MODE (no LLM)
+    // 6️⃣ FALLBACK FOR DEV MODE (no LLM)
     if (!llmResponse) {
-      if (needsInventory && inventoryContext) {
+      if (needsRecommendations && recommendations) {
+        llmResponse = generateFallbackRecommendationResponse(message, recommendations);
+      } else if (needsInventory && inventoryContext) {
         llmResponse = generateFallbackInventoryResponse(message, inventoryContext);
       } else {
         llmResponse = "How can I help you today? (LLM unavailable - dev mode)";
       }
     }
 
-    // 6️⃣ DETERMINE CONFIDENCE
-    const confidence = needsInventory && inventoryContext ? "high" : "medium";
-    const reason = needsInventory && inventoryContext
+    // 7️⃣ DETERMINE CONFIDENCE
+    const confidence = (needsInventory || needsRecommendations) && inventoryContext ? "high" : "medium";
+    const reason = needsRecommendations && recommendations
+      ? `Answered using live recommendations (${recommendations.promotions.length + recommendations.pricing.length + recommendations.inventory.length} total)`
+      : needsInventory && inventoryContext
       ? `Answered using live inventory data (${inventoryData.length} items)`
       : needsInventory
       ? "Inventory data not available"
       : "General query answered";
 
-    // 7️⃣ UPDATE CONVERSATION CONTEXT
+    // 8️⃣ UPDATE CONVERSATION CONTEXT
     const conversationContext = {
       lastIntent: extractIntent(message),
-      recentTopics: extractTopics(message, needsInventory),
+      recentTopics: extractTopics(message, needsInventory || needsRecommendations),
       messagesExchanged: conversationHistory.length + 1,
     };
 
-    // 8️⃣ RESPOND
+    // 9️⃣ RESPOND
     return res.json({
       response: llmResponse,
       confidence,
@@ -366,9 +398,13 @@ app.post("/chat", async (req, res) => {
         requestId,
         decision: "RESPOND_DIRECT",
         executionAllowed: true,
-        inventoryRequired: needsInventory,
+        inventoryRequired: needsInventory || needsRecommendations,
         inventoryAvailable: !!inventoryContext,
         inventoryItemCount: inventoryData ? inventoryData.length : 0,
+        recommendationsProvided: !!recommendations,
+        recommendationCount: recommendations
+          ? recommendations.promotions.length + recommendations.pricing.length + recommendations.inventory.length
+          : 0
       },
     });
 
@@ -404,6 +440,23 @@ function detectInventoryIntent(message) {
   ];
 
   return inventoryKeywords.some(keyword => lowerMessage.includes(keyword));
+}
+
+/**
+ * Detect if user is asking for recommendations
+ */
+function detectRecommendationIntent(message) {
+  if (!message || typeof message !== "string") return false;
+
+  const lowerMessage = message.toLowerCase();
+
+  const recommendationKeywords = [
+    "recommend", "suggestion", "should i", "what to promote",
+    "what should", "advice", "action", "bundle", "discount",
+    "reorder", "priority", "focus on"
+  ];
+
+  return recommendationKeywords.some(keyword => lowerMessage.includes(keyword));
 }
 
 /**
@@ -532,6 +585,76 @@ function generateFallbackInventoryResponse(message, inventoryContext) {
 }
 
 /**
+ * Generate fallback recommendation response when LLM is unavailable
+ */
+function generateFallbackRecommendationResponse(message, recommendations) {
+  const lowerMessage = message.toLowerCase();
+
+  let response = "";
+
+  // Promotion recommendations
+  if (lowerMessage.includes("promote") || lowerMessage.includes("feature")) {
+    if (recommendations.promotions.length > 0) {
+      response = `Here are my top promotion recommendations:\n\n`;
+      recommendations.promotions.slice(0, 3).forEach((rec, i) => {
+        response += `${i + 1}. ${rec.name} - ${rec.reason} (Margin: ${rec.triggeringMetrics.margin}%, Stock: ${rec.triggeringMetrics.quantity})\n`;
+      });
+    } else {
+      response = "No specific promotion recommendations at this time. Your inventory levels and margins are balanced.";
+    }
+  }
+  // Pricing recommendations
+  else if (lowerMessage.includes("pricing") || lowerMessage.includes("price")) {
+    if (recommendations.pricing.length > 0) {
+      response = `Here are my pricing recommendations:\n\n`;
+      recommendations.pricing.slice(0, 3).forEach((rec, i) => {
+        response += `${i + 1}. ${rec.name} - ${rec.reason} (Current margin: ${rec.triggeringMetrics.margin}%)\n`;
+      });
+    } else {
+      response = "Your pricing is well-balanced. No urgent pricing changes needed.";
+    }
+  }
+  // Inventory actions
+  else if (lowerMessage.includes("reorder") || lowerMessage.includes("stock")) {
+    if (recommendations.inventory.length > 0) {
+      response = `Here are my inventory recommendations:\n\n`;
+      recommendations.inventory.slice(0, 3).forEach((rec, i) => {
+        response += `${i + 1}. ${rec.name} - ${rec.reason} (Stock: ${rec.triggeringMetrics.quantity})\n`;
+      });
+    } else {
+      response = "Your inventory levels look good. No urgent restocking needed.";
+    }
+  }
+  // General recommendations
+  else {
+    const total = recommendations.promotions.length + recommendations.pricing.length + recommendations.inventory.length;
+
+    if (total === 0) {
+      return "Your inventory is in good shape. No urgent recommendations at this time.";
+    }
+
+    response = `I have ${total} recommendations for you:\n\n`;
+
+    if (recommendations.promotions.length > 0) {
+      response += `📣 ${recommendations.promotions.length} promotion opportunities\n`;
+      response += `Top: ${recommendations.promotions[0].name} - ${recommendations.promotions[0].reason}\n\n`;
+    }
+
+    if (recommendations.pricing.length > 0) {
+      response += `💰 ${recommendations.pricing.length} pricing actions\n`;
+      response += `Top: ${recommendations.pricing[0].name} - ${recommendations.pricing[0].reason}\n\n`;
+    }
+
+    if (recommendations.inventory.length > 0) {
+      response += `📦 ${recommendations.inventory.length} inventory actions\n`;
+      response += `Top: ${recommendations.inventory[0].name} - ${recommendations.inventory[0].reason}\n\n`;
+    }
+  }
+
+  return response;
+}
+
+/**
  * Extract intent from message
  */
 function extractIntent(message) {
@@ -591,6 +714,379 @@ app.post("/inventory", (req, res) => {
     actions,
     question
   });
+});
+
+/* ---------- Weekly Snapshot Recommendation Engine ---------- */
+
+/**
+ * Generate deterministic business recommendations from inventory metrics
+ * NO LLM - pure calculation-based logic
+ */
+function generateRecommendations(inventory, metrics) {
+  const recommendations = {
+    promotions: [],
+    pricing: [],
+    inventory: []
+  };
+
+  if (!Array.isArray(inventory) || inventory.length === 0) {
+    return recommendations;
+  }
+
+  // Filter items with valid pricing
+  const itemsWithPricing = inventory.filter(item =>
+    item.pricing &&
+    typeof item.pricing.retail === "number" &&
+    typeof item.pricing.cost === "number" &&
+    item.pricing.retail > 0
+  );
+
+  for (const item of itemsWithPricing) {
+    const margin = ((item.pricing.retail - item.pricing.cost) / item.pricing.retail) * 100;
+    const quantity = item.quantity || 0;
+    const itemName = `${item.strain} (${item.unit})`;
+
+    // PROMOTION RECOMMENDATIONS
+
+    // High stock + decent margin = promote
+    if (quantity >= 20 && margin >= 45 && margin <= 65) {
+      recommendations.promotions.push({
+        sku: item.strain,
+        unit: item.unit,
+        name: itemName,
+        reason: "High stock + healthy margin",
+        triggeringMetrics: {
+          quantity,
+          margin: parseFloat(margin.toFixed(2))
+        },
+        confidence: 0.85,
+        action: "PROMOTE_AS_FEATURED"
+      });
+    }
+
+    // High margin + low velocity = bundle opportunity
+    if (margin > 65 && quantity >= 10 && quantity <= 25) {
+      recommendations.promotions.push({
+        sku: item.strain,
+        unit: item.unit,
+        name: itemName,
+        reason: "High margin with moderate stock - bundle candidate",
+        triggeringMetrics: {
+          quantity,
+          margin: parseFloat(margin.toFixed(2))
+        },
+        confidence: 0.75,
+        action: "CREATE_BUNDLE"
+      });
+    }
+
+    // PRICING RECOMMENDATIONS
+
+    // Low margin = review pricing
+    if (margin < 40) {
+      recommendations.pricing.push({
+        sku: item.strain,
+        unit: item.unit,
+        name: itemName,
+        reason: "Margin below target threshold (40%)",
+        triggeringMetrics: {
+          margin: parseFloat(margin.toFixed(2)),
+          cost: item.pricing.cost,
+          retail: item.pricing.retail
+        },
+        confidence: 0.90,
+        action: "REVIEW_PRICING"
+      });
+    }
+
+    // Very high margin = protect pricing
+    if (margin > 70) {
+      recommendations.pricing.push({
+        sku: item.strain,
+        unit: item.unit,
+        name: itemName,
+        reason: "Premium margin - maintain pricing power",
+        triggeringMetrics: {
+          margin: parseFloat(margin.toFixed(2))
+        },
+        confidence: 0.80,
+        action: "PROTECT_PRICING"
+      });
+    }
+
+    // INVENTORY RECOMMENDATIONS
+
+    // Low stock = reorder
+    if (quantity > 0 && quantity <= 5) {
+      recommendations.inventory.push({
+        sku: item.strain,
+        unit: item.unit,
+        name: itemName,
+        reason: "Low stock - reorder soon",
+        triggeringMetrics: {
+          quantity,
+          margin: parseFloat(margin.toFixed(2))
+        },
+        confidence: 0.95,
+        action: "REORDER_SOON"
+      });
+    }
+
+    // Very high stock = consider discount
+    if (quantity > 50) {
+      recommendations.inventory.push({
+        sku: item.strain,
+        unit: item.unit,
+        name: itemName,
+        reason: "High inventory - consider promotional pricing",
+        triggeringMetrics: {
+          quantity,
+          margin: parseFloat(margin.toFixed(2))
+        },
+        confidence: 0.70,
+        action: "CONSIDER_DISCOUNT"
+      });
+    }
+  }
+
+  // Sort by confidence (highest first)
+  recommendations.promotions.sort((a, b) => b.confidence - a.confidence);
+  recommendations.pricing.sort((a, b) => b.confidence - a.confidence);
+  recommendations.inventory.sort((a, b) => b.confidence - a.confidence);
+
+  return recommendations;
+}
+
+/**
+ * Format snapshot for email delivery
+ */
+function formatSnapshotEmail(snapshot) {
+  const { metrics, recommendations } = snapshot;
+
+  let email = `
+OMEN Weekly Operations Snapshot
+Generated: ${snapshot.generatedAt}
+
+═══════════════════════════════════════
+📊 FINANCIAL METRICS
+═══════════════════════════════════════
+
+Total Items: ${metrics.totalItems}
+Items with Pricing: ${metrics.itemsWithPricing}
+
+Average Margin: ${metrics.averageMargin}%
+Total Revenue: $${metrics.totalRevenue.toLocaleString()}
+Total Cost: $${metrics.totalCost.toLocaleString()}
+Total Profit: $${metrics.totalProfit.toLocaleString()}
+
+Top Performer: ${metrics.highestMarginItem.name} (${metrics.highestMarginItem.margin}%)
+Lowest Margin: ${metrics.lowestMarginItem.name} (${metrics.lowestMarginItem.margin}%)
+
+═══════════════════════════════════════
+💡 RECOMMENDED ACTIONS THIS WEEK
+═══════════════════════════════════════
+`;
+
+  // Promotions
+  if (recommendations.promotions.length > 0) {
+    email += `\n🎯 PROMOTION OPPORTUNITIES (${recommendations.promotions.length}):\n\n`;
+    recommendations.promotions.slice(0, 5).forEach((rec, i) => {
+      email += `${i + 1}. ${rec.name}\n`;
+      email += `   Action: ${rec.action}\n`;
+      email += `   Reason: ${rec.reason}\n`;
+      email += `   Margin: ${rec.triggeringMetrics.margin}% | Stock: ${rec.triggeringMetrics.quantity}\n`;
+      email += `   Confidence: ${(rec.confidence * 100).toFixed(0)}%\n\n`;
+    });
+  }
+
+  // Pricing
+  if (recommendations.pricing.length > 0) {
+    email += `\n💰 PRICING ACTIONS (${recommendations.pricing.length}):\n\n`;
+    recommendations.pricing.slice(0, 5).forEach((rec, i) => {
+      email += `${i + 1}. ${rec.name}\n`;
+      email += `   Action: ${rec.action}\n`;
+      email += `   Reason: ${rec.reason}\n`;
+      email += `   Current Margin: ${rec.triggeringMetrics.margin}%\n`;
+      email += `   Confidence: ${(rec.confidence * 100).toFixed(0)}%\n\n`;
+    });
+  }
+
+  // Inventory
+  if (recommendations.inventory.length > 0) {
+    email += `\n📦 INVENTORY ACTIONS (${recommendations.inventory.length}):\n\n`;
+    recommendations.inventory.slice(0, 5).forEach((rec, i) => {
+      email += `${i + 1}. ${rec.name}\n`;
+      email += `   Action: ${rec.action}\n`;
+      email += `   Reason: ${rec.reason}\n`;
+      email += `   Stock: ${rec.triggeringMetrics.quantity}\n`;
+      email += `   Confidence: ${(rec.confidence * 100).toFixed(0)}%\n\n`;
+    });
+  }
+
+  if (recommendations.promotions.length === 0 &&
+      recommendations.pricing.length === 0 &&
+      recommendations.inventory.length === 0) {
+    email += `\nNo urgent actions identified. Inventory metrics are stable.\n`;
+  }
+
+  email += `\n═══════════════════════════════════════\n`;
+  email += `Generated by OMEN Intelligence Engine\n`;
+  email += `Confidence: ${snapshot.confidence}\n`;
+
+  return email;
+}
+
+// Global snapshot cache (used by chat)
+let latestSnapshot = null;
+
+/* ---------- Weekly Snapshot Endpoint ---------- */
+app.post("/snapshot/generate", async (req, res) => {
+  const requestId = crypto.randomUUID();
+
+  try {
+    console.log("📸 [OMEN] Snapshot generation requested", { requestId });
+
+    // 1. Fetch live inventory
+    const inventory = getInventory("NJWeedWizard");
+
+    if (!inventory || inventory.length === 0) {
+      return res.status(400).json({
+        ok: false,
+        error: "No inventory data available",
+        message: "Please ingest inventory via /ingest/njweedwizard first"
+      });
+    }
+
+    // 2. Calculate metrics (reuse chat logic)
+    const metrics = calculateInventoryMetrics(inventory);
+
+    if (!metrics || metrics.error) {
+      return res.status(400).json({
+        ok: false,
+        error: "Unable to calculate metrics",
+        message: metrics?.error || "No items with valid pricing data"
+      });
+    }
+
+    // 3. Generate recommendations
+    const recommendations = generateRecommendations(inventory, metrics);
+
+    // 4. Build snapshot
+    const snapshot = {
+      requestId,
+      generatedAt: new Date().toISOString(),
+      store: "NJWeedWizard",
+      metrics,
+      recommendations,
+      confidence: "high",
+      itemCount: inventory.length
+    };
+
+    // 5. Cache for chat queries
+    latestSnapshot = snapshot;
+
+    console.log("📸 [OMEN] Snapshot generated successfully", {
+      requestId,
+      itemCount: inventory.length,
+      promotions: recommendations.promotions.length,
+      pricing: recommendations.pricing.length,
+      inventory: recommendations.inventory.length
+    });
+
+    return res.json({
+      ok: true,
+      snapshot
+    });
+
+  } catch (err) {
+    console.error("📸 [OMEN] Snapshot generation failed", {
+      requestId,
+      error: err.message,
+      stack: err.stack
+    });
+
+    return res.status(500).json({
+      ok: false,
+      requestId,
+      error: "Snapshot generation failed",
+      message: err.message
+    });
+  }
+});
+
+/* ---------- Send Snapshot Email ---------- */
+app.post("/snapshot/send", async (req, res) => {
+  const requestId = crypto.randomUUID();
+  const { email } = req.body;
+
+  try {
+    console.log("📧 [OMEN] Snapshot email requested", { requestId, email });
+
+    if (!email || typeof email !== "string") {
+      return res.status(400).json({
+        ok: false,
+        error: "Email address required"
+      });
+    }
+
+    // Generate fresh snapshot
+    const inventory = getInventory("NJWeedWizard");
+
+    if (!inventory || inventory.length === 0) {
+      return res.status(400).json({
+        ok: false,
+        error: "No inventory data available"
+      });
+    }
+
+    const metrics = calculateInventoryMetrics(inventory);
+    if (!metrics || metrics.error) {
+      return res.status(400).json({
+        ok: false,
+        error: "Unable to calculate metrics"
+      });
+    }
+
+    const recommendations = generateRecommendations(inventory, metrics);
+
+    const snapshot = {
+      requestId,
+      generatedAt: new Date().toISOString(),
+      store: "NJWeedWizard",
+      metrics,
+      recommendations,
+      confidence: "high",
+      itemCount: inventory.length
+    };
+
+    // Format email content
+    const emailBody = formatSnapshotEmail(snapshot);
+
+    // Return formatted email (n8n will handle actual sending)
+    return res.json({
+      ok: true,
+      snapshot,
+      email: {
+        to: email,
+        subject: `OMEN Weekly Snapshot - ${new Date().toLocaleDateString()}`,
+        body: emailBody
+      },
+      message: "Snapshot prepared for email delivery"
+    });
+
+  } catch (err) {
+    console.error("📧 [OMEN] Snapshot email failed", {
+      requestId,
+      error: err.message
+    });
+
+    return res.status(500).json({
+      ok: false,
+      requestId,
+      error: "Snapshot email preparation failed",
+      message: err.message
+    });
+  }
 });
 
 /* ---------- Start Server (LAST) ---------- */
