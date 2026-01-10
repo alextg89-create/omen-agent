@@ -15,6 +15,17 @@ import {
   evaluateGovernanceState,
   currentExecutionMode,
 } from "./governance/governanceController.js";
+import {
+  calculateDateRange,
+  validateAsOfDate,
+  formatDate
+} from "./utils/dateCalculations.js";
+import {
+  saveSnapshot,
+  loadSnapshot,
+  getLatestSnapshot,
+  listCachedSnapshots
+} from "./utils/snapshotCache.js";
 import express from "express";
 import cors from "cors";
 import crypto from "crypto";
@@ -939,14 +950,89 @@ Lowest Margin: ${metrics.lowestMarginItem.name} (${metrics.lowestMarginItem.marg
 // Global snapshot cache (used by chat)
 let latestSnapshot = null;
 
-/* ---------- Weekly Snapshot Endpoint ---------- */
+/* ---------- Weekly Snapshot Endpoint (with Historical Support) ---------- */
+/**
+ * Generate a snapshot with optional historical date support
+ *
+ * REQUEST BODY:
+ * {
+ *   "asOfDate": "2026-01-09",  // Optional: YYYY-MM-DD format
+ *   "timeframe": "weekly"       // Optional: "daily" or "weekly" (default: "weekly")
+ * }
+ *
+ * If asOfDate is omitted, uses current date/time (backward compatible)
+ *
+ * PRODUCTION NOTES:
+ * - Validates asOfDate is not in future
+ * - Checks cache before regenerating
+ * - Persists to disk for historical retrieval
+ * - Thread-safe via Node.js single-threaded model
+ */
 app.post("/snapshot/generate", async (req, res) => {
   const requestId = crypto.randomUUID();
 
   try {
-    console.log("📸 [OMEN] Snapshot generation requested", { requestId });
+    // Extract parameters (with defaults for backward compatibility)
+    const {
+      asOfDate = null,           // Optional: YYYY-MM-DD
+      timeframe = "weekly"       // Default to weekly for backward compat
+    } = req.body || {};
 
-    // 1. Fetch live inventory
+    console.log("📸 [OMEN] Snapshot generation requested", {
+      requestId,
+      asOfDate,
+      timeframe
+    });
+
+    // 1️⃣ VALIDATE INPUTS
+
+    // Validate timeframe
+    if (timeframe !== "daily" && timeframe !== "weekly") {
+      return res.status(400).json({
+        ok: false,
+        error: "Invalid timeframe",
+        message: "Timeframe must be 'daily' or 'weekly'"
+      });
+    }
+
+    // Validate asOfDate (if provided)
+    if (asOfDate && !validateAsOfDate(asOfDate)) {
+      return res.status(400).json({
+        ok: false,
+        error: "Invalid asOfDate",
+        message: "asOfDate must be in YYYY-MM-DD format and not in the future"
+      });
+    }
+
+    // 2️⃣ CALCULATE DATE RANGE
+    const dateRange = calculateDateRange(timeframe, asOfDate);
+    const effectiveDate = dateRange.asOfDate; // Normalized date
+
+    console.log("📸 [OMEN] Date range calculated", {
+      requestId,
+      dateRange
+    });
+
+    // 3️⃣ CHECK CACHE (skip for real-time requests without asOfDate)
+    if (asOfDate) {
+      const cached = loadSnapshot(timeframe, effectiveDate);
+      if (cached) {
+        console.log("📸 [OMEN] Returning cached snapshot", {
+          requestId,
+          key: cached.key,
+          cachedAt: cached.cachedAt
+        });
+
+        return res.json({
+          ok: true,
+          snapshot: cached.snapshot,
+          fromCache: true,
+          cachedAt: cached.cachedAt
+        });
+      }
+    }
+
+    // 4️⃣ FETCH LIVE INVENTORY
     const inventory = getInventory("NJWeedWizard");
 
     if (!inventory || inventory.length === 0) {
@@ -957,7 +1043,7 @@ app.post("/snapshot/generate", async (req, res) => {
       });
     }
 
-    // 2. Calculate metrics (reuse chat logic)
+    // 5️⃣ CALCULATE METRICS (reuse existing logic)
     const metrics = calculateInventoryMetrics(inventory);
 
     if (!metrics || metrics.error) {
@@ -968,13 +1054,16 @@ app.post("/snapshot/generate", async (req, res) => {
       });
     }
 
-    // 3. Generate recommendations
+    // 6️⃣ GENERATE RECOMMENDATIONS (deterministic)
     const recommendations = generateRecommendations(inventory, metrics);
 
-    // 4. Build snapshot
+    // 7️⃣ BUILD SNAPSHOT
     const snapshot = {
       requestId,
-      generatedAt: new Date().toISOString(),
+      generatedAt: new Date().toISOString(), // When snapshot was generated
+      asOfDate: effectiveDate,                // Logical "as of" date
+      dateRange,                              // Full date range info
+      timeframe,
       store: "NJWeedWizard",
       metrics,
       recommendations,
@@ -982,20 +1071,35 @@ app.post("/snapshot/generate", async (req, res) => {
       itemCount: inventory.length
     };
 
-    // 5. Cache for chat queries
+    // 8️⃣ PERSIST SNAPSHOT
+    const cacheResult = saveSnapshot(timeframe, effectiveDate, snapshot);
+
+    if (!cacheResult.success) {
+      console.warn("📸 [OMEN] Failed to cache snapshot", {
+        requestId,
+        error: cacheResult.error
+      });
+      // Continue anyway - snapshot is still valid
+    }
+
+    // 9️⃣ UPDATE IN-MEMORY REFERENCE (for chat queries)
     latestSnapshot = snapshot;
 
     console.log("📸 [OMEN] Snapshot generated successfully", {
       requestId,
+      asOfDate: effectiveDate,
+      timeframe,
       itemCount: inventory.length,
       promotions: recommendations.promotions.length,
       pricing: recommendations.pricing.length,
-      inventory: recommendations.inventory.length
+      inventory: recommendations.inventory.length,
+      cached: cacheResult.success
     });
 
     return res.json({
       ok: true,
-      snapshot
+      snapshot,
+      fromCache: false
     });
 
   } catch (err) {
@@ -1015,6 +1119,24 @@ app.post("/snapshot/generate", async (req, res) => {
 });
 
 /* ---------- Send Snapshot Email ---------- */
+/**
+ * Send the most recently generated snapshot via email
+ *
+ * REQUEST BODY:
+ * {
+ *   "email": "user@example.com"  // Required: recipient email
+ * }
+ *
+ * PRODUCTION NOTES:
+ * - Always sends the LATEST cached snapshot (prevents race conditions)
+ * - If no cached snapshot exists, generates current snapshot
+ * - Client must call /snapshot/generate BEFORE /snapshot/send for specific dates
+ * - Returns formatted email ready for n8n/email service
+ *
+ * RACE CONDITION PREVENTION:
+ * - UI should disable "Send" button until "Generate" completes
+ * - Backend always uses latest cached snapshot, never concurrent generation
+ */
 app.post("/snapshot/send", async (req, res) => {
   const requestId = crypto.randomUUID();
   const { email } = req.body;
@@ -1022,6 +1144,7 @@ app.post("/snapshot/send", async (req, res) => {
   try {
     console.log("📧 [OMEN] Snapshot email requested", { requestId, email });
 
+    // 1️⃣ VALIDATE EMAIL
     if (!email || typeof email !== "string") {
       return res.status(400).json({
         ok: false,
@@ -1029,61 +1152,175 @@ app.post("/snapshot/send", async (req, res) => {
       });
     }
 
-    // Generate fresh snapshot
-    const inventory = getInventory("NJWeedWizard");
+    // 2️⃣ GET LATEST SNAPSHOT (from cache or memory)
+    let snapshot = null;
+    let fromCache = false;
 
-    if (!inventory || inventory.length === 0) {
-      return res.status(400).json({
-        ok: false,
-        error: "No inventory data available"
+    // Try to get from persistent cache first
+    const cachedSnapshot = getLatestSnapshot();
+    if (cachedSnapshot) {
+      snapshot = cachedSnapshot.snapshot;
+      fromCache = true;
+      console.log("📧 [OMEN] Using cached snapshot", {
+        requestId,
+        key: cachedSnapshot.key,
+        cachedAt: cachedSnapshot.cachedAt
       });
     }
+    // Fall back to in-memory snapshot (for backward compatibility)
+    else if (latestSnapshot) {
+      snapshot = latestSnapshot;
+      console.log("📧 [OMEN] Using in-memory snapshot", { requestId });
+    }
+    // No snapshot available - generate current one
+    else {
+      console.log("📧 [OMEN] No cached snapshot - generating current", { requestId });
 
-    const metrics = calculateInventoryMetrics(inventory);
-    if (!metrics || metrics.error) {
-      return res.status(400).json({
-        ok: false,
-        error: "Unable to calculate metrics"
-      });
+      const inventory = getInventory("NJWeedWizard");
+
+      if (!inventory || inventory.length === 0) {
+        return res.status(400).json({
+          ok: false,
+          error: "No inventory data available",
+          message: "Please ingest inventory via /ingest/njweedwizard first"
+        });
+      }
+
+      const metrics = calculateInventoryMetrics(inventory);
+      if (!metrics || metrics.error) {
+        return res.status(400).json({
+          ok: false,
+          error: "Unable to calculate metrics",
+          message: metrics?.error || "No items with valid pricing data"
+        });
+      }
+
+      const recommendations = generateRecommendations(inventory, metrics);
+
+      // Calculate current date range
+      const dateRange = calculateDateRange("weekly", null);
+
+      snapshot = {
+        requestId,
+        generatedAt: new Date().toISOString(),
+        asOfDate: dateRange.asOfDate,
+        dateRange,
+        timeframe: "weekly",
+        store: "NJWeedWizard",
+        metrics,
+        recommendations,
+        confidence: "high",
+        itemCount: inventory.length
+      };
+
+      // Cache it for future use
+      saveSnapshot("weekly", dateRange.asOfDate, snapshot);
+      latestSnapshot = snapshot;
     }
 
-    const recommendations = generateRecommendations(inventory, metrics);
-
-    const snapshot = {
-      requestId,
-      generatedAt: new Date().toISOString(),
-      store: "NJWeedWizard",
-      metrics,
-      recommendations,
-      confidence: "high",
-      itemCount: inventory.length
-    };
-
-    // Format email content
+    // 3️⃣ FORMAT EMAIL
     const emailBody = formatSnapshotEmail(snapshot);
 
-    // Return formatted email (n8n will handle actual sending)
+    // Get formatted date for subject line
+    const subjectDate = snapshot.asOfDate
+      ? new Date(snapshot.asOfDate + 'T00:00:00Z').toLocaleDateString()
+      : new Date().toLocaleDateString();
+
+    // 4️⃣ RETURN FORMATTED EMAIL
     return res.json({
       ok: true,
       snapshot,
       email: {
         to: email,
-        subject: `OMEN Weekly Snapshot - ${new Date().toLocaleDateString()}`,
+        subject: `OMEN ${snapshot.timeframe === 'daily' ? 'Daily' : 'Weekly'} Snapshot - ${subjectDate}`,
         body: emailBody
       },
-      message: "Snapshot prepared for email delivery"
+      message: "Snapshot prepared for email delivery",
+      fromCache,
+      snapshotDate: snapshot.asOfDate
     });
 
   } catch (err) {
     console.error("📧 [OMEN] Snapshot email failed", {
       requestId,
-      error: err.message
+      error: err.message,
+      stack: err.stack
     });
 
     return res.status(500).json({
       ok: false,
       requestId,
       error: "Snapshot email preparation failed",
+      message: err.message
+    });
+  }
+});
+
+/* ---------- List Cached Snapshots ---------- */
+/**
+ * Get list of all cached snapshots
+ *
+ * Useful for UI to show historical snapshots available
+ */
+app.get("/snapshot/list", (req, res) => {
+  try {
+    const snapshots = listCachedSnapshots();
+
+    return res.json({
+      ok: true,
+      snapshots,
+      count: snapshots.length
+    });
+  } catch (err) {
+    console.error("📸 [OMEN] Failed to list snapshots:", err.message);
+    return res.status(500).json({
+      ok: false,
+      error: "Failed to list snapshots",
+      message: err.message
+    });
+  }
+});
+
+/* ---------- Get Specific Cached Snapshot ---------- */
+/**
+ * Retrieve a specific cached snapshot by date
+ *
+ * QUERY PARAMS:
+ * - asOfDate: YYYY-MM-DD (required)
+ * - timeframe: "daily" or "weekly" (default: "weekly")
+ */
+app.get("/snapshot/get", (req, res) => {
+  try {
+    const { asOfDate, timeframe = "weekly" } = req.query;
+
+    if (!asOfDate) {
+      return res.status(400).json({
+        ok: false,
+        error: "asOfDate query parameter required"
+      });
+    }
+
+    const cached = loadSnapshot(timeframe, asOfDate);
+
+    if (!cached) {
+      return res.status(404).json({
+        ok: false,
+        error: "Snapshot not found",
+        message: `No ${timeframe} snapshot found for ${asOfDate}`
+      });
+    }
+
+    return res.json({
+      ok: true,
+      snapshot: cached.snapshot,
+      cachedAt: cached.cachedAt,
+      fromCache: true
+    });
+  } catch (err) {
+    console.error("📸 [OMEN] Failed to retrieve snapshot:", err.message);
+    return res.status(500).json({
+      ok: false,
+      error: "Failed to retrieve snapshot",
       message: err.message
     });
   }
