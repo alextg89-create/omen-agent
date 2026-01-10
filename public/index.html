@@ -309,7 +309,8 @@
     // CONFIGURATION
     // ============================================================================
 
-    const BACKEND_URL = 'https://omen-agent-production.up.railway.app';
+    // Use same domain for API calls (single-domain deployment)
+    const BACKEND_URL = window.location.origin;
 
     // ============================================================================
     // STATE MANAGEMENT

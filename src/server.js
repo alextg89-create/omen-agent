@@ -11,6 +11,7 @@ import { analyzeInventory } from "./inventoryAnalyzer.js";
 import { sampleInventory as mockInventory } from "./mocks/inventory.sample.js";
 import { makeDecision } from "./decisionEngine.js";
 import { callLLM } from "./llm.js";
+import { formatChatResponse, validateSnapshotSummary } from "./utils/responseFormatter.js";
 import {
   evaluateGovernanceState,
   currentExecutionMode,
@@ -26,10 +27,27 @@ import {
   getLatestSnapshot,
   listCachedSnapshots
 } from "./utils/snapshotCache.js";
+import {
+  createSnapshotEntry,
+  addToIndex,
+  findExistingSnapshot,
+  markAsEmailed,
+  listSnapshots as listSnapshotHistory,
+  getLastSnapshots,
+  getSnapshotsInRange,
+  getLatestSnapshotEntry,
+  getStatistics as getSnapshotStatistics
+} from "./utils/snapshotHistory.js";
 import express from "express";
 import cors from "cors";
 import crypto from "crypto";
+import path from "path";
+import { fileURLToPath } from "url";
 import { intelligenceRouter } from "./intelligenceRouter.js";
+
+// ES module __dirname equivalent
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 const OMEN_MAX_TIER = Number(process.env.OMEN_MAX_TIER ?? 1);
 const OMEN_ALLOW_EXECUTION = process.env.OMEN_ALLOW_EXECUTION === "true";
 const USE_MOCK_INVENTORY = process.env.OMEN_USE_MOCKS === "true";
@@ -67,6 +85,11 @@ app.use(cors({
 }));
 
 app.use(express.json());
+
+/* ---------- Static File Serving ---------- */
+// Serve static files from public directory
+const publicPath = path.join(__dirname, "..", "public");
+app.use(express.static(publicPath));
 
 function createRequestId() {
   return crypto.randomUUID();
@@ -347,11 +370,19 @@ app.post("/chat", async (req, res) => {
     if (needsRecommendations && recommendations) {
       systemPrompt = `You are OMEN, an inventory intelligence assistant with access to business recommendations.
 
+RESPONSE FORMAT:
+- Use plain text - NO markdown formatting, NO asterisks, NO special characters
+- Keep responses concise and conversational
+- Do NOT use asterisks (**) or underscores (__) for emphasis
+- Present recommendations as a simple numbered list
+
 When answering:
 - Explain recommendations clearly and concisely
 - Prioritize by confidence level
 - Give specific actionable advice
 - Reference the triggering metrics when helpful
+
+IMPORTANT: Sales volume data is NOT tracked. All recommendations are based on margin and stock levels only.
 
 Current Recommendations Available:
 - ${recommendations.promotions.length} promotion opportunities
@@ -380,6 +411,24 @@ Current Recommendations Available:
         llmResponse = "How can I help you today? (LLM unavailable - dev mode)";
       }
     }
+
+    // 🔥 CRITICAL: FORMAT RESPONSE BEFORE RETURNING
+    // This is the ONLY place responses are formatted - single source of truth
+    const isCalculationQuestion =
+      message.toLowerCase().includes('how') &&
+      message.toLowerCase().includes('calculat');
+
+    llmResponse = formatChatResponse(llmResponse, {
+      hasSalesData: false,  // HARDCODED - system has NO sales tracking
+      maxSentences: 3,
+      allowFormulas: isCalculationQuestion
+    });
+
+    console.log("💬 [OMEN] Response formatted", {
+      requestId,
+      originalLength: llmResponse ? llmResponse.length : 0,
+      formattedLength: llmResponse.length
+    });
 
     // 7️⃣ DETERMINE CONFIDENCE
     const confidence = (needsInventory || needsRecommendations) && inventoryContext ? "high" : "medium";
@@ -521,6 +570,20 @@ function calculateInventoryMetrics(inventory) {
   const highestMargin = margins.reduce((max, m) => m.margin > max.margin ? m : max, margins[0]);
   const lowestMargin = margins.reduce((min, m) => m.margin < min.margin ? m : min, margins[0]);
 
+  // VALIDATION SAFEGUARD: Detect uniform pricing patterns
+  const uniqueRetailPrices = new Set(margins.map(m => m.retailPrice));
+  const priceVariety = uniqueRetailPrices.size / margins.length; // Ratio of unique prices to total items
+  const hasPriceDiversity = priceVariety > 0.3; // At least 30% price diversity
+
+  // VALIDATION SAFEGUARD: Detect margin clustering (many items with same margin)
+  const marginGroups = new Map();
+  margins.forEach(m => {
+    const roundedMargin = Math.round(m.margin);
+    marginGroups.set(roundedMargin, (marginGroups.get(roundedMargin) || 0) + 1);
+  });
+  const largestMarginGroup = Math.max(...marginGroups.values());
+  const marginDiversity = largestMarginGroup / margins.length < 0.7; // Largest group < 70%
+
   return {
     totalItems: inventory.length,
     itemsWithPricing: itemsWithPricing.length,
@@ -536,7 +599,7 @@ function calculateInventoryMetrics(inventory) {
       name: `${lowestMargin.strain} (${lowestMargin.unit})`,
       margin: parseFloat(lowestMargin.margin.toFixed(2)),
     },
-    topItems: margins
+    highestMarginItems: margins
       .sort((a, b) => b.margin - a.margin)
       .slice(0, 5)
       .map(m => ({
@@ -545,6 +608,15 @@ function calculateInventoryMetrics(inventory) {
         retailPrice: m.retailPrice,
         cost: m.cost,
       })),
+    // Validation flags for trust protection
+    dataQuality: {
+      hasPriceDiversity,
+      marginDiversity,
+      uniquePriceCount: uniqueRetailPrices.size,
+      pricingNote: !hasPriceDiversity || !marginDiversity
+        ? "Limited pricing diversity detected - items may share standard tier pricing"
+        : null
+    }
   };
 }
 
@@ -556,9 +628,22 @@ function buildInventoryAwareSystemPrompt(inventoryContext) {
 
 You have access to real, live inventory data. Use this data to answer the user's question accurately.
 
+IMPORTANT CONSTRAINTS:
+- Sales volume data is NOT available - do not make claims about "best-selling" or "top-performing" items
+- Rankings and insights are based on margin and stock levels only
+- Use conservative, factual language - avoid speculative or causal statements
+- Clearly label potential revenue as "potential" since it's based on current inventory, not actual sales
+
+RESPONSE FORMAT:
+- Use plain text - NO markdown formatting, NO asterisks for bold, NO special characters
+- Keep responses concise (2-3 sentences max unless asked for detail)
+- Use natural conversational language, not technical jargon
+- Do NOT show calculation formulas unless explicitly asked
+- Do NOT use asterisks (**) or underscores (__) for emphasis
+
 When answering:
 - Use actual numbers from the inventory data
-- Explain your calculations clearly
+- Explain simply and directly
 - State any assumptions you make
 - Be precise and factual
 
@@ -566,9 +651,9 @@ Current Inventory Summary:
 - Total Items: ${inventoryContext.totalItems}
 - Items with Pricing: ${inventoryContext.itemsWithPricing}
 - Average Margin: ${inventoryContext.averageMargin}%
-- Total Revenue: $${inventoryContext.totalRevenue}
+- Total Potential Revenue: $${inventoryContext.totalRevenue}
 - Total Cost: $${inventoryContext.totalCost}
-- Total Profit: $${inventoryContext.totalProfit}
+- Total Potential Profit: $${inventoryContext.totalProfit}
 
 Answer the user's question using this data.`;
 }
@@ -588,7 +673,7 @@ function generateFallbackInventoryResponse(message, inventoryContext) {
   }
 
   if (lowerMessage.includes("revenue") || lowerMessage.includes("sales")) {
-    return `Your total potential revenue from current inventory is $${inventoryContext.totalRevenue}, calculated by multiplying retail price × quantity for ${inventoryContext.itemsWithPricing} items with valid pricing.`;
+    return `Your total potential revenue from current inventory is $${inventoryContext.totalRevenue}, calculated by multiplying retail price × quantity for ${inventoryContext.itemsWithPricing} items with valid pricing. Note: This is potential revenue based on inventory on hand, not actual sales performance.`;
   }
 
   // Generic inventory summary
@@ -758,14 +843,15 @@ function generateRecommendations(inventory, metrics) {
     const itemName = `${item.strain} (${item.unit})`;
 
     // PROMOTION RECOMMENDATIONS
+    // NOTE: Without sales data, these are based on margin and stock patterns only
 
-    // High stock + decent margin = promote
+    // High stock + healthy margin = promotion candidate
     if (quantity >= 20 && margin >= 45 && margin <= 65) {
       recommendations.promotions.push({
         sku: item.strain,
         unit: item.unit,
         name: itemName,
-        reason: "High stock + healthy margin",
+        reason: "High stock with healthy margin - promotion candidate",
         triggeringMetrics: {
           quantity,
           margin: parseFloat(margin.toFixed(2))
@@ -775,7 +861,7 @@ function generateRecommendations(inventory, metrics) {
       });
     }
 
-    // High margin + low velocity = bundle opportunity
+    // High margin + moderate stock = potential bundle opportunity
     if (margin > 65 && quantity >= 10 && quantity <= 25) {
       recommendations.promotions.push({
         sku: item.strain,
@@ -890,8 +976,13 @@ Total Revenue: $${metrics.totalRevenue.toLocaleString()}
 Total Cost: $${metrics.totalCost.toLocaleString()}
 Total Profit: $${metrics.totalProfit.toLocaleString()}
 
-Top Performer: ${metrics.highestMarginItem.name} (${metrics.highestMarginItem.margin}%)
-Lowest Margin: ${metrics.lowestMarginItem.name} (${metrics.lowestMarginItem.margin}%)
+Highest Margin Item: ${metrics.highestMarginItem.name} (${metrics.highestMarginItem.margin}%)
+Lowest Margin Item: ${metrics.lowestMarginItem.name} (${metrics.lowestMarginItem.margin}%)
+
+⚠️ DATA NOTES:
+• Sales volume data is not currently tracked
+• Rankings are based on margin and stock levels only
+${metrics.dataQuality?.pricingNote ? `• ${metrics.dataQuality.pricingNote}\n` : ''}
 
 ═══════════════════════════════════════
 💡 RECOMMENDED ACTIONS THIS WEEK
@@ -934,15 +1025,22 @@ Lowest Margin: ${metrics.lowestMarginItem.name} (${metrics.lowestMarginItem.marg
     });
   }
 
-  if (recommendations.promotions.length === 0 &&
-      recommendations.pricing.length === 0 &&
-      recommendations.inventory.length === 0) {
+  // 🔥 CRITICAL: Validate we're not saying "no changes" when recommendations exist
+  const totalRecs = recommendations.promotions.length +
+                    recommendations.pricing.length +
+                    recommendations.inventory.length;
+
+  if (totalRecs === 0) {
     email += `\nNo urgent actions identified. Inventory metrics are stable.\n`;
+  } else {
+    // Don't add redundant text - recommendations already listed above
+    // This prevents "no significant changes" bug
   }
 
   email += `\n═══════════════════════════════════════\n`;
   email += `Generated by OMEN Intelligence Engine\n`;
   email += `Confidence: ${snapshot.confidence}\n`;
+  email += `Actions Identified: ${totalRecs}\n`;
 
   return email;
 }
@@ -975,13 +1073,15 @@ app.post("/snapshot/generate", async (req, res) => {
     // Extract parameters (with defaults for backward compatibility)
     const {
       asOfDate = null,           // Optional: YYYY-MM-DD
-      timeframe = "weekly"       // Default to weekly for backward compat
+      timeframe = "weekly",      // Default to weekly for backward compat
+      forceRegenerate = false    // NEW: Force regeneration even if exists
     } = req.body || {};
 
     console.log("📸 [OMEN] Snapshot generation requested", {
       requestId,
       asOfDate,
-      timeframe
+      timeframe,
+      forceRegenerate
     });
 
     // 1️⃣ VALIDATE INPUTS
@@ -1013,21 +1113,28 @@ app.post("/snapshot/generate", async (req, res) => {
       dateRange
     });
 
-    // 3️⃣ CHECK CACHE (skip for real-time requests without asOfDate)
-    if (asOfDate) {
-      const cached = loadSnapshot(timeframe, effectiveDate);
-      if (cached) {
-        console.log("📸 [OMEN] Returning cached snapshot", {
-          requestId,
-          key: cached.key,
-          cachedAt: cached.cachedAt
-        });
+    // 3️⃣ IDEMPOTENCY CHECK - Check if snapshot already exists
+    const existingSnapshot = findExistingSnapshot(timeframe, effectiveDate);
 
+    if (existingSnapshot && !forceRegenerate) {
+      console.log("📸 [OMEN] Snapshot already exists (idempotent)", {
+        requestId,
+        snapshotId: existingSnapshot.id,
+        createdAt: existingSnapshot.createdAt
+      });
+
+      // Load from cache
+      const cached = loadSnapshot(timeframe, effectiveDate);
+
+      if (cached) {
         return res.json({
           ok: true,
           snapshot: cached.snapshot,
+          snapshotId: existingSnapshot.id,
           fromCache: true,
-          cachedAt: cached.cachedAt
+          cachedAt: cached.cachedAt,
+          reason: "duplicate_prevented",
+          message: "Snapshot already exists for this timeframe and date. Use forceRegenerate=true to regenerate."
         });
       }
     }
@@ -1071,35 +1178,54 @@ app.post("/snapshot/generate", async (req, res) => {
       itemCount: inventory.length
     };
 
-    // 8️⃣ PERSIST SNAPSHOT
+    // 8️⃣ CREATE INDEX ENTRY
+    const indexEntry = createSnapshotEntry(snapshot, timeframe, effectiveDate, {
+      createdBy: req.body.createdBy || 'api',
+      createdVia: 'api',
+      regenerated: forceRegenerate
+    });
+
+    // 9️⃣ ADD TO HISTORY INDEX (with idempotency)
+    const indexResult = addToIndex(indexEntry, forceRegenerate);
+
+    // Add snapshotId to snapshot object
+    snapshot.snapshotId = indexEntry.id;
+
+    // 🔟 PERSIST SNAPSHOT TO DISK
     const cacheResult = saveSnapshot(timeframe, effectiveDate, snapshot);
 
     if (!cacheResult.success) {
       console.warn("📸 [OMEN] Failed to cache snapshot", {
         requestId,
+        snapshotId: indexEntry.id,
         error: cacheResult.error
       });
       // Continue anyway - snapshot is still valid
     }
 
-    // 9️⃣ UPDATE IN-MEMORY REFERENCE (for chat queries)
+    // 1️⃣1️⃣ UPDATE IN-MEMORY REFERENCE (for chat queries)
     latestSnapshot = snapshot;
 
     console.log("📸 [OMEN] Snapshot generated successfully", {
       requestId,
+      snapshotId: indexEntry.id,
       asOfDate: effectiveDate,
       timeframe,
       itemCount: inventory.length,
       promotions: recommendations.promotions.length,
       pricing: recommendations.pricing.length,
       inventory: recommendations.inventory.length,
-      cached: cacheResult.success
+      cached: cacheResult.success,
+      indexReason: indexResult.reason
     });
 
     return res.json({
       ok: true,
       snapshot,
-      fromCache: false
+      snapshotId: indexEntry.id,
+      fromCache: false,
+      regenerated: forceRegenerate,
+      superseded: indexResult.superseded ? indexResult.superseded.id : null
     });
 
   } catch (err) {
@@ -1152,73 +1278,59 @@ app.post("/snapshot/send", async (req, res) => {
       });
     }
 
-    // 2️⃣ GET LATEST SNAPSHOT (from cache or memory)
-    let snapshot = null;
-    let fromCache = false;
+    // 2️⃣ PREVIEW VS SEND LOCK - Check if snapshot exists
+    const latestEntry = getLatestSnapshotEntry();
 
-    // Try to get from persistent cache first
-    const cachedSnapshot = getLatestSnapshot();
-    if (cachedSnapshot) {
-      snapshot = cachedSnapshot.snapshot;
-      fromCache = true;
-      console.log("📧 [OMEN] Using cached snapshot", {
-        requestId,
-        key: cachedSnapshot.key,
-        cachedAt: cachedSnapshot.cachedAt
+    if (!latestEntry) {
+      // NO SNAPSHOT EXISTS - Clear error message
+      return res.status(400).json({
+        ok: false,
+        error: "No snapshot available",
+        message: "Please generate a snapshot first using POST /snapshot/generate before sending.",
+        nextAction: "Call POST /snapshot/generate to create a snapshot"
       });
     }
-    // Fall back to in-memory snapshot (for backward compatibility)
-    else if (latestSnapshot) {
-      snapshot = latestSnapshot;
-      console.log("📧 [OMEN] Using in-memory snapshot", { requestId });
+
+    console.log("📧 [OMEN] Found latest snapshot", {
+      requestId,
+      snapshotId: latestEntry.id,
+      asOfDate: latestEntry.asOfDate,
+      createdAt: latestEntry.createdAt
+    });
+
+    // 3️⃣ LOAD SNAPSHOT FROM CACHE
+    const cached = loadSnapshot(latestEntry.timeframe, latestEntry.asOfDate);
+
+    if (!cached) {
+      // Snapshot exists in index but not in cache (data corruption)
+      return res.status(500).json({
+        ok: false,
+        error: "Snapshot file missing",
+        message: "Snapshot exists in history but file is missing. Please regenerate.",
+        snapshotId: latestEntry.id
+      });
     }
-    // No snapshot available - generate current one
-    else {
-      console.log("📧 [OMEN] No cached snapshot - generating current", { requestId });
 
-      const inventory = getInventory("NJWeedWizard");
+    const snapshot = cached.snapshot;
 
-      if (!inventory || inventory.length === 0) {
-        return res.status(400).json({
-          ok: false,
-          error: "No inventory data available",
-          message: "Please ingest inventory via /ingest/njweedwizard first"
-        });
-      }
+    // 4️⃣ MARK AS EMAILED IN HISTORY
+    const emailResult = markAsEmailed(latestEntry.id, email);
 
-      const metrics = calculateInventoryMetrics(inventory);
-      if (!metrics || metrics.error) {
-        return res.status(400).json({
-          ok: false,
-          error: "Unable to calculate metrics",
-          message: metrics?.error || "No items with valid pricing data"
-        });
-      }
-
-      const recommendations = generateRecommendations(inventory, metrics);
-
-      // Calculate current date range
-      const dateRange = calculateDateRange("weekly", null);
-
-      snapshot = {
+    if (!emailResult.success) {
+      console.warn("📧 [OMEN] Failed to mark snapshot as emailed", {
         requestId,
-        generatedAt: new Date().toISOString(),
-        asOfDate: dateRange.asOfDate,
-        dateRange,
-        timeframe: "weekly",
-        store: "NJWeedWizard",
-        metrics,
-        recommendations,
-        confidence: "high",
-        itemCount: inventory.length
-      };
-
-      // Cache it for future use
-      saveSnapshot("weekly", dateRange.asOfDate, snapshot);
-      latestSnapshot = snapshot;
+        snapshotId: latestEntry.id,
+        error: emailResult.error
+      });
+    } else {
+      console.log("📧 [OMEN] Marked snapshot as emailed", {
+        requestId,
+        snapshotId: latestEntry.id,
+        recipient: email
+      });
     }
 
-    // 3️⃣ FORMAT EMAIL
+    // 5️⃣ FORMAT EMAIL
     const emailBody = formatSnapshotEmail(snapshot);
 
     // Get formatted date for subject line
@@ -1226,18 +1338,20 @@ app.post("/snapshot/send", async (req, res) => {
       ? new Date(snapshot.asOfDate + 'T00:00:00Z').toLocaleDateString()
       : new Date().toLocaleDateString();
 
-    // 4️⃣ RETURN FORMATTED EMAIL
+    // 6️⃣ RETURN FORMATTED EMAIL
     return res.json({
       ok: true,
       snapshot,
+      snapshotId: latestEntry.id,
       email: {
         to: email,
         subject: `OMEN ${snapshot.timeframe === 'daily' ? 'Daily' : 'Weekly'} Snapshot - ${subjectDate}`,
         body: emailBody
       },
       message: "Snapshot prepared for email delivery",
-      fromCache,
-      snapshotDate: snapshot.asOfDate
+      fromCache: true,
+      snapshotDate: snapshot.asOfDate,
+      emailedAt: emailResult.entry?.emailSentAt
     });
 
   } catch (err) {
@@ -1326,6 +1440,192 @@ app.get("/snapshot/get", (req, res) => {
   }
 });
 
+/* ---------- Snapshot History Endpoints ---------- */
+
+/**
+ * GET /snapshot/history
+ *
+ * List snapshot history with optional filters
+ *
+ * QUERY PARAMS:
+ * - limit: Number of results (default: 50, max: 100)
+ * - timeframe: Filter by "daily" or "weekly"
+ * - startDate: Filter by start date (YYYY-MM-DD)
+ * - endDate: Filter by end date (YYYY-MM-DD)
+ *
+ * EXAMPLE:
+ * GET /snapshot/history?limit=10&timeframe=weekly
+ * GET /snapshot/history?startDate=2026-01-01&endDate=2026-01-10
+ */
+app.get("/snapshot/history", (req, res) => {
+  try {
+    const {
+      limit = 50,
+      timeframe,
+      startDate,
+      endDate
+    } = req.query;
+
+    // Validate limit
+    const parsedLimit = Math.min(parseInt(limit) || 50, 100);
+
+    const snapshots = listSnapshotHistory({
+      limit: parsedLimit,
+      timeframe,
+      startDate,
+      endDate
+    });
+
+    return res.json({
+      ok: true,
+      snapshots,
+      count: snapshots.length,
+      filters: {
+        limit: parsedLimit,
+        timeframe: timeframe || null,
+        startDate: startDate || null,
+        endDate: endDate || null
+      }
+    });
+  } catch (err) {
+    console.error("📸 [OMEN] Failed to list snapshot history:", err.message);
+    return res.status(500).json({
+      ok: false,
+      error: "Failed to list snapshot history",
+      message: err.message
+    });
+  }
+});
+
+/**
+ * GET /snapshot/history/last/:count
+ *
+ * Get the last N snapshots (sorted by creation time)
+ *
+ * PARAMS:
+ * - count: Number of snapshots to retrieve (default: 7, max: 50)
+ *
+ * QUERY PARAMS:
+ * - timeframe: Filter by "daily" or "weekly"
+ *
+ * EXAMPLE:
+ * GET /snapshot/history/last/7
+ * GET /snapshot/history/last/10?timeframe=weekly
+ */
+app.get("/snapshot/history/last/:count?", (req, res) => {
+  try {
+    const count = Math.min(parseInt(req.params.count) || 7, 50);
+    const { timeframe } = req.query;
+
+    const snapshots = getLastSnapshots(count, timeframe || null);
+
+    return res.json({
+      ok: true,
+      snapshots,
+      count: snapshots.length,
+      requested: count,
+      timeframe: timeframe || 'all'
+    });
+  } catch (err) {
+    console.error("📸 [OMEN] Failed to get last snapshots:", err.message);
+    return res.status(500).json({
+      ok: false,
+      error: "Failed to get last snapshots",
+      message: err.message
+    });
+  }
+});
+
+/**
+ * GET /snapshot/history/range
+ *
+ * Get snapshots within a date range
+ *
+ * QUERY PARAMS:
+ * - startDate: Start date (YYYY-MM-DD) - required
+ * - endDate: End date (YYYY-MM-DD) - required
+ * - timeframe: Filter by "daily" or "weekly" (optional)
+ *
+ * EXAMPLE:
+ * GET /snapshot/history/range?startDate=2026-01-01&endDate=2026-01-10
+ */
+app.get("/snapshot/history/range", (req, res) => {
+  try {
+    const { startDate, endDate, timeframe } = req.query;
+
+    // Validate required params
+    if (!startDate || !endDate) {
+      return res.status(400).json({
+        ok: false,
+        error: "Both startDate and endDate are required",
+        message: "Provide startDate and endDate in YYYY-MM-DD format"
+      });
+    }
+
+    // Validate date format
+    const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+    if (!dateRegex.test(startDate) || !dateRegex.test(endDate)) {
+      return res.status(400).json({
+        ok: false,
+        error: "Invalid date format",
+        message: "Dates must be in YYYY-MM-DD format"
+      });
+    }
+
+    const snapshots = getSnapshotsInRange(startDate, endDate, timeframe || null);
+
+    return res.json({
+      ok: true,
+      snapshots,
+      count: snapshots.length,
+      range: {
+        startDate,
+        endDate,
+        timeframe: timeframe || 'all'
+      }
+    });
+  } catch (err) {
+    console.error("📸 [OMEN] Failed to get snapshots in range:", err.message);
+    return res.status(500).json({
+      ok: false,
+      error: "Failed to get snapshots in range",
+      message: err.message
+    });
+  }
+});
+
+/**
+ * GET /snapshot/history/stats
+ *
+ * Get snapshot history statistics
+ *
+ * Returns:
+ * - Total snapshot count
+ * - Count by timeframe (daily/weekly)
+ * - Count by email status (sent/unsent)
+ * - Latest snapshot info
+ *
+ * EXAMPLE:
+ * GET /snapshot/history/stats
+ */
+app.get("/snapshot/history/stats", (req, res) => {
+  try {
+    const stats = getSnapshotStatistics();
+
+    return res.json({
+      ok: true,
+      stats
+    });
+  } catch (err) {
+    console.error("📸 [OMEN] Failed to get snapshot statistics:", err.message);
+    return res.status(500).json({
+      ok: false,
+      error: "Failed to get snapshot statistics",
+      message: err.message
+    });
+  }
+});
+
 /* ---------- Start Server (LAST) ---------- */
 const PORT = process.env.PORT || 3000;
 
@@ -1340,7 +1640,18 @@ app.post("/omen/run-daily", async (req, res) => {
   });
 });
 
+/* ---------- SPA Fallback (MUST BE LAST ROUTE) ---------- */
+// Handle all non-API routes - serve index.html for SPA routing
+// This allows frontend routes like /weekly-snapshot to work
+app.get('*', (_req, res) => {
+  // Only serve index.html for non-API requests
+  // API routes are handled above (POST /chat, /snapshot/*, etc.)
+  res.sendFile(path.join(publicPath, 'index.html'));
+});
+
+/* ---------- Start Server (LAST) ---------- */
 app.listen(PORT, () => {
   console.log(`OMEN server running on port ${PORT}`);
+  console.log(`Serving frontend from: ${publicPath}`);
 });
 
