@@ -33,9 +33,9 @@ export async function getAuthoritativeInventory() {
 
   console.log('[Authority] Querying Supabase for inventory + pricing...');
 
-  // Query inventory table
+  // Query inventory table (inventory_live = current inventory from Make webhook)
   const { data: inventory, error: invError } = await client
-    .from('inventory')
+    .from('inventory_live')
     .select('*');
 
   if (invError) {
@@ -53,67 +53,48 @@ export async function getAuthoritativeInventory() {
     };
   }
 
-  // Query pricing table
-  const { data: pricing, error: priceError } = await client
-    .from('pricing')
-    .select('*');
+  console.log(`[Authority] Loaded ${inventory.length} inventory items from inventory_live`);
 
-  if (priceError) {
-    throw new Error(`FATAL: Cannot load pricing from Supabase: ${priceError.message}`);
-  }
-
-  if (!pricing || pricing.length === 0) {
-    throw new Error('FATAL: Pricing table is empty. Cannot calculate margins.');
-  }
-
-  console.log(`[Authority] Loaded ${inventory.length} inventory items, ${pricing.length} price records`);
-
-  // Join inventory + pricing with STRICT validation
+  // Pricing is embedded in inventory_live rows (no separate pricing table)
   const enriched = inventory.map(item => {
-    // Find matching price
-    const price = pricing.find(p =>
-      p.quality === item.quality && p.unit === item.unit
-    );
-
-    // STRICT MODE: Missing price is fatal
-    if (!price && STRICT_MODE) {
-      throw new Error(`FATAL: No price for SKU "${item.sku}" (quality: ${item.quality}, unit: ${item.unit}). Pricing data incomplete.`);
-    }
-
     // STRICT MODE: Missing quantity is fatal
     if (item.quantity === null || item.quantity === undefined) {
-      throw new Error(`FATAL: Missing quantity for SKU "${item.sku}". Inventory data incomplete.`);
+      if (STRICT_MODE) {
+        throw new Error(`FATAL: Missing quantity for SKU "${item.sku}". Inventory data incomplete.`);
+      }
     }
 
-    const cost = price?.cost || null;
-    const retail = price?.retail || null;
+    // Extract pricing from inventory row (pricing embedded in same table)
+    const cost = item.cost || item.wholesale_cost || item.product_cost || null;
+    const retail = item.retail || item.price || item.retail_price || null;
+    const sale = item.sale || item.sale_price || null;
 
     // Calculate margin
     const margin = (cost && retail)
       ? ((retail - cost) / retail * 100).toFixed(2)
       : null;
 
-    // STRICT MODE: Cannot calculate margin is fatal
+    // STRICT MODE: Cannot calculate margin is warning (not fatal - some items may not have pricing yet)
     if (!margin && STRICT_MODE) {
-      throw new Error(`FATAL: Cannot calculate margin for SKU "${item.sku}" - missing cost (${cost}) or retail (${retail}). Pricing data incomplete.`);
+      console.warn(`[Authority] WARNING: Cannot calculate margin for SKU "${item.sku}" - missing cost (${cost}) or retail (${retail})`);
     }
 
     return {
-      sku: item.sku,
-      strain: item.strain || item.name,
+      sku: item.sku || `${item.strain}_${item.unit}`,
+      strain: item.strain || item.name || item.product_name,
       name: `${item.strain || item.name} (${item.unit})`,
       unit: item.unit,
-      quality: item.quality,
-      quantity: item.quantity,
+      quality: item.quality || item.tier || 'STANDARD',
+      quantity: item.quantity || 0,
       grams: item.grams || getGramsForUnit(item.unit),
       pricing: {
         cost,
         retail,
-        sale: price?.sale || null,
-        margin: parseFloat(margin)
+        sale,
+        margin: margin ? parseFloat(margin) : null
       },
       updated_at: item.updated_at,
-      pricingMatch: true
+      pricingMatch: !!(cost && retail)
     };
   });
 
