@@ -7,6 +7,7 @@ import { sampleInventory as mockInventory } from "./mocks/inventory.sample.js";
 import { makeDecision } from "./decisionEngine.js";
 import { callLLM } from "./llm.js";
 import { formatChatResponse } from "./utils/responseFormatter.js";
+import { generateInsightResponse } from "./utils/chatIntelligence.js";
 import {
   evaluateGovernanceState,
   currentExecutionMode,
@@ -626,8 +627,19 @@ Current Recommendations Available:
       maxTokens: 500,
     });
 
-    // 6️⃣ FALLBACK FOR DEV MODE (no LLM)
-    if (!llmResponse) {
+    // 6️⃣ INTELLIGENCE LAYER - Try insight-driven response first
+    // This transforms flat responses into operator-focused insights
+    let intelligentResponse = null;
+    if (needsRecommendations || needsInventory) {
+      intelligentResponse = generateInsightResponse(message, recommendations, inventoryContext);
+    }
+
+    // Use intelligent response if available, otherwise fallback to LLM/dev responses
+    if (intelligentResponse) {
+      llmResponse = intelligentResponse;
+      console.log("💬 [OMEN] Using insight-driven response", { requestId });
+    } else if (!llmResponse) {
+      // FALLBACK FOR DEV MODE (no LLM and no intelligent response)
       if (needsRecommendations && recommendations) {
         llmResponse = generateFallbackRecommendationResponseStrong(message, recommendations, inventoryContext);
       } else if (needsInventory && inventoryContext) {
@@ -645,7 +657,7 @@ Current Recommendations Available:
 
     llmResponse = formatChatResponse(llmResponse, {
       hasSalesData: true,  // System tracks temporal movement via snapshot deltas
-      maxSentences: 3,
+      maxSentences: 5,  // Allow longer responses for insights
       allowFormulas: isCalculationQuestion
     });
 
