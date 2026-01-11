@@ -1,7 +1,8 @@
 /**
- * Snapshot Persistence Layer
+ * Snapshot Persistence Layer - Multi-Tenant
  *
  * Provides file-based caching for historical snapshots with:
+ * - STRICT MULTI-TENANT ISOLATION (separate directories per store)
  * - Atomic writes (write to temp, then rename)
  * - Race condition prevention (file locking via write order)
  * - Automatic cleanup of old snapshots (optional)
@@ -12,41 +13,89 @@
  * - Thread-safe via Node.js single-threaded model
  * - Handles concurrent reads/writes gracefully
  * - Provides TTL-based cleanup
+ * - CRITICAL: All operations require storeId - no defaults
  */
 
 import fs from 'fs';
 import path from 'path';
 import { generateSnapshotKey } from './dateCalculations.js';
+import { validateStoreId } from '../middleware/auth.js';
 
-// Cache directory
-const CACHE_DIR = path.resolve(process.cwd(), 'data', 'snapshots');
+// Base cache directory
+const BASE_CACHE_DIR = path.resolve(process.cwd(), 'data', 'snapshots');
 
-// In-memory cache (LRU with max 100 entries)
+// In-memory cache (LRU with max 100 entries per store)
 const memoryCache = new Map();
 const MAX_MEMORY_CACHE_SIZE = 100;
 
-// Ensure cache directory exists
-if (!fs.existsSync(CACHE_DIR)) {
-  fs.mkdirSync(CACHE_DIR, { recursive: true });
-  console.log('[SnapshotCache] Created cache directory:', CACHE_DIR);
+// Ensure base cache directory exists
+if (!fs.existsSync(BASE_CACHE_DIR)) {
+  fs.mkdirSync(BASE_CACHE_DIR, { recursive: true });
+  console.log('[SnapshotCache] Created base cache directory:', BASE_CACHE_DIR);
 }
 
 /**
- * Save snapshot to cache
+ * Get store-specific cache directory
+ *
+ * Structure: data/snapshots/{storeId}/
+ *
+ * @param {string} storeId - Store identifier (validated)
+ * @returns {string} - Store cache directory path
+ */
+function getStoreCacheDir(storeId) {
+  // CRITICAL: Validate storeId to prevent path traversal
+  const validation = validateStoreId(storeId);
+  if (!validation.valid) {
+    throw new Error(`Invalid storeId: ${validation.error}`);
+  }
+
+  const storeDir = path.join(BASE_CACHE_DIR, storeId);
+
+  // Create store directory if doesn't exist
+  if (!fs.existsSync(storeDir)) {
+    fs.mkdirSync(storeDir, { recursive: true });
+    console.log('[SnapshotCache] Created store directory:', storeDir);
+  }
+
+  return storeDir;
+}
+
+/**
+ * Generate cache key with store isolation
+ *
+ * @param {string} storeId - Store identifier
+ * @param {string} timeframe - 'daily' or 'weekly'
+ * @param {string} asOfDate - YYYY-MM-DD
+ * @returns {string} - Cache key
+ */
+function getStoreCacheKey(storeId, timeframe, asOfDate) {
+  return `${storeId}:${generateSnapshotKey(timeframe, asOfDate)}`;
+}
+
+/**
+ * Save snapshot to cache - MULTI-TENANT
  *
  * Uses atomic write pattern:
  * 1. Write to temporary file
  * 2. Rename to final location (atomic on POSIX)
  *
+ * CRITICAL: Requires storeId - no defaults, no fallbacks
+ *
+ * @param {string} storeId - Store identifier (REQUIRED)
  * @param {string} timeframe - 'daily' or 'weekly'
  * @param {string} asOfDate - Date in YYYY-MM-DD
  * @param {object} snapshot - Snapshot data
  * @returns {object} - { success: boolean, path: string }
  */
-export function saveSnapshot(timeframe, asOfDate, snapshot) {
+export function saveSnapshot(storeId, timeframe, asOfDate, snapshot) {
+  if (!storeId) {
+    throw new Error('[SnapshotCache] saveSnapshot: storeId is required');
+  }
+
+  const storeDir = getStoreCacheDir(storeId);
   const key = generateSnapshotKey(timeframe, asOfDate);
-  const filePath = path.join(CACHE_DIR, `${key}.json`);
-  const tempPath = path.join(CACHE_DIR, `${key}.tmp.json`);
+  const filePath = path.join(storeDir, `${key}.json`);
+  const tempPath = path.join(storeDir, `${key}.tmp.json`);
 
   try {
     // Add cache metadata
@@ -65,10 +114,11 @@ export function saveSnapshot(timeframe, asOfDate, snapshot) {
     // Rename to final location (atomic on most filesystems)
     fs.renameSync(tempPath, filePath);
 
-    // Update in-memory cache
-    updateMemoryCache(key, cacheEntry);
+    // Update in-memory cache with store-scoped key
+    const cacheKey = getStoreCacheKey(storeId, timeframe, asOfDate);
+    updateMemoryCache(cacheKey, cacheEntry);
 
-    console.log('[SnapshotCache] Saved snapshot:', { key, path: filePath });
+    console.log('[SnapshotCache] Saved snapshot:', { storeId, key, path: filePath });
 
     return {
       success: true,
@@ -94,28 +144,37 @@ export function saveSnapshot(timeframe, asOfDate, snapshot) {
 }
 
 /**
- * Load snapshot from cache
+ * Load snapshot from cache - MULTI-TENANT
  *
  * Checks memory cache first, then falls back to disk
  *
+ * CRITICAL: Requires storeId - no defaults, no fallbacks
+ *
+ * @param {string} storeId - Store identifier (REQUIRED)
  * @param {string} timeframe - 'daily' or 'weekly'
  * @param {string} asOfDate - Date in YYYY-MM-DD
  * @returns {object|null} - Cached snapshot or null if not found
  */
-export function loadSnapshot(timeframe, asOfDate) {
+export function loadSnapshot(storeId, timeframe, asOfDate) {
+  if (!storeId) {
+    throw new Error('[SnapshotCache] loadSnapshot: storeId is required');
+  }
+
+  const cacheKey = getStoreCacheKey(storeId, timeframe, asOfDate);
   const key = generateSnapshotKey(timeframe, asOfDate);
 
   // Check memory cache first
-  if (memoryCache.has(key)) {
-    console.log('[SnapshotCache] Memory cache hit:', key);
-    return memoryCache.get(key);
+  if (memoryCache.has(cacheKey)) {
+    console.log('[SnapshotCache] Memory cache hit:', cacheKey);
+    return memoryCache.get(cacheKey);
   }
 
-  // Check disk cache
-  const filePath = path.join(CACHE_DIR, `${key}.json`);
+  // Check disk cache in store-specific directory
+  const storeDir = getStoreCacheDir(storeId);
+  const filePath = path.join(storeDir, `${key}.json`);
 
   if (!fs.existsSync(filePath)) {
-    console.log('[SnapshotCache] Cache miss:', key);
+    console.log('[SnapshotCache] Cache miss:', cacheKey);
     return null;
   }
 
@@ -124,9 +183,9 @@ export function loadSnapshot(timeframe, asOfDate) {
     const cacheEntry = JSON.parse(content);
 
     // Update memory cache
-    updateMemoryCache(key, cacheEntry);
+    updateMemoryCache(cacheKey, cacheEntry);
 
-    console.log('[SnapshotCache] Disk cache hit:', key);
+    console.log('[SnapshotCache] Disk cache hit:', cacheKey);
     return cacheEntry;
   } catch (err) {
     console.error('[SnapshotCache] Failed to load snapshot:', {
@@ -138,19 +197,28 @@ export function loadSnapshot(timeframe, asOfDate) {
 }
 
 /**
- * Get the most recently cached snapshot
+ * Get the most recently cached snapshot - MULTI-TENANT
  *
- * Used by /snapshot/send to send the latest snapshot regardless of date
+ * DEPRECATED: Use getLatestSnapshotForStore() or explicit snapshot selection
  *
+ * CRITICAL: Requires storeId - no defaults, no fallbacks
+ *
+ * @param {string} storeId - Store identifier (REQUIRED)
  * @returns {object|null} - Most recent snapshot or null if none exist
  */
-export function getLatestSnapshot() {
+export function getLatestSnapshot(storeId) {
+  if (!storeId) {
+    throw new Error('[SnapshotCache] getLatestSnapshot: storeId is required');
+  }
+
   try {
-    // Read all snapshot files
-    const files = fs.readdirSync(CACHE_DIR)
+    const storeDir = getStoreCacheDir(storeId);
+
+    // Read all snapshot files in store directory
+    const files = fs.readdirSync(storeDir)
       .filter(f => f.startsWith('snapshot_') && f.endsWith('.json'))
       .map(f => {
-        const filePath = path.join(CACHE_DIR, f);
+        const filePath = path.join(storeDir, f);
         const stats = fs.statSync(filePath);
         return {
           path: filePath,
@@ -160,7 +228,7 @@ export function getLatestSnapshot() {
       .sort((a, b) => b.mtime - a.mtime); // Sort by modified time descending
 
     if (files.length === 0) {
-      console.log('[SnapshotCache] No cached snapshots found');
+      console.log('[SnapshotCache] No cached snapshots found for store:', storeId);
       return null;
     }
 
@@ -168,14 +236,18 @@ export function getLatestSnapshot() {
     const content = fs.readFileSync(files[0].path, 'utf-8');
     const cacheEntry = JSON.parse(content);
 
-    console.log('[SnapshotCache] Loaded latest snapshot:', {
+    console.log('[SnapshotCache] Loaded latest snapshot for store:', {
+      storeId,
       key: cacheEntry.key,
       cachedAt: cacheEntry.cachedAt
     });
 
     return cacheEntry;
   } catch (err) {
-    console.error('[SnapshotCache] Failed to get latest snapshot:', err.message);
+    console.error('[SnapshotCache] Failed to get latest snapshot:', {
+      storeId,
+      error: err.message
+    });
     return null;
   }
 }
@@ -203,15 +275,26 @@ function updateMemoryCache(key, value) {
 }
 
 /**
- * List all cached snapshots
- * @returns {Array} - List of cached snapshot metadata
+ * List all cached snapshots - MULTI-TENANT
+ *
+ * CRITICAL: Requires storeId - no defaults, no fallbacks
+ *
+ * @param {string} storeId - Store identifier (REQUIRED)
+ * @returns {Array} - List of cached snapshot metadata for this store
  */
-export function listCachedSnapshots() {
+export function listCachedSnapshots(storeId) {
+  if (!storeId) {
+    throw new Error('[SnapshotCache] listCachedSnapshots: storeId is required');
+  }
+
   try {
-    const files = fs.readdirSync(CACHE_DIR)
+    const storeDir = getStoreCacheDir(storeId);
+
+    // Read all snapshot files in store directory
+    const files = fs.readdirSync(storeDir)
       .filter(f => f.startsWith('snapshot_') && f.endsWith('.json'))
       .map(f => {
-        const filePath = path.join(CACHE_DIR, f);
+        const filePath = path.join(storeDir, f);
         const stats = fs.statSync(filePath);
 
         try {

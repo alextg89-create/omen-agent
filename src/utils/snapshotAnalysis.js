@@ -337,6 +337,92 @@ export function analyzeSnapshot(currentSnapshot, previousSnapshot, historicalSna
 }
 
 /**
+ * Compute velocity delta
+ *
+ * Compares sales velocity between two periods
+ *
+ * @param {object} currentVelocity - Current period velocity
+ * @param {object} previousVelocity - Previous period velocity
+ * @returns {object} - Delta with acceleration flag
+ */
+export function computeVelocityDelta(currentVelocity, previousVelocity) {
+  if (!currentVelocity || !previousVelocity) {
+    return {
+      hasComparison: false,
+      message: 'Insufficient velocity data for comparison',
+      pattern: 'unknown'
+    };
+  }
+
+  const delta = computeDelta(
+    currentVelocity.dailyVelocity,
+    previousVelocity.dailyVelocity
+  );
+
+  // Detect acceleration/deceleration (threshold: 20% change)
+  let pattern = 'stable';
+  if (delta.direction === 'up' && delta.percent !== null && delta.percent > 20) {
+    pattern = 'accelerating'; // Sales increasing
+  } else if (delta.direction === 'down' && delta.percent !== null && delta.percent < -20) {
+    pattern = 'decelerating'; // Sales slowing
+  }
+
+  return {
+    ...delta,
+    pattern,
+    message: explainVelocityDelta(delta, pattern)
+  };
+}
+
+/**
+ * Generate explanation for velocity change
+ *
+ * CONSERVATIVE LANGUAGE ONLY
+ */
+function explainVelocityDelta(delta, pattern) {
+  if (!delta.hasComparison) {
+    return 'No prior velocity data for comparison';
+  }
+
+  if (pattern === 'accelerating') {
+    return `Sales velocity increased by ${delta.percent.toFixed(1)}% - item is selling faster`;
+  } else if (pattern === 'decelerating') {
+    return `Sales velocity decreased by ${Math.abs(delta.percent).toFixed(1)}% - item is selling slower`;
+  } else {
+    return `Sales velocity stable (${delta.current?.toFixed(2) || 0} units/day)`;
+  }
+}
+
+/**
+ * Compute velocity-aware snapshot deltas
+ *
+ * Extends basic snapshot deltas with velocity comparisons
+ *
+ * @param {object} currentSnapshot - Current snapshot with velocity data
+ * @param {object} previousSnapshot - Previous snapshot with velocity data
+ * @returns {object} - Enhanced delta analysis
+ */
+export function computeVelocityAwareDeltas(currentSnapshot, previousSnapshot) {
+  const basicDeltas = computeSnapshotDeltas(currentSnapshot, previousSnapshot);
+
+  // Add velocity deltas if available
+  if (currentSnapshot.temporal && previousSnapshot?.temporal) {
+    basicDeltas.velocityMetrics = {
+      totalUnitsSold: computeDelta(
+        currentSnapshot.temporal.totalUnitsSold,
+        previousSnapshot.temporal.totalUnitsSold
+      ),
+      averageVelocity: computeDelta(
+        currentSnapshot.temporal.averageVelocity,
+        previousSnapshot.temporal.averageVelocity
+      )
+    };
+  }
+
+  return basicDeltas;
+}
+
+/**
  * Edge case safeguards
  *
  * SAFEGUARDS:
@@ -348,10 +434,12 @@ export function analyzeSnapshot(currentSnapshot, previousSnapshot, historicalSna
  * 6. Conservative trend detection: 75% consistency required
  * 7. No smoothing or normalization
  * 8. No causal inference
+ * 9. Velocity acceleration threshold: 20% change
  */
 export const SAFEGUARDS = {
   MIN_TREND_SNAPSHOTS: 3,
   TREND_CONSISTENCY_THRESHOLD: 0.75, // 75% of deltas must agree
   FLAT_THRESHOLD_PERCENT: 0.5, // +/- 0.5% considered flat
-  MAX_TREND_WINDOW: 5 // Only use last 5 snapshots for trend
+  MAX_TREND_WINDOW: 5, // Only use last 5 snapshots for trend
+  VELOCITY_ACCELERATION_THRESHOLD: 20 // 20% change = acceleration/deceleration
 };

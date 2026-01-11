@@ -1,0 +1,224 @@
+[
+  {
+    "id": "snapshot_weekly_2026-01-11_1768094287062_f251a804",
+    "timeframe": "weekly",
+    "asOfDate": "2026-01-11",
+    "createdAt": "2026-01-11T01:18:07.062Z",
+    "generatedAt": "2026-01-11T01:18:07.061Z",
+    "requestId": "a43d438b-0e17-4a63-a657-6351181b2692",
+    "store": "NJWeedWizard",
+    "summary": {
+      "itemCount": 60,
+      "totalRevenue": 8088,
+      "totalProfit": 4863,
+      "averageMargin": 60.51,
+      "recommendationCount": 12
+    },
+    "filePath": "snapshot_weekly_2026-01-11_1768094287062_f251a804.json",
+    "sizeBytes": 0,
+    "version": 1,
+    "supersedes": null,
+    "diffMetadata": {
+      "itemsWithPricing": 16,
+      "highestMarginSku": "Bloopiez (eighth)",
+      "lowestMarginSku": "Bloopiez (oz)",
+      "dateRange": {
+        "startDate": "2026-01-05T00:00:00.000Z",
+        "endDate": "2026-01-11T23:59:59.999Z",
+        "asOfDate": "2026-01-11",
+        "timeframe": "weekly"
+      }
+    },
+    "createdBy": "api",
+    "createdVia": "api",
+    "regenerated": false,
+    "emailSent": false,
+    "emailSentAt": null,
+    "emailRecipient": null
+  },
+  {
+    "id": "snapshot_weekly_2026-01-05_1768014213768_fadf1c63",
+    "timeframe": "weekly",
+    "asOfDate": "2026-01-05",
+    "createdAt": "2026-01-10T03:03:33.768Z",
+    "generatedAt": "2026-01-10T03:03:33.768Z",
+    "requestId": "a4c8aa55-7ef0-4fe0-84a3-3e732ac040da",
+    "store": "NJWeedWizard",
+    "summary": {
+      "itemCount": 60,
+      "totalRevenue": 8088,
+      "totalProfit": 4863,
+      "averageMargin": 60.51,
+      "recommendationCount": 13
+    },
+    "filePath": "snapshot_weekly_2026-01-05_1768014213768_fadf1c63.json",
+    "sizeBytes": 0,
+    "version": 2,
+    "supersedes": "snapshot_weekly_2026-01-05_1768014213717_fc64c2c4",
+    "diffMetadata": {
+      "itemsWithPricing": 16,
+      "highestMarginSku": "Bloopiez (eighth)",
+      "lowestMarginSku": "Bloopiez (oz)",
+      "dateRange": {
+        "startDate": "2026-01-05T00:00:00.000Z",
+        "endDate": "2026-01-11T23:59:59.999Z",
+        "asOfDate": "2026-01-05",
+        "timeframe": "weekly"
+      }
+    },
+    "createdBy": "api",
+    "createdVia": "api",
+    "regenerated": true,
+    "emailSent": true,
+    "emailSentAt": "2026-01-10T03:03:33.778Z",
+    "emailRecipient": "test-production@example.com"
+  },
+  {
+    "id": "snapshot_weekly_2026-01-09_1768013990884_a098d716",
+    "timeframe": "weekly",
+    "asOfDate": "2026-01-09",
+    "createdAt": "2026-01-10T02:59:50.884Z",
+    "generatedAt": "2026-01-10T02:59:50.884Z",
+    "requestId": "30698c7c-ef1c-4856-9b88-60753408deef",
+    "store": "NJWeedWizard",
+    "summary": {
+      "itemCount": 60,
+      "totalRevenue": 8088,
+      "totalProfit": 4863,
+      "averageMargin": 60.51,
+      "recommendationCount": 13
+    },
+    "filePath": "snapshot_weekly_2026-01-09_1768013990884_a098d716.json",
+    "sizeBytes": 0,
+    "version": 2,
+    "supersedes": "snapshot_weekly_2026-01-09_1768013922779_12edff83",
+    "diffMetadata": {
+      "itemsWithPricing": 16,
+      "highestMarginSku": "Bloopiez (eighth)",
+      "lowestMarginSku": "Bloopiez (oz)",
+      "dateRange": {
+        "startDate": "2026-01-05T00:00:00.000Z",
+        "endDate": "2026-01-11T23:59:59.999Z",
+        "asOfDate": "2026-01-09",
+        "timeframe": "weekly"
+      }
+    },
+    "createdBy": "api",
+    "createdVia": "api",
+    "regenerated": true,
+    "emailSent": true,
+    "emailSentAt": "2026-01-10T03:01:31.854Z",
+    "emailRecipient": "test-production@example.com"
+  },
+  {
+    "id": "snapshot_weekly_2026-01-01_1768013922894_f8342520",
+    "timeframe": "weekly",
+    "asOfDate": "2026-01-01",
+    "createdAt": "2026-01-10T02:58:42.894Z",
+    "generatedAt": "2026-01-10T02:58:42.894Z",
+    "requestId": "9fda3e2a-db26-47b3-ad85-6877ec372ebe",
+    "store": "NJWeedWizard",
+    "summary": {
+      "itemCount": 60,
+      "totalRevenue": 8088,
+      "totalProfit": 4863,
+      "averageMargin": 60.51,
+      "recommendationCount": 13
+    },
+    "filePath": "snapshot_weekly_2026-01-01_1768013922894_f8342520.json",
+    "sizeBytes": 0,
+    "version": 1,
+    "supersedes": null,
+    "diffMetadata": {
+      "itemsWithPricing": 16,
+      "highestMarginSku": "Bloopiez (eighth)",
+      "lowestMarginSku": "Bloopiez (oz)",
+      "dateRange": {
+        "startDate": "2025-12-29T00:00:00.000Z",
+        "endDate": "2026-01-04T23:59:59.999Z",
+        "asOfDate": "2026-01-01",
+        "timeframe": "weekly"
+      }
+    },
+    "createdBy": "api",
+    "createdVia": "api",
+    "regenerated": false,
+    "emailSent": false,
+    "emailSentAt": null,
+    "emailRecipient": null
+  },
+  {
+    "id": "snapshot_daily_2026-01-09_1768013922790_197d56a4",
+    "timeframe": "daily",
+    "asOfDate": "2026-01-09",
+    "createdAt": "2026-01-10T02:58:42.790Z",
+    "generatedAt": "2026-01-10T02:58:42.790Z",
+    "requestId": "71771791-71ae-4d7f-85aa-90f1842e6f4a",
+    "store": "NJWeedWizard",
+    "summary": {
+      "itemCount": 60,
+      "totalRevenue": 8088,
+      "totalProfit": 4863,
+      "averageMargin": 60.51,
+      "recommendationCount": 13
+    },
+    "filePath": "snapshot_daily_2026-01-09_1768013922790_197d56a4.json",
+    "sizeBytes": 0,
+    "version": 1,
+    "supersedes": null,
+    "diffMetadata": {
+      "itemsWithPricing": 16,
+      "highestMarginSku": "Bloopiez (eighth)",
+      "lowestMarginSku": "Bloopiez (oz)",
+      "dateRange": {
+        "startDate": "2026-01-09T00:00:00.000Z",
+        "endDate": "2026-01-09T23:59:59.999Z",
+        "asOfDate": "2026-01-09",
+        "timeframe": "daily"
+      }
+    },
+    "createdBy": "api",
+    "createdVia": "api",
+    "regenerated": false,
+    "emailSent": true,
+    "emailSentAt": "2026-01-10T02:58:42.811Z",
+    "emailRecipient": "test@example.com"
+  },
+  {
+    "id": "snapshot_weekly_2026-01-10_1768013922758_e0448db2",
+    "timeframe": "weekly",
+    "asOfDate": "2026-01-10",
+    "createdAt": "2026-01-10T02:58:42.759Z",
+    "generatedAt": "2026-01-10T02:58:42.758Z",
+    "requestId": "4f5b87ff-2a8b-4067-9d7e-f63610516489",
+    "store": "NJWeedWizard",
+    "summary": {
+      "itemCount": 60,
+      "totalRevenue": 8088,
+      "totalProfit": 4863,
+      "averageMargin": 60.51,
+      "recommendationCount": 13
+    },
+    "filePath": "snapshot_weekly_2026-01-10_1768013922758_e0448db2.json",
+    "sizeBytes": 0,
+    "version": 1,
+    "supersedes": null,
+    "diffMetadata": {
+      "itemsWithPricing": 16,
+      "highestMarginSku": "Bloopiez (eighth)",
+      "lowestMarginSku": "Bloopiez (oz)",
+      "dateRange": {
+        "startDate": "2026-01-05T00:00:00.000Z",
+        "endDate": "2026-01-11T23:59:59.999Z",
+        "asOfDate": "2026-01-10",
+        "timeframe": "weekly"
+      }
+    },
+    "createdBy": "api",
+    "createdVia": "api",
+    "regenerated": false,
+    "emailSent": false,
+    "emailSentAt": null,
+    "emailRecipient": null
+  }
+]

@@ -603,12 +603,19 @@
         html += `
           <div class="recommendation-section">
             <h4>📦 Inventory Actions (${recommendations.inventory.length})</h4>
-            ${recommendations.inventory.slice(0, 5).map(rec => `
+            ${recommendations.inventory.slice(0, 5).map(rec => {
+              const metrics = rec.triggeringMetrics || {};
+              const signalBadge = rec.signalType ? `<span style="background: #ff6b6b; color: white; padding: 2px 6px; border-radius: 3px; font-size: 10px;">${rec.signalType}</span>` : '';
+              const priority = rec.priorityScore ? ` | Priority: ${rec.priorityScore}` : '';
+              const depletion = metrics.daysUntilDepletion ? ` | ${metrics.daysUntilDepletion} days left` : '';
+              const rate = metrics.depletionRate ? ` | ${metrics.depletionRate} units/day` : '';
+
+              return `
               <div class="recommendation-item">
-                <strong>${rec.name}</strong>: ${rec.reason}
-                <small>Action: ${rec.action} | Stock: ${rec.triggeringMetrics.quantity} | Confidence: ${(rec.confidence * 100).toFixed(0)}%</small>
+                <strong>${rec.name}</strong> ${signalBadge}: ${rec.reason}
+                <small>Action: ${rec.action} | Stock: ${metrics.currentQuantity || metrics.quantity || 0}${depletion}${rate}${priority} | Confidence: ${(rec.confidence * 100).toFixed(0)}%</small>
               </div>
-            `).join('')}
+            `}).join('')}
           </div>
         `;
       }
