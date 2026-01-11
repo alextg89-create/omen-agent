@@ -171,7 +171,7 @@ function generateActionableInsights(velocityMetrics, currentInventory) {
   const insights = [];
 
   // Identify items that didn't sell at all
-  const unmov edSKUs = currentInventory.filter(item => {
+  const unmovedSKUs = currentInventory.filter(item => {
     return !velocityMetrics.some(m => m.sku === item.sku && m.unit === (item.unit || 'each'));
   });
 
