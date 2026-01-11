@@ -1,5 +1,5 @@
 import applyPricing from "./tools/applyPricing.js";
-import { saveInventory, getInventory } from "./tools/inventoryStore.js";
+import { saveInventory, getInventory, clearInventory } from "./tools/inventoryStore.js";
 import { detectLowStock } from "./inventorySignals.js";
 import { ingestNjWeedWizardCsv } from "./njweedwizardCsvIngest.js";
 import { normalizeInventory } from "./normalizeInventory.js";
