@@ -54,6 +54,7 @@ const __dirname = path.dirname(__filename);
 const OMEN_MAX_TIER = Number(process.env.OMEN_MAX_TIER ?? 1);
 const OMEN_ALLOW_EXECUTION = process.env.OMEN_ALLOW_EXECUTION === "true";
 const USE_MOCK_INVENTORY = process.env.OMEN_USE_MOCKS === "true";
+const STORE_ID = "NJWeedWizard";
 
 /*
  * ===============================
@@ -71,7 +72,7 @@ const app = express();
  * DEBUG — Inspect live inventory snapshot
  */
 app.get("/debug/inventory", (req, res) => {
-  const inventory = getInventory("NJWeedWizard");
+  const inventory = getInventory(STORE_ID);
 
   res.json({
     ok: true,
@@ -276,14 +277,14 @@ const normalized =
     const storage = persistInventory(aggregated);
 
     // 5️⃣ Save enriched inventory to in-memory store
-    saveInventory("NJWeedWizard", aggregated);
+    saveInventory(STORE_ID, aggregated);
 
     // 6️⃣ Optional signals
     const lowStock = detectLowStock(aggregated);
 
     return res.json({
       ok: true,
-      store: "NJWeedWizard",
+      store: STORE_ID,
       itemCount: aggregated.length,
       stored: true,
       updated_at: new Date().toISOString(),
@@ -508,7 +509,7 @@ app.post("/chat", async (req, res) => {
       console.log("💬 [OMEN] Inventory required for query", { requestId, needsRecommendations });
 
       // Reuse existing inventory store logic
-      inventoryData = getInventory("NJWeedWizard");
+      inventoryData = getInventory(STORE_ID);
 
       if (!inventoryData || inventoryData.length === 0) {
         console.warn("💬 [OMEN] Inventory unavailable", { requestId });
@@ -1368,6 +1369,24 @@ function formatFallbackRecommendationsWithConfidence(recommendations, metrics) {
 }
 
 /**
+ * Format date for display (converts ISO to readable format)
+ */
+function formatDateForDisplay(isoString) {
+  if (!isoString) return 'N/A';
+  try {
+    const date = new Date(isoString);
+    return date.toLocaleDateString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      timeZone: 'UTC'
+    });
+  } catch (e) {
+    return isoString;
+  }
+}
+
+/**
  * Format snapshot for email delivery
  *
  * GUARDRAIL: This function uses ONLY data from Supabase + temporalAnalyzer.
@@ -1380,15 +1399,30 @@ function formatSnapshotEmail(snapshot) {
   const recommendations = snapshot?.recommendations || { promotions: [], pricing: [], inventory: [] };
   const velocity = snapshot?.velocity || null;
   const temporal = snapshot?.temporal || {};
+  const timeframe = snapshot?.timeframe || 'weekly';
 
   // Check if we have real order-based intelligence
   const hasRealIntelligence = temporal?.hasRealData && velocity?.insights && velocity.insights.length > 0;
 
   try {
+    // Format dates for readability
+    const periodStart = formatDateForDisplay(snapshot.dateRange?.startDate);
+    const periodEnd = formatDateForDisplay(snapshot.dateRange?.endDate);
+    const generatedTime = new Date(snapshot.generatedAt).toLocaleString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      timeZone: 'America/New_York'
+    });
+
+    const timeframeLabel = timeframe === 'daily' ? 'Daily' : 'Weekly';
+
     let email = `
-OMEN Weekly Operations Snapshot
-Generated: ${new Date(snapshot.generatedAt).toLocaleString()}
-Period: ${snapshot.dateRange?.startDate || 'N/A'} to ${snapshot.dateRange?.endDate || 'N/A'}
+OMEN ${timeframeLabel} Operations Snapshot
+Generated: ${generatedTime} EST
+Analysis Period: ${periodStart} - ${periodEnd}
 
 ═══════════════════════════════════════
 📊 BUSINESS SNAPSHOT
@@ -1425,9 +1459,19 @@ Unique SKUs Sold: ${velocity.uniqueSKUs}` : 'Live Orders: Building baseline...'}
     // NEVER fail silently - return minimal valid email
     console.error('[Email Format] Error formatting snapshot email:', error.message);
 
+    const timeframeLabel = snapshot?.timeframe === 'daily' ? 'Daily' : 'Weekly';
+    const generatedTime = new Date().toLocaleString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      timeZone: 'America/New_York'
+    });
+
     return `
-OMEN Weekly Operations Snapshot
-Generated: ${new Date().toLocaleString()}
+OMEN ${timeframeLabel} Operations Snapshot
+Generated: ${generatedTime} EST
 
 ⚠️ Email generation encountered an error.
 Please contact support or regenerate the snapshot.
@@ -1508,7 +1552,7 @@ app.post("/snapshot/generate", async (req, res) => {
     });
 
     // 3️⃣ IDEMPOTENCY CHECK - Check if snapshot already exists
-    const existingSnapshot = findExistingSnapshot(timeframe, effectiveDate);
+    const existingSnapshot = findExistingSnapshot(STORE_ID, timeframe, effectiveDate);
 
     if (existingSnapshot && !forceRegenerate) {
       console.log("📸 [OMEN] Snapshot already exists (idempotent)", {
@@ -1518,7 +1562,7 @@ app.post("/snapshot/generate", async (req, res) => {
       });
 
       // Load from cache
-      const cached = loadSnapshot(timeframe, effectiveDate);
+      const cached = loadSnapshot(STORE_ID, timeframe, effectiveDate);
 
       if (cached) {
         return res.json({
@@ -1534,7 +1578,7 @@ app.post("/snapshot/generate", async (req, res) => {
     }
 
     // 4️⃣ FETCH LIVE INVENTORY
-    const inventory = getInventory("NJWeedWizard");
+    const inventory = getInventory(STORE_ID);
 
     if (!inventory || inventory.length === 0) {
       return res.status(400).json({
@@ -1617,7 +1661,7 @@ app.post("/snapshot/generate", async (req, res) => {
       asOfDate: effectiveDate,
       dateRange,
       timeframe,
-      store: "NJWeedWizard",
+      store: STORE_ID,
       metrics,
       recommendations,
       // Real temporal intelligence
@@ -1658,7 +1702,7 @@ app.post("/snapshot/generate", async (req, res) => {
     snapshot.snapshotId = indexEntry.id;
 
     // 🔟 PERSIST SNAPSHOT TO DISK
-    const cacheResult = saveSnapshot(timeframe, effectiveDate, snapshot);
+    const cacheResult = saveSnapshot(STORE_ID, timeframe, effectiveDate, snapshot);
 
     if (!cacheResult.success) {
       console.warn("📸 [OMEN] Failed to cache snapshot", {
@@ -1745,7 +1789,7 @@ app.post("/snapshot/send", async (req, res) => {
     }
 
     // 2️⃣ PREVIEW VS SEND LOCK - Check if snapshot exists
-    const latestEntry = getLatestSnapshotEntry();
+    const latestEntry = getLatestSnapshotEntry(STORE_ID);
 
     if (!latestEntry) {
       // NO SNAPSHOT EXISTS - Clear error message
@@ -1765,7 +1809,7 @@ app.post("/snapshot/send", async (req, res) => {
     });
 
     // 3️⃣ LOAD SNAPSHOT FROM CACHE
-    const cached = loadSnapshot(latestEntry.timeframe, latestEntry.asOfDate);
+    const cached = loadSnapshot(STORE_ID, latestEntry.timeframe, latestEntry.asOfDate);
 
     if (!cached) {
       // Snapshot exists in index but not in cache (data corruption)
@@ -1801,8 +1845,10 @@ app.post("/snapshot/send", async (req, res) => {
 
     // Get formatted date for subject line
     const subjectDate = snapshot.asOfDate
-      ? new Date(snapshot.asOfDate + 'T00:00:00Z').toLocaleDateString()
-      : new Date().toLocaleDateString();
+      ? formatDateForDisplay(snapshot.dateRange?.endDate || snapshot.asOfDate + 'T00:00:00Z')
+      : formatDateForDisplay(new Date().toISOString());
+
+    const timeframeLabel = snapshot.timeframe === 'daily' ? 'Daily' : 'Weekly';
 
     // 6️⃣ RETURN FORMATTED EMAIL
     return res.json({
@@ -1811,7 +1857,7 @@ app.post("/snapshot/send", async (req, res) => {
       snapshotId: latestEntry.id,
       email: {
         to: email,
-        subject: `OMEN ${snapshot.timeframe === 'daily' ? 'Daily' : 'Weekly'} Snapshot - ${subjectDate}`,
+        subject: `OMEN ${timeframeLabel} Snapshot - ${subjectDate}`,
         body: emailBody
       },
       message: "Snapshot prepared for email delivery",
@@ -1880,7 +1926,7 @@ app.get("/snapshot/get", (req, res) => {
       });
     }
 
-    const cached = loadSnapshot(timeframe, asOfDate);
+    const cached = loadSnapshot(STORE_ID, timeframe, asOfDate);
 
     if (!cached) {
       return res.status(404).json({
@@ -2118,7 +2164,7 @@ app.post("/cron/daily-snapshot", async (req, res) => {
 
   try {
     // Generate daily snapshot
-    const inventory = getInventory("NJWeedWizard");
+    const inventory = getInventory(STORE_ID);
 
     if (!inventory || inventory.length === 0) {
       console.error("⏰ [CRON] No inventory available for daily snapshot");
@@ -2138,7 +2184,7 @@ app.post("/cron/daily-snapshot", async (req, res) => {
       asOfDate: dateRange.asOfDate,
       dateRange,
       timeframe: 'daily',
-      store: "NJWeedWizard",
+      store: STORE_ID,
       metrics,
       velocity: velocityAnalysis.ok ? {
         orderCount: velocityAnalysis.orderCount,
@@ -2165,7 +2211,7 @@ app.post("/cron/daily-snapshot", async (req, res) => {
 
     const indexResult = addToIndex(indexEntry, false);
     if (indexResult.success) {
-      saveSnapshot(snapshot, 'daily', dateRange.asOfDate);
+      saveSnapshot(STORE_ID, 'daily', dateRange.asOfDate, snapshot);
     }
 
     console.log("⏰ [CRON] Daily snapshot complete", {
@@ -2201,7 +2247,7 @@ app.post("/cron/weekly-snapshot", async (req, res) => {
 
   try {
     // Generate weekly snapshot
-    const inventory = getInventory("NJWeedWizard");
+    const inventory = getInventory(STORE_ID);
 
     if (!inventory || inventory.length === 0) {
       console.error("⏰ [CRON] No inventory available for weekly snapshot");
@@ -2221,7 +2267,7 @@ app.post("/cron/weekly-snapshot", async (req, res) => {
       asOfDate: dateRange.asOfDate,
       dateRange,
       timeframe: 'weekly',
-      store: "NJWeedWizard",
+      store: STORE_ID,
       metrics,
       velocity: velocityAnalysis.ok ? {
         orderCount: velocityAnalysis.orderCount,
@@ -2249,7 +2295,7 @@ app.post("/cron/weekly-snapshot", async (req, res) => {
 
     const indexResult = addToIndex(indexEntry, false);
     if (indexResult.success) {
-      saveSnapshot(snapshot, 'weekly', dateRange.asOfDate);
+      saveSnapshot(STORE_ID, 'weekly', dateRange.asOfDate, snapshot);
     }
 
     console.log("⏰ [CRON] Weekly snapshot complete", {

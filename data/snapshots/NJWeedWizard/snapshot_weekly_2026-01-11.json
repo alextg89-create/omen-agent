@@ -1,9 +1,10 @@
 {
-  "key": "snapshot_2026-01-11_[object Object]",
-  "timeframe": "2026-01-11",
-  "asOfDate": {
-    "requestId": "6120ed5e-2d76-4f5a-9542-b83c0107cf0d",
-    "generatedAt": "2026-01-11T19:17:20.028Z",
+  "key": "snapshot_weekly_2026-01-11",
+  "timeframe": "weekly",
+  "asOfDate": "2026-01-11",
+  "snapshot": {
+    "requestId": "7509b2e6-3528-4c85-9a34-cd76ab804347",
+    "generatedAt": "2026-01-11T19:22:42.255Z",
     "asOfDate": "2026-01-11",
     "dateRange": {
       "startDate": "2026-01-05T00:00:00.000Z",
@@ -850,8 +851,8 @@
     ],
     "confidence": "medium",
     "itemCount": 60,
-    "snapshotId": "snapshot_weekly_2026-01-11_1768159040029_28dbfd09"
+    "snapshotId": "snapshot_weekly_2026-01-11_1768159362255_bacd7a8f"
   },
-  "cachedAt": "2026-01-11T19:17:20.091Z",
+  "cachedAt": "2026-01-11T19:22:42.285Z",
   "version": "1.0"
 }
