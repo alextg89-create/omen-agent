@@ -1073,6 +1073,51 @@ function extractTopics(message, needsInventory) {
 }
 
 /* ---------- Inventory ---------- */
+/**
+ * REFRESH - Invalidate cache and force fresh data load from Supabase
+ *
+ * Clears 5-minute inventory cache, forcing next request to fetch fresh data
+ */
+app.post("/refresh", async (req, res) => {
+  const requestId = crypto.randomUUID();
+
+  try {
+    console.log("🔄 [REFRESH] Cache invalidation requested", { requestId });
+
+    // Clear inventory cache
+    clearInventory();
+
+    // Force fresh load to verify Supabase connectivity
+    const inventory = await getInventory(STORE_ID);
+
+    console.log("🔄 [REFRESH] Cache cleared, fresh data loaded", {
+      requestId,
+      itemCount: inventory.length,
+      timestamp: new Date().toISOString()
+    });
+
+    return res.json({
+      ok: true,
+      message: 'Cache cleared - fresh Supabase data loaded',
+      timestamp: new Date().toISOString(),
+      itemsLoaded: inventory.length,
+      source: 'supabase'
+    });
+  } catch (err) {
+    console.error("🔄 [REFRESH] Failed", {
+      requestId,
+      error: err.message
+    });
+
+    return res.status(500).json({
+      ok: false,
+      error: 'Refresh failed',
+      message: err.message,
+      hint: 'Check SUPABASE_SERVICE_KEY in .env and verify Supabase tables exist'
+    });
+  }
+});
+
 app.post("/inventory", (req, res) => {
   const { items, question } = req.body;
 
@@ -1850,20 +1895,22 @@ app.post("/snapshot/send", async (req, res) => {
 
     const timeframeLabel = snapshot.timeframe === 'daily' ? 'Daily' : 'Weekly';
 
-    // 6️⃣ RETURN FORMATTED EMAIL
+    // 6️⃣ RETURN FORMATTED EMAIL (NOT SENT)
     return res.json({
       ok: true,
+      emailFormatted: true,
+      emailSent: false,  // TRUTH: Email provider not configured
+      deliveryStatus: "NOT_CONFIGURED",
+      message: "Email formatted successfully. Email provider NOT configured - email was NOT delivered to recipient.",
+      warning: "To send emails, configure SendGrid/SES/Mailgun credentials and integrate email provider",
       snapshot,
       snapshotId: latestEntry.id,
-      email: {
+      formattedEmail: {
         to: email,
         subject: `OMEN ${timeframeLabel} Snapshot - ${subjectDate}`,
         body: emailBody
       },
-      message: "Snapshot prepared for email delivery",
-      fromCache: true,
-      snapshotDate: snapshot.asOfDate,
-      emailedAt: emailResult.entry?.emailSentAt
+      snapshotDate: snapshot.asOfDate
     });
 
   } catch (err) {

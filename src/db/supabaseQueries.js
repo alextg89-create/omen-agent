@@ -23,11 +23,7 @@ import { getSupabaseClient, isSupabaseAvailable } from './supabaseClient.js';
  */
 export async function queryOrderEvents(startDate, endDate, tableName = 'orders') {
   if (!isSupabaseAvailable()) {
-    return {
-      ok: false,
-      error: 'Supabase not available - using local storage fallback',
-      fallback: true
-    };
+    throw new Error('FATAL: Supabase not configured - cannot query orders. Set SUPABASE_SERVICE_KEY in .env');
   }
 
   const client = getSupabaseClient();
@@ -43,12 +39,7 @@ export async function queryOrderEvents(startDate, endDate, tableName = 'orders')
       .order('created_at', { ascending: true });
 
     if (error) {
-      console.warn(`[Supabase] Query failed: ${error.message}`);
-      return {
-        ok: false,
-        error: error.message,
-        fallback: true
-      };
+      throw new Error(`FATAL: Failed to query ${tableName}: ${error.message}`);
     }
 
     console.log(`[Supabase] Retrieved ${data?.length || 0} order events`);
@@ -60,11 +51,7 @@ export async function queryOrderEvents(startDate, endDate, tableName = 'orders')
     };
   } catch (err) {
     console.error('[Supabase] Query error:', err.message);
-    return {
-      ok: false,
-      error: err.message,
-      fallback: true
-    };
+    throw err;
   }
 }
 
@@ -79,11 +66,7 @@ export async function queryOrderEvents(startDate, endDate, tableName = 'orders')
  */
 export async function queryInventoryState(tableName = 'inventory') {
   if (!isSupabaseAvailable()) {
-    return {
-      ok: false,
-      error: 'Supabase not available - using local storage fallback',
-      fallback: true
-    };
+    throw new Error('FATAL: Supabase not configured - cannot query inventory. Set SUPABASE_SERVICE_KEY in .env');
   }
 
   const client = getSupabaseClient();
@@ -98,12 +81,7 @@ export async function queryInventoryState(tableName = 'inventory') {
       .order('updated_at', { ascending: false });
 
     if (error) {
-      console.warn(`[Supabase] Query failed: ${error.message}`);
-      return {
-        ok: false,
-        error: error.message,
-        fallback: true
-      };
+      throw new Error(`FATAL: Failed to query ${tableName}: ${error.message}`);
     }
 
     console.log(`[Supabase] Retrieved ${data?.length || 0} inventory items`);
@@ -115,11 +93,7 @@ export async function queryInventoryState(tableName = 'inventory') {
     };
   } catch (err) {
     console.error('[Supabase] Query error:', err.message);
-    return {
-      ok: false,
-      error: err.message,
-      fallback: true
-    };
+    throw err;
   }
 }
 
@@ -136,11 +110,7 @@ export async function queryInventoryState(tableName = 'inventory') {
  */
 export async function getSalesSummary(sku, unit, daysSince = 30, tableName = 'orders') {
   if (!isSupabaseAvailable()) {
-    return {
-      ok: false,
-      error: 'Supabase not available',
-      fallback: true
-    };
+    throw new Error('FATAL: Supabase not configured - cannot query sales. Set SUPABASE_SERVICE_KEY in .env');
   }
 
   const client = getSupabaseClient();
@@ -161,12 +131,7 @@ export async function getSalesSummary(sku, unit, daysSince = 30, tableName = 'or
       .order('created_at', { ascending: true });
 
     if (error) {
-      console.warn(`[Supabase] Query failed: ${error.message}`);
-      return {
-        ok: false,
-        error: error.message,
-        fallback: true
-      };
+      throw new Error(`FATAL: Failed to query sales for ${sku}: ${error.message}`);
     }
 
     // Aggregate results
@@ -191,11 +156,7 @@ export async function getSalesSummary(sku, unit, daysSince = 30, tableName = 'or
     };
   } catch (err) {
     console.error('[Supabase] Query error:', err.message);
-    return {
-      ok: false,
-      error: err.message,
-      fallback: true
-    };
+    throw err;
   }
 }
 
