@@ -24,8 +24,21 @@ export async function analyzeInventoryVelocity(currentInventory, timeframe = 'we
 
   console.log(`[TemporalAnalyzer] Analyzing orders from ${startDate} to ${endDate}`);
 
-  // Query real order events from Supabase
-  const ordersResult = await queryOrderEvents(startDate, endDate);
+  // Query real order events from Supabase (optional - table may not exist yet)
+  let ordersResult;
+  try {
+    ordersResult = await queryOrderEvents(startDate, endDate);
+  } catch (err) {
+    console.warn('[TemporalAnalyzer] Orders table not available:', err.message);
+    console.warn('[TemporalAnalyzer] Velocity analysis skipped - create "orders" table in Supabase to enable');
+    return {
+      ok: false,
+      error: 'Orders table not configured',
+      message: 'Velocity analysis requires "orders" table in Supabase',
+      insights: [],
+      hasData: false
+    };
+  }
 
   if (!ordersResult.ok || !ordersResult.data || ordersResult.data.length === 0) {
     console.warn('[TemporalAnalyzer] No order data available:', ordersResult.error);
