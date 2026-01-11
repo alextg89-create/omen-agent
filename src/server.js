@@ -33,6 +33,7 @@ import {
 } from "./utils/snapshotHistory.js";
 import { getConnectionStatus, testConnection } from "./db/supabaseClient.js";
 import { recordInventorySnapshot, updateLiveInventory } from "./db/supabaseQueries.js";
+import { sendSnapshotEmail, isEmailConfigured } from "./services/emailService.js";
 import {
   generateTemporalRecommendationsFromSnapshots,
   computeInventoryDeltas
@@ -1895,21 +1896,68 @@ app.post("/snapshot/send", async (req, res) => {
 
     const timeframeLabel = snapshot.timeframe === 'daily' ? 'Daily' : 'Weekly';
 
-    // 6️⃣ RETURN FORMATTED EMAIL (NOT SENT)
+    // 6️⃣ SEND EMAIL VIA SENDGRID
+    const emailSubject = `OMEN ${timeframeLabel} Snapshot - ${subjectDate}`;
+
+    if (!isEmailConfigured()) {
+      return res.json({
+        ok: true,
+        emailFormatted: true,
+        emailSent: false,
+        deliveryStatus: "NOT_CONFIGURED",
+        message: "Email formatted successfully. SendGrid NOT configured - email was NOT delivered.",
+        warning: "Set SENDGRID_API_KEY and SENDGRID_FROM_EMAIL in Railway environment variables to enable email delivery",
+        snapshot,
+        snapshotId: latestEntry.id,
+        formattedEmail: {
+          to: email,
+          subject: emailSubject,
+          body: emailBody
+        },
+        snapshotDate: snapshot.asOfDate
+      });
+    }
+
+    // SendGrid is configured - actually send the email
+    const emailResult = await sendSnapshotEmail({
+      to: email,
+      subject: emailSubject,
+      body: emailBody,
+      snapshot
+    });
+
+    if (!emailResult.ok) {
+      return res.status(500).json({
+        ok: false,
+        emailSent: false,
+        deliveryStatus: "FAILED",
+        error: emailResult.error,
+        message: `Email delivery failed: ${emailResult.message}`,
+        details: emailResult.details,
+        snapshot,
+        snapshotId: latestEntry.id
+      });
+    }
+
+    // Email sent successfully
+    await markAsEmailed(latestEntry.id, email);
+
+    console.log("📧 [OMEN] Email delivered successfully", {
+      requestId,
+      to: email,
+      messageId: emailResult.messageId,
+      snapshotId: latestEntry.id
+    });
+
     return res.json({
       ok: true,
-      emailFormatted: true,
-      emailSent: false,  // TRUTH: Email provider not configured
-      deliveryStatus: "NOT_CONFIGURED",
-      message: "Email formatted successfully. Email provider NOT configured - email was NOT delivered to recipient.",
-      warning: "To send emails, configure SendGrid/SES/Mailgun credentials and integrate email provider",
+      emailSent: true,
+      deliveryStatus: "DELIVERED",
+      message: "Snapshot successfully delivered to email",
+      messageId: emailResult.messageId,
+      deliveredAt: emailResult.deliveredAt,
       snapshot,
       snapshotId: latestEntry.id,
-      formattedEmail: {
-        to: email,
-        subject: `OMEN ${timeframeLabel} Snapshot - ${subjectDate}`,
-        body: emailBody
-      },
       snapshotDate: snapshot.asOfDate
     });
 
