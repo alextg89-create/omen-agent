@@ -43,7 +43,14 @@ export async function getAuthoritativeInventory() {
   }
 
   if (!inventory || inventory.length === 0) {
-    throw new Error('FATAL: Inventory table is empty. No data to serve.');
+    console.warn('[Authority] WARNING: Inventory table is empty');
+    return {
+      items: [],
+      timestamp: new Date().toISOString(),
+      source: 'supabase',
+      count: 0,
+      warning: 'Inventory table is empty'
+    };
   }
 
   // Query pricing table
