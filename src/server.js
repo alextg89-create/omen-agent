@@ -1904,24 +1904,7 @@ app.post("/snapshot/send", async (req, res) => {
 
     const snapshot = cached.snapshot;
 
-    // 4️⃣ MARK AS EMAILED IN HISTORY
-    const emailResult = markAsEmailed(latestEntry.id, email);
-
-    if (!emailResult.success) {
-      console.warn("📧 [OMEN] Failed to mark snapshot as emailed", {
-        requestId,
-        snapshotId: latestEntry.id,
-        error: emailResult.error
-      });
-    } else {
-      console.log("📧 [OMEN] Marked snapshot as emailed", {
-        requestId,
-        snapshotId: latestEntry.id,
-        recipient: email
-      });
-    }
-
-    // 5️⃣ FORMAT EMAIL
+    // 4️⃣ FORMAT EMAIL
     const emailBody = formatSnapshotEmail(snapshot);
 
     // Get formatted date for subject line
@@ -1931,7 +1914,7 @@ app.post("/snapshot/send", async (req, res) => {
 
     const timeframeLabel = snapshot.timeframe === 'daily' ? 'Daily' : 'Weekly';
 
-    // 6️⃣ SEND EMAIL VIA SENDGRID
+    // 5️⃣ SEND EMAIL VIA SENDGRID
     const emailSubject = `OMEN ${timeframeLabel} Snapshot - ${subjectDate}`;
 
     if (!isEmailConfigured()) {
