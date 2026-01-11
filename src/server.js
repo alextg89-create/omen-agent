@@ -72,14 +72,21 @@ const app = express();
 /**
  * DEBUG — Inspect live inventory snapshot
  */
-app.get("/debug/inventory", (req, res) => {
-  const inventory = getInventory(STORE_ID);
+app.get("/debug/inventory", async (req, res) => {
+  try {
+    const inventory = await getInventory(STORE_ID);
 
-  res.json({
-    ok: true,
-    count: inventory ? inventory.length : 0,
-    sample: inventory ? inventory.slice(0, 5) : [],
-  });
+    res.json({
+      ok: true,
+      count: inventory ? inventory.length : 0,
+      sample: inventory ? inventory.slice(0, 5) : [],
+    });
+  } catch (err) {
+    res.status(500).json({
+      ok: false,
+      error: err.message
+    });
+  }
 });
 
 /* ---------- Middleware ---------- */
@@ -509,8 +516,27 @@ app.post("/chat", async (req, res) => {
     if (needsInventory || needsRecommendations) {
       console.log("💬 [OMEN] Inventory required for query", { requestId, needsRecommendations });
 
-      // Reuse existing inventory store logic
-      inventoryData = getInventory(STORE_ID);
+      try {
+        // Reuse existing inventory store logic
+        inventoryData = await getInventory(STORE_ID);
+      } catch (err) {
+        console.error("💬 [OMEN] Failed to load inventory", { requestId, error: err.message });
+        return res.status(500).json({
+          response: "I encountered an error loading inventory data. Please ensure Supabase is configured correctly.",
+          confidence: "low",
+          reason: `Inventory load failed: ${err.message}`,
+          conversationContext: {
+            lastIntent: decision.intent,
+            messagesExchanged: 1
+          },
+          meta: {
+            requestId,
+            decision: decision.action,
+            inventoryAvailable: false,
+            error: err.message
+          }
+        });
+      }
 
       if (!inventoryData || inventoryData.length === 0) {
         console.warn("💬 [OMEN] Inventory unavailable", { requestId });
@@ -1624,13 +1650,22 @@ app.post("/snapshot/generate", async (req, res) => {
     }
 
     // 4️⃣ FETCH LIVE INVENTORY
-    const inventory = getInventory(STORE_ID);
+    let inventory;
+    try {
+      inventory = await getInventory(STORE_ID);
+    } catch (err) {
+      return res.status(500).json({
+        ok: false,
+        error: "Failed to load inventory",
+        message: err.message
+      });
+    }
 
     if (!inventory || inventory.length === 0) {
       return res.status(400).json({
         ok: false,
         error: "No inventory data available",
-        message: "Please ingest inventory via /ingest/njweedwizard first"
+        message: "Inventory is empty or unavailable"
       });
     }
 
@@ -2259,7 +2294,7 @@ app.post("/cron/daily-snapshot", async (req, res) => {
 
   try {
     // Generate daily snapshot
-    const inventory = getInventory(STORE_ID);
+    const inventory = await getInventory(STORE_ID);
 
     if (!inventory || inventory.length === 0) {
       console.error("⏰ [CRON] No inventory available for daily snapshot");
@@ -2342,7 +2377,7 @@ app.post("/cron/weekly-snapshot", async (req, res) => {
 
   try {
     // Generate weekly snapshot
-    const inventory = getInventory(STORE_ID);
+    const inventory = await getInventory(STORE_ID);
 
     if (!inventory || inventory.length === 0) {
       console.error("⏰ [CRON] No inventory available for weekly snapshot");
