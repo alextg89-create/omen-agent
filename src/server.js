@@ -477,6 +477,13 @@ app.post("/auth/dev-login", (req, res) => {
 });
 
 /* ---------- Chat Endpoint ---------- */
+/**
+ * GUARDRAIL: Chat uses recommendations from generateRecommendations() ONLY.
+ * - generateRecommendations() queries Supabase + temporalAnalyzer for velocity data
+ * - OpenAI (LLM) is used ONLY for natural language expression, NEVER for reasoning
+ * - All intelligence comes from real order velocity or inventory baseline
+ * - No alternate reasoning paths may be introduced
+ */
 app.post("/chat", async (req, res) => {
   const requestId = createRequestId();
   const { message, conversationHistory = [] } = req.body;
@@ -535,6 +542,7 @@ app.post("/chat", async (req, res) => {
       });
 
       // 4️⃣ GENERATE RECOMMENDATIONS (if user is asking for them)
+      // GUARDRAIL: This calls temporalAnalyzer (Supabase orders) or snapshot deltas
       if (needsRecommendations) {
         recommendations = generateRecommendations(inventoryData, inventoryContext);
         console.log("💬 [OMEN] Recommendations generated", {
@@ -547,6 +555,7 @@ app.post("/chat", async (req, res) => {
     }
 
     // 5️⃣ GENERATE LLM RESPONSE
+    // GUARDRAIL: LLM is used ONLY for language expression, NOT reasoning
     let systemPrompt = "You are OMEN, an inventory intelligence assistant. Answer the user's question clearly and concisely.";
     let userPrompt = message;
 
@@ -558,15 +567,19 @@ RESPONSE FORMAT:
 - Keep responses concise and conversational
 - Do NOT use asterisks (**) or underscores (__) for emphasis
 - Present recommendations as a simple numbered list
+- Be DECISIVE - rank options even with low confidence
+- Label confidence explicitly (High Confidence / Medium Confidence / Early Signal)
 
 When answering:
 - Explain recommendations based on movement over time (depletion rates, velocity changes, acceleration)
 - Cite delta metrics when available (quantity changes, rate changes, days until depletion)
 - Explain WHY items are prioritized (velocity, acceleration, risk, margin)
-- Reference signal types (ACCELERATING_DEPLETION, SUDDEN_DROP, STABLE_LOW_STOCK)
+- Reference signal types when available (ACCELERATING_DEPLETION, SUDDEN_DROP, STABLE_LOW_STOCK)
 - Give specific actionable advice with temporal context
+- NEVER say "no recommendations available" - always rank best available options
 
 IMPORTANT: Recommendations are prioritized by velocity and acceleration first, margin second.
+If you had to promote ONE product this week, which would it be? Answer decisively.
 
 Current Recommendations Available:
 - ${recommendations.promotions.length} promotion opportunities
@@ -588,7 +601,7 @@ Current Recommendations Available:
     // 6️⃣ FALLBACK FOR DEV MODE (no LLM)
     if (!llmResponse) {
       if (needsRecommendations && recommendations) {
-        llmResponse = generateFallbackRecommendationResponse(message, recommendations);
+        llmResponse = generateFallbackRecommendationResponseStrong(message, recommendations, inventoryContext);
       } else if (needsInventory && inventoryContext) {
         llmResponse = generateFallbackInventoryResponse(message, inventoryContext);
       } else {
@@ -867,6 +880,94 @@ function generateFallbackInventoryResponse(message, inventoryContext) {
 /**
  * Generate fallback recommendation response when LLM is unavailable
  */
+/**
+ * Stronger fallback - ALWAYS provides ranked guidance
+ * GUARDRAIL: Uses ONLY data from recommendations (already computed by temporal engine)
+ */
+function generateFallbackRecommendationResponseStrong(message, recommendations, metrics) {
+  const lowerMessage = message.toLowerCase();
+
+  // Collect all recommendations
+  const allRecs = [
+    ...recommendations.promotions.map(r => ({ ...r, category: 'PROMOTE' })),
+    ...recommendations.inventory.map(r => ({ ...r, category: 'RESTOCK' })),
+    ...recommendations.pricing.map(r => ({ ...r, category: 'PRICE' }))
+  ];
+
+  // Sort by priority
+  allRecs.sort((a, b) => (b.priorityScore || b.confidence * 100) - (a.priorityScore || a.confidence * 100));
+
+  let response = "";
+
+  // Promotion recommendations
+  if (lowerMessage.includes("promote") || lowerMessage.includes("feature")) {
+    const promoRecs = recommendations.promotions;
+    if (promoRecs.length > 0) {
+      const top = promoRecs[0];
+      const confidence = top.confidence >= 0.7 ? 'Medium Confidence' : 'Early Signal';
+      response = `Top promotion candidate: ${top.name}\n\n`;
+      response += `${top.reason}\n`;
+      response += `Margin: ${top.triggeringMetrics?.margin || 0}% | Stock: ${top.triggeringMetrics?.quantity || 0}\n`;
+      response += `[${confidence}]\n\n`;
+      if (promoRecs.length > 1) {
+        response += `Also watch: ${promoRecs.slice(1, 3).map(r => r.name).join(', ')}`;
+      }
+    } else {
+      // NEVER say "no recommendations" - rank by margin
+      response = `Based on current inventory position (Early Signal):\n\n`;
+      response += `If you had to promote one product this week, ${metrics.highestMarginItem?.name || 'your top margin item'} has the strongest margin at ${metrics.highestMarginItem?.margin || 0}%.\n\n`;
+      response += `This is a baseline ranking - more decisive recommendations will emerge as order velocity builds.`;
+    }
+  }
+  // Pricing recommendations
+  else if (lowerMessage.includes("pricing") || lowerMessage.includes("price")) {
+    if (recommendations.pricing.length > 0) {
+      response = `Pricing actions:\n\n`;
+      recommendations.pricing.slice(0, 2).forEach((rec, i) => {
+        const conf = rec.confidence >= 0.7 ? 'Medium Confidence' : 'Early Signal';
+        response += `${i + 1}. ${rec.name} - ${rec.reason} (Margin: ${rec.triggeringMetrics?.margin || 0}%) [${conf}]\n`;
+      });
+    } else {
+      response = `Pricing looks balanced. No urgent adjustments needed based on current data.`;
+    }
+  }
+  // Inventory/stock actions
+  else if (lowerMessage.includes("reorder") || lowerMessage.includes("stock")) {
+    if (recommendations.inventory.length > 0) {
+      response = `Inventory actions:\n\n`;
+      recommendations.inventory.slice(0, 3).forEach((rec, i) => {
+        const conf = rec.confidence >= 0.7 ? 'Medium Confidence' : 'Early Signal';
+        response += `${i + 1}. ${rec.name} - ${rec.reason} [${conf}]\n`;
+      });
+    } else {
+      response = `Stock levels look stable. No urgent restocks flagged based on current velocity data.`;
+    }
+  }
+  // General "what should I do" query
+  else {
+    if (allRecs.length > 0) {
+      const top = allRecs[0];
+      const conf = top.confidence >= 0.7 ? 'Medium Confidence' : top.confidence >= 0.5 ? 'Early Signal' : 'Low Confidence';
+      response = `Top action this week:\n\n`;
+      response += `${top.category}: ${top.name}\n`;
+      response += `${top.reason}\n`;
+      response += `[${conf}]\n\n`;
+      if (allRecs.length > 1) {
+        response += `${allRecs.length - 1} additional items flagged - ask me "what should I promote?" or "what should I restock?" for details.`;
+      }
+    } else {
+      // Absolute fallback - STILL give guidance
+      response = `Based on current inventory position (Baseline - Early Signal):\n\n`;
+      response += `Best margin: ${metrics.highestMarginItem?.name || 'Top item'} at ${metrics.highestMarginItem?.margin || 0}%\n`;
+      response += `If you had to focus on one product this week, start here.\n\n`;
+      response += `More decisive recommendations will emerge as order velocity accumulates.`;
+    }
+  }
+
+  return response;
+}
+
+// Keep original for backward compatibility
 function generateFallbackRecommendationResponse(message, recommendations) {
   const lowerMessage = message.toLowerCase();
 
@@ -1165,94 +1266,177 @@ function mapConfidenceToNumeric(confidence) {
 }
 
 /**
+ * Format insights with confidence labels - makes recommendations feel decisive
+ *
+ * GUARDRAIL: Uses ONLY data from temporalAnalyzer (Supabase orders).
+ * No AI reasoning. No mock data.
+ */
+function formatInsightsForDisplayWithConfidence(insights) {
+  if (!insights || insights.length === 0) {
+    return '\n📊 Building velocity baseline - check back after more orders flow through.\n';
+  }
+
+  let output = '';
+
+  const high = insights.filter(i => i.priority === 'HIGH');
+  const medium = insights.filter(i => i.priority === 'MEDIUM');
+  const low = insights.filter(i => i.priority === 'LOW');
+
+  if (high.length > 0) {
+    output += '\n🚨 URGENT - ACT NOW:\n\n';
+    high.forEach((insight, i) => {
+      output += `${i + 1}. ${insight.message}\n`;
+      output += `   ${insight.details}\n`;
+      output += `   ➜ ${insight.action}\n`;
+      output += `   [High Confidence - Real Velocity Data]\n\n`;
+    });
+  }
+
+  if (medium.length > 0) {
+    output += '\n📊 OPPORTUNITIES - STRONG SIGNALS:\n\n';
+    medium.forEach((insight, i) => {
+      output += `${i + 1}. ${insight.message}\n`;
+      output += `   ${insight.details}\n`;
+      output += `   ➜ ${insight.action}\n`;
+      output += `   [Medium Confidence - Trend Emerging]\n\n`;
+    });
+  }
+
+  if (low.length > 0) {
+    output += '\n💡 EARLY SIGNALS - WORTH WATCHING:\n\n';
+    low.forEach((insight, i) => {
+      output += `${i + 1}. ${insight.message}\n`;
+      output += `   ➜ ${insight.action}\n`;
+      output += `   [Early Signal - Low Data Volume]\n\n`;
+    });
+  }
+
+  return output;
+}
+
+/**
+ * Format fallback recommendations with confidence - NEVER say "no recommendations"
+ *
+ * GUARDRAIL: Uses ONLY existing inventory data + margins.
+ * Ranks best available options even with low confidence.
+ * Bias: Actionable guidance > withholding advice.
+ */
+function formatFallbackRecommendationsWithConfidence(recommendations, metrics) {
+  let output = '';
+
+  const allRecs = [
+    ...recommendations.promotions.map(r => ({ ...r, category: 'PROMOTE' })),
+    ...recommendations.inventory.map(r => ({ ...r, category: 'RESTOCK' })),
+    ...recommendations.pricing.map(r => ({ ...r, category: 'PRICE' }))
+  ];
+
+  if (allRecs.length === 0) {
+    // STILL provide guidance - rank by margin
+    output += '\n📊 BASELINE INVENTORY RANKING (Limited Data - Early Signal):\n\n';
+    output += 'Order velocity data is still building. Based on current inventory position:\n\n';
+    output += `➜ ${metrics.highestMarginItem?.name || 'Top margin item'} has the strongest margin (${metrics.highestMarginItem?.margin || 0}%)\n`;
+    output += `   If you had to promote one product this week, start here.\n\n`;
+    output += `➜ Monitor ${metrics.lowestMarginItem?.name || 'Low margin item'} - margin is thin at ${metrics.lowestMarginItem?.margin || 0}%\n`;
+    output += `   Consider if pricing needs adjustment.\n\n`;
+    output += `[Low Confidence - Insufficient Order History]\n`;
+    output += `More decisive recommendations will emerge as order data accumulates.\n`;
+    return output;
+  }
+
+  // Sort by priority score (already calculated by temporal engine)
+  allRecs.sort((a, b) => (b.priorityScore || b.confidence * 100) - (a.priorityScore || a.confidence * 100));
+
+  // Top 3 recommendations
+  output += '\n📊 TOP RECOMMENDATIONS (Based on Available Data):\n\n';
+
+  allRecs.slice(0, 3).forEach((rec, i) => {
+    const confidence = rec.confidence >= 0.7 ? 'Medium Confidence' :
+                      rec.confidence >= 0.5 ? 'Early Signal' :
+                      'Low Confidence - Baseline Only';
+
+    output += `${i + 1}. ${rec.category}: ${rec.name}\n`;
+    output += `   ${rec.reason}\n`;
+    output += `   ➜ ${rec.actionRequired || rec.action}\n`;
+    output += `   [${confidence}]\n\n`;
+  });
+
+  if (allRecs.length > 3) {
+    output += `\n📋 ${allRecs.length - 3} additional items flagged - see full snapshot for details.\n`;
+  }
+
+  return output;
+}
+
+/**
  * Format snapshot for email delivery
+ *
+ * GUARDRAIL: This function uses ONLY data from Supabase + temporalAnalyzer.
+ * OpenAI is used ONLY for language generation in chat, NEVER for recommendations.
+ * No alternate intelligence paths may be introduced.
  */
 function formatSnapshotEmail(snapshot) {
-  const { metrics, recommendations, velocity, temporal } = snapshot;
+  // Defensive: Ensure snapshot structure exists
+  const metrics = snapshot?.metrics || {};
+  const recommendations = snapshot?.recommendations || { promotions: [], pricing: [], inventory: [] };
+  const velocity = snapshot?.velocity || null;
+  const temporal = snapshot?.temporal || {};
 
   // Check if we have real order-based intelligence
   const hasRealIntelligence = temporal?.hasRealData && velocity?.insights && velocity.insights.length > 0;
 
-  let email = `
+  try {
+    let email = `
 OMEN Weekly Operations Snapshot
 Generated: ${new Date(snapshot.generatedAt).toLocaleString()}
-Period: ${snapshot.dateRange.startDate} to ${snapshot.dateRange.endDate}
+Period: ${snapshot.dateRange?.startDate || 'N/A'} to ${snapshot.dateRange?.endDate || 'N/A'}
 
 ═══════════════════════════════════════
 📊 BUSINESS SNAPSHOT
 ═══════════════════════════════════════
 
-Total Revenue Potential: $${metrics.totalRevenue.toLocaleString()}
-Total Profit Potential: $${metrics.totalProfit.toLocaleString()}
-Average Margin: ${metrics.averageMargin}%
+Total Revenue Potential: $${(metrics.totalRevenue || 0).toLocaleString()}
+Total Profit Potential: $${(metrics.totalProfit || 0).toLocaleString()}
+Average Margin: ${(metrics.averageMargin || 0)}%
 
-Total SKUs: ${metrics.totalItems}
+Total SKUs: ${metrics.totalItems || 0}
 ${hasRealIntelligence ? `Orders Analyzed: ${velocity.orderCount}
-Unique SKUs Sold: ${velocity.uniqueSKUs}` : 'Live Orders: Analyzing...'}
+Unique SKUs Sold: ${velocity.uniqueSKUs}` : 'Live Orders: Building baseline...'}
 
 ═══════════════════════════════════════
 🎯 WHAT YOU NEED TO KNOW
 ═══════════════════════════════════════
 `;
 
-  if (hasRealIntelligence) {
-    // Format real insights
-    email += formatInsightsForDisplay(velocity.insights);
-  } else {
-    // Fallback to basic recommendations
-    email += '\nℹ️ Order data unavailable - showing inventory status:\n\n';
-
-    // Promotions
-    if (recommendations.promotions.length > 0) {
-    email += `\n🎯 PROMOTION OPPORTUNITIES (${recommendations.promotions.length}):\n\n`;
-    recommendations.promotions.slice(0, 5).forEach((rec, i) => {
-      email += `${i + 1}. ${rec.name}\n`;
-      email += `   Action: ${rec.action}\n`;
-      email += `   Reason: ${rec.reason}\n`;
-      email += `   Margin: ${rec.triggeringMetrics.margin}% | Stock: ${rec.triggeringMetrics.quantity}\n`;
-      email += `   Confidence: ${(rec.confidence * 100).toFixed(0)}%\n\n`;
-    });
-  }
-
-  // Pricing
-  if (recommendations.pricing.length > 0) {
-    email += `\n💰 PRICING ACTIONS (${recommendations.pricing.length}):\n\n`;
-    recommendations.pricing.slice(0, 5).forEach((rec, i) => {
-      email += `${i + 1}. ${rec.name}\n`;
-      email += `   Action: ${rec.action}\n`;
-      email += `   Reason: ${rec.reason}\n`;
-      email += `   Current Margin: ${rec.triggeringMetrics.margin}%\n`;
-      email += `   Confidence: ${(rec.confidence * 100).toFixed(0)}%\n\n`;
-    });
-  }
-
-  // Inventory
-  if (recommendations.inventory.length > 0) {
-    email += `\n📦 INVENTORY ACTIONS (${recommendations.inventory.length}):\n\n`;
-    recommendations.inventory.slice(0, 5).forEach((rec, i) => {
-      email += `${i + 1}. ${rec.name}\n`;
-      email += `   Action: ${rec.action}\n`;
-      email += `   Reason: ${rec.reason}\n`;
-      email += `   Stock: ${rec.triggeringMetrics.quantity}\n`;
-      email += `   Confidence: ${(rec.confidence * 100).toFixed(0)}%\n\n`;
-    });
+    if (hasRealIntelligence) {
+      // Format real insights with confidence labeling
+      email += formatInsightsForDisplayWithConfidence(velocity.insights);
+    } else {
+      // ALWAYS provide guidance, even with limited data
+      email += formatFallbackRecommendationsWithConfidence(recommendations, metrics);
     }
 
-    // 🔥 CRITICAL: Validate we're not saying "no changes" when recommendations exist
-    const totalRecs = recommendations.promotions.length +
-                      recommendations.pricing.length +
-                      recommendations.inventory.length;
+    email += `\n═══════════════════════════════════════\n`;
+    email += `Generated by OMEN Intelligence Engine\n`;
+    email += `Data Source: ${hasRealIntelligence ? 'Real Order Velocity' : 'Inventory Baseline'}\n`;
 
-    if (totalRecs === 0) {
-      email += `\nNo urgent actions identified. Inventory metrics are stable.\n`;
-    }
+    return email;
+
+  } catch (error) {
+    // NEVER fail silently - return minimal valid email
+    console.error('[Email Format] Error formatting snapshot email:', error.message);
+
+    return `
+OMEN Weekly Operations Snapshot
+Generated: ${new Date().toLocaleString()}
+
+⚠️ Email generation encountered an error.
+Please contact support or regenerate the snapshot.
+
+Error: ${error.message}
+
+Generated by OMEN Intelligence Engine
+`;
   }
-
-  email += `\n═══════════════════════════════════════\n`;
-  email += `Generated by OMEN Intelligence Engine\n`;
-  email += `Confidence: ${snapshot.confidence}\n`;
-
-  return email;
 }
 
 // Global snapshot cache (used by chat)
