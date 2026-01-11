@@ -1,30 +1,23 @@
 import applyPricing from "./tools/applyPricing.js";
 import { saveInventory, getInventory } from "./tools/inventoryStore.js";
-import { aggregateInventory } from "./aggregateInventory.js";
 import { detectLowStock } from "./inventorySignals.js";
-import { persistInventory } from "./persistInventory.js";
 import { ingestNjWeedWizardCsv } from "./njweedwizardCsvIngest.js";
-import { summarizeDay } from "./summarizeDay.js";
-import { frameActions } from "./frameActions.js";
 import { normalizeInventory } from "./normalizeInventory.js";
-import { analyzeInventory } from "./inventoryAnalyzer.js";
 import { sampleInventory as mockInventory } from "./mocks/inventory.sample.js";
 import { makeDecision } from "./decisionEngine.js";
 import { callLLM } from "./llm.js";
-import { formatChatResponse, validateSnapshotSummary } from "./utils/responseFormatter.js";
+import { formatChatResponse } from "./utils/responseFormatter.js";
 import {
   evaluateGovernanceState,
   currentExecutionMode,
 } from "./governance/governanceController.js";
 import {
   calculateDateRange,
-  validateAsOfDate,
-  formatDate
+  validateAsOfDate
 } from "./utils/dateCalculations.js";
 import {
   saveSnapshot,
   loadSnapshot,
-  getLatestSnapshot,
   listCachedSnapshots
 } from "./utils/snapshotCache.js";
 import {
@@ -38,6 +31,12 @@ import {
   getLatestSnapshotEntry,
   getStatistics as getSnapshotStatistics
 } from "./utils/snapshotHistory.js";
+import { getConnectionStatus, testConnection } from "./db/supabaseClient.js";
+import { recordInventorySnapshot, updateLiveInventory } from "./db/supabaseQueries.js";
+import {
+  generateTemporalRecommendationsFromSnapshots,
+  computeInventoryDeltas
+} from "./utils/snapshotTemporalEngine.js";
 import express from "express";
 import cors from "cors";
 import crypto from "crypto";
@@ -101,6 +100,23 @@ app.get("/health", (req, res) => {
     status: "ok",
     service: "omen-agent",
     timestamp: new Date().toISOString(),
+  });
+});
+
+/* ---------- Supabase Status ---------- */
+app.get("/supabase/status", async (_req, res) => {
+  const status = getConnectionStatus();
+
+  // Test connection if available
+  let connectionTest = null;
+  if (status.connected) {
+    connectionTest = await testConnection('orders');
+  }
+
+  res.json({
+    ...status,
+    connectionTest,
+    timestamp: new Date().toISOString()
   });
 });
 
@@ -278,6 +294,169 @@ const normalized =
   }
 });
 
+/* ---------- INVENTORY INGESTION (CANONICAL) ---------- */
+/**
+ * POST /ingest/inventory
+ *
+ * Explicit inventory event recording for temporal intelligence activation
+ *
+ * PAYLOAD CONTRACT:
+ * {
+ *   "sku": "STRING",         // Required
+ *   "quantity": NUMBER,      // Required
+ *   "source": "STRING",      // Required (e.g. "wix_manual", "make_sync")
+ *   "timestamp": "ISO-8601"  // Optional (server time if omitted)
+ * }
+ *
+ * BEHAVIOR:
+ * - Appends row to inventory_snapshots (historical record)
+ * - Updates inventory_live (current state)
+ * - Never overwrites snapshots
+ * - Idempotent and deterministic
+ *
+ * ACTIVATES:
+ * - Temporal intelligence (when 2+ events exist for same SKU)
+ * - Depletion rate calculation
+ * - Velocity-based recommendations
+ */
+app.post("/ingest/inventory", async (req, res) => {
+  const requestId = crypto.randomUUID();
+
+  try {
+    console.log("📥 [OMEN] Inventory ingestion requested", {
+      requestId,
+      payload: req.body
+    });
+
+    // 1️⃣ VALIDATE PAYLOAD
+    const { sku, quantity, source, timestamp } = req.body;
+
+    if (!sku || typeof sku !== 'string' || sku.trim() === '') {
+      return res.status(400).json({
+        ok: false,
+        error: 'Invalid payload',
+        message: 'sku is required and must be a non-empty string',
+        requestId
+      });
+    }
+
+    if (typeof quantity !== 'number' || quantity < 0) {
+      return res.status(400).json({
+        ok: false,
+        error: 'Invalid payload',
+        message: 'quantity is required and must be a non-negative number',
+        requestId
+      });
+    }
+
+    if (!source || typeof source !== 'string' || source.trim() === '') {
+      return res.status(400).json({
+        ok: false,
+        error: 'Invalid payload',
+        message: 'source is required and must be a non-empty string',
+        requestId
+      });
+    }
+
+    // Validate timestamp if provided
+    let effectiveTimestamp = timestamp || new Date().toISOString();
+    if (timestamp) {
+      const parsedDate = new Date(timestamp);
+      if (isNaN(parsedDate.getTime())) {
+        return res.status(400).json({
+          ok: false,
+          error: 'Invalid payload',
+          message: 'timestamp must be a valid ISO-8601 date string',
+          requestId
+        });
+      }
+      effectiveTimestamp = parsedDate.toISOString();
+    }
+
+    const inventoryEvent = {
+      sku: sku.trim(),
+      quantity,
+      source: source.trim(),
+      timestamp: effectiveTimestamp
+    };
+
+    console.log("📥 [OMEN] Recording inventory event", {
+      requestId,
+      event: inventoryEvent
+    });
+
+    // 2️⃣ RECORD SNAPSHOT (append-only historical record)
+    const snapshotResult = await recordInventorySnapshot(inventoryEvent);
+
+    if (!snapshotResult.ok) {
+      console.error("📥 [OMEN] Failed to record snapshot", {
+        requestId,
+        error: snapshotResult.error
+      });
+
+      return res.status(500).json({
+        ok: false,
+        error: 'Failed to record inventory snapshot',
+        message: snapshotResult.error,
+        requestId
+      });
+    }
+
+    // 3️⃣ UPDATE LIVE STATE (upsert current inventory)
+    const liveResult = await updateLiveInventory(inventoryEvent);
+
+    if (!liveResult.ok) {
+      console.error("📥 [OMEN] Failed to update live inventory", {
+        requestId,
+        error: liveResult.error
+      });
+
+      return res.status(500).json({
+        ok: false,
+        error: 'Failed to update live inventory',
+        message: liveResult.error,
+        requestId
+      });
+    }
+
+    console.log("📥 [OMEN] Inventory ingestion successful", {
+      requestId,
+      sku: inventoryEvent.sku,
+      quantity: inventoryEvent.quantity,
+      snapshotRecorded: snapshotResult.ok,
+      liveUpdated: liveResult.ok
+    });
+
+    // 4️⃣ RETURN SUCCESS
+    return res.json({
+      ok: true,
+      requestId,
+      recorded: {
+        sku: inventoryEvent.sku,
+        quantity: inventoryEvent.quantity,
+        source: inventoryEvent.source,
+        timestamp: inventoryEvent.timestamp
+      },
+      snapshot: snapshotResult.data,
+      live: liveResult.data
+    });
+
+  } catch (err) {
+    console.error("📥 [OMEN] Inventory ingestion failed", {
+      requestId,
+      error: err.message,
+      stack: err.stack
+    });
+
+    return res.status(500).json({
+      ok: false,
+      requestId,
+      error: 'Inventory ingestion failed',
+      message: err.message
+    });
+  }
+});
+
 /* ---------- DEV LOGIN (TEMPORARY) ---------- */
 app.post("/auth/dev-login", (req, res) => {
   console.log("🔐 [OMEN] DEV LOGIN HIT");
@@ -368,7 +547,7 @@ app.post("/chat", async (req, res) => {
     let userPrompt = message;
 
     if (needsRecommendations && recommendations) {
-      systemPrompt = `You are OMEN, an inventory intelligence assistant with access to business recommendations.
+      systemPrompt = `You are OMEN, an inventory intelligence assistant with temporal intelligence capabilities.
 
 RESPONSE FORMAT:
 - Use plain text - NO markdown formatting, NO asterisks, NO special characters
@@ -377,12 +556,13 @@ RESPONSE FORMAT:
 - Present recommendations as a simple numbered list
 
 When answering:
-- Explain recommendations clearly and concisely
-- Prioritize by confidence level
-- Give specific actionable advice
-- Reference the triggering metrics when helpful
+- Explain recommendations based on movement over time (depletion rates, velocity changes, acceleration)
+- Cite delta metrics when available (quantity changes, rate changes, days until depletion)
+- Explain WHY items are prioritized (velocity, acceleration, risk, margin)
+- Reference signal types (ACCELERATING_DEPLETION, SUDDEN_DROP, STABLE_LOW_STOCK)
+- Give specific actionable advice with temporal context
 
-IMPORTANT: Sales volume data is NOT tracked. All recommendations are based on margin and stock levels only.
+IMPORTANT: Recommendations are prioritized by velocity and acceleration first, margin second.
 
 Current Recommendations Available:
 - ${recommendations.promotions.length} promotion opportunities
@@ -419,7 +599,7 @@ Current Recommendations Available:
       message.toLowerCase().includes('calculat');
 
     llmResponse = formatChatResponse(llmResponse, {
-      hasSalesData: false,  // HARDCODED - system has NO sales tracking
+      hasSalesData: true,  // System tracks temporal movement via snapshot deltas
       maxSentences: 3,
       allowFormulas: isCalculationQuestion
     });
@@ -812,13 +992,80 @@ app.post("/inventory", (req, res) => {
   });
 });
 
-/* ---------- Weekly Snapshot Recommendation Engine ---------- */
+/* ---------- Snapshot-Based Temporal Recommendation Engine ---------- */
 
 /**
- * Generate deterministic business recommendations from inventory metrics
- * NO LLM - pure calculation-based logic
+ * Generate velocity-first recommendations using ONLY snapshot history
+ *
+ * NO external dependencies - works purely from cached snapshot comparisons
+ *
+ * @param {array} inventory - Inventory items (unused - we load from snapshots)
+ * @param {object} metrics - Inventory metrics (unused, kept for compatibility)
+ * @param {string} timeframe - 'weekly' or 'daily'
+ * @returns {object} Recommendations in legacy format for backward compatibility
  */
-function generateRecommendations(inventory, metrics) {
+function generateRecommendations(inventory, metrics = null, timeframe = 'weekly') {
+  // Generate temporal recommendations from snapshot deltas
+  const temporal = generateTemporalRecommendationsFromSnapshots(timeframe);
+
+  if (!temporal.ok) {
+    console.log('[Temporal Engine] Fallback to basic recommendations:', temporal.error);
+    // Fallback: basic static recommendations
+    return generateStaticRecommendations(inventory);
+  }
+
+  console.log('[Temporal Engine] Generated recommendations from', temporal.snapshotCount, 'snapshots');
+
+  // Map to legacy format for backward compatibility with existing UI
+  const recommendations = {
+    promotions: temporal.recommendations.promotional.map(rec => ({
+      sku: rec.sku,
+      unit: rec.unit,
+      name: rec.name,
+      reason: rec.reason,
+      triggeringMetrics: rec.citedData,
+      confidence: mapConfidenceToNumeric(rec.confidence),
+      action: rec.action || 'PROMOTE',
+      signalType: rec.signalType,
+      severity: rec.severity,
+      priorityScore: rec.priorityScore
+    })),
+    pricing: [], // Legacy category - no longer used with temporal engine
+    inventory: [
+      ...temporal.recommendations.urgent.map(rec => ({
+        sku: rec.sku,
+        unit: rec.unit,
+        name: rec.name,
+        reason: rec.reason,
+        triggeringMetrics: rec.citedData,
+        confidence: mapConfidenceToNumeric(rec.confidence),
+        action: 'REORDER_URGENT',
+        signalType: rec.signalType,
+        severity: rec.severity,
+        priorityScore: rec.priorityScore
+      })),
+      ...temporal.recommendations.reorder.map(rec => ({
+        sku: rec.sku,
+        unit: rec.unit,
+        name: rec.name,
+        reason: rec.reason,
+        triggeringMetrics: rec.citedData,
+        confidence: mapConfidenceToNumeric(rec.confidence),
+        action: 'REORDER_SOON',
+        signalType: rec.signalType,
+        severity: rec.severity,
+        priorityScore: rec.priorityScore
+      }))
+    ]
+  };
+
+  return recommendations;
+}
+
+/**
+ * Fallback: Static recommendations (when no snapshot history available)
+ */
+function generateStaticRecommendations(inventory) {
   const recommendations = {
     promotions: [],
     pricing: [],
@@ -829,7 +1076,6 @@ function generateRecommendations(inventory, metrics) {
     return recommendations;
   }
 
-  // Filter items with valid pricing
   const itemsWithPricing = inventory.filter(item =>
     item.pricing &&
     typeof item.pricing.retail === "number" &&
@@ -841,77 +1087,6 @@ function generateRecommendations(inventory, metrics) {
     const margin = ((item.pricing.retail - item.pricing.cost) / item.pricing.retail) * 100;
     const quantity = item.quantity || 0;
     const itemName = `${item.strain} (${item.unit})`;
-
-    // PROMOTION RECOMMENDATIONS
-    // NOTE: Without sales data, these are based on margin and stock patterns only
-
-    // High stock + healthy margin = promotion candidate
-    if (quantity >= 20 && margin >= 45 && margin <= 65) {
-      recommendations.promotions.push({
-        sku: item.strain,
-        unit: item.unit,
-        name: itemName,
-        reason: "High stock with healthy margin - promotion candidate",
-        triggeringMetrics: {
-          quantity,
-          margin: parseFloat(margin.toFixed(2))
-        },
-        confidence: 0.85,
-        action: "PROMOTE_AS_FEATURED"
-      });
-    }
-
-    // High margin + moderate stock = potential bundle opportunity
-    if (margin > 65 && quantity >= 10 && quantity <= 25) {
-      recommendations.promotions.push({
-        sku: item.strain,
-        unit: item.unit,
-        name: itemName,
-        reason: "High margin with moderate stock - bundle candidate",
-        triggeringMetrics: {
-          quantity,
-          margin: parseFloat(margin.toFixed(2))
-        },
-        confidence: 0.75,
-        action: "CREATE_BUNDLE"
-      });
-    }
-
-    // PRICING RECOMMENDATIONS
-
-    // Low margin = review pricing
-    if (margin < 40) {
-      recommendations.pricing.push({
-        sku: item.strain,
-        unit: item.unit,
-        name: itemName,
-        reason: "Margin below target threshold (40%)",
-        triggeringMetrics: {
-          margin: parseFloat(margin.toFixed(2)),
-          cost: item.pricing.cost,
-          retail: item.pricing.retail
-        },
-        confidence: 0.90,
-        action: "REVIEW_PRICING"
-      });
-    }
-
-    // Very high margin = protect pricing
-    if (margin > 70) {
-      recommendations.pricing.push({
-        sku: item.strain,
-        unit: item.unit,
-        name: itemName,
-        reason: "Premium margin - maintain pricing power",
-        triggeringMetrics: {
-          margin: parseFloat(margin.toFixed(2))
-        },
-        confidence: 0.80,
-        action: "PROTECT_PRICING"
-      });
-    }
-
-    // INVENTORY RECOMMENDATIONS
 
     // Low stock = reorder
     if (quantity > 0 && quantity <= 5) {
@@ -928,30 +1103,22 @@ function generateRecommendations(inventory, metrics) {
         action: "REORDER_SOON"
       });
     }
-
-    // Very high stock = consider discount
-    if (quantity > 50) {
-      recommendations.inventory.push({
-        sku: item.strain,
-        unit: item.unit,
-        name: itemName,
-        reason: "High inventory - consider promotional pricing",
-        triggeringMetrics: {
-          quantity,
-          margin: parseFloat(margin.toFixed(2))
-        },
-        confidence: 0.70,
-        action: "CONSIDER_DISCOUNT"
-      });
-    }
   }
 
-  // Sort by confidence (highest first)
-  recommendations.promotions.sort((a, b) => b.confidence - a.confidence);
-  recommendations.pricing.sort((a, b) => b.confidence - a.confidence);
-  recommendations.inventory.sort((a, b) => b.confidence - a.confidence);
-
   return recommendations;
+}
+
+/**
+ * Map confidence string to numeric value for backward compatibility
+ */
+function mapConfidenceToNumeric(confidence) {
+  const map = {
+    'high': 0.95,
+    'medium': 0.75,
+    'low': 0.50,
+    'none': 0.20
+  };
+  return map[confidence] || 0.75;
 }
 
 /**
@@ -1161,10 +1328,33 @@ app.post("/snapshot/generate", async (req, res) => {
       });
     }
 
-    // 6️⃣ GENERATE RECOMMENDATIONS (deterministic)
-    const recommendations = generateRecommendations(inventory, metrics);
+    // 6️⃣ COMPUTE DELTA (from snapshot history - NO external DB needed)
+    const deltaResult = computeInventoryDeltas(timeframe, 3);
+    const deltas = deltaResult.ok ? {
+      summary: {
+        totalItems: deltaResult.deltas.length,
+        accelerating: deltaResult.deltas.filter(d => d.acceleration?.isAccelerating).length,
+        decelerating: deltaResult.deltas.filter(d => d.acceleration?.isDecelerating).length,
+        depleting: deltaResult.deltas.filter(d => d.quantityDelta < 0).length,
+        restocked: deltaResult.deltas.filter(d => d.quantityDelta > 0).length
+      },
+      deltas: deltaResult.deltas
+    } : null;
 
-    // 7️⃣ BUILD SNAPSHOT
+    if (deltas) {
+      console.log("📸 [OMEN] Delta computed from snapshot history", {
+        requestId,
+        snapshotCount: deltaResult.snapshotCount,
+        totalItems: deltas.summary.totalItems,
+        accelerating: deltas.summary.accelerating,
+        depleting: deltas.summary.depleting
+      });
+    }
+
+    // 7️⃣ GENERATE TEMPORAL RECOMMENDATIONS (from snapshot deltas)
+    const recommendations = generateRecommendations(inventory, metrics, timeframe);
+
+    // 8️⃣ BUILD SNAPSHOT (with delta metadata)
     const snapshot = {
       requestId,
       generatedAt: new Date().toISOString(), // When snapshot was generated
@@ -1174,6 +1364,16 @@ app.post("/snapshot/generate", async (req, res) => {
       store: "NJWeedWizard",
       metrics,
       recommendations,
+      deltas: deltas ? deltas.summary : null,
+      temporal: {
+        deltaAnalysisAvailable: deltas !== null,
+        snapshotCount: deltaResult.snapshotCount || 1,
+        dateRange: deltaResult.ok ? {
+          current: deltaResult.currentDate,
+          previous: deltaResult.previousDate
+        } : null
+      },
+      enrichedInventory: inventory, // Store for future reference
       confidence: "high",
       itemCount: inventory.length
     };
