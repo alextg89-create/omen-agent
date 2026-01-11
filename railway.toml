@@ -1,0 +1,17 @@
+[build]
+builder = "NIXPACKS"
+
+[deploy]
+startCommand = "npm start"
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10
+
+# Cron job for daily snapshot at 8 AM EST
+[[cron]]
+schedule = "0 13 * * *"  # 8 AM EST = 1 PM UTC
+command = "curl -X POST http://localhost:3000/cron/daily-snapshot -H 'Content-Type: application/json' -d '{\"source\":\"railway_cron\"}'"
+
+# Cron job for weekly snapshot on Monday at 9 AM EST
+[[cron]]
+schedule = "0 14 * * 1"  # Monday 9 AM EST = 2 PM UTC
+command = "curl -X POST http://localhost:3000/cron/weekly-snapshot -H 'Content-Type: application/json' -d '{\"source\":\"railway_cron\"}'"

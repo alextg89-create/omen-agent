@@ -37,6 +37,10 @@ import {
   generateTemporalRecommendationsFromSnapshots,
   computeInventoryDeltas
 } from "./utils/snapshotTemporalEngine.js";
+import {
+  analyzeInventoryVelocity,
+  formatInsightsForDisplay
+} from "./intelligence/temporalAnalyzer.js";
 import express from "express";
 import cors from "cors";
 import crypto from "crypto";
@@ -995,6 +999,45 @@ app.post("/inventory", (req, res) => {
 /* ---------- Snapshot-Based Temporal Recommendation Engine ---------- */
 
 /**
+ * Convert insights from temporal analyzer to legacy recommendation format
+ */
+function convertInsightsToRecommendations(insights) {
+  const recommendations = {
+    promotions: [],
+    pricing: [],
+    inventory: []
+  };
+
+  for (const insight of insights) {
+    const rec = {
+      sku: insight.sku,
+      unit: insight.unit,
+      name: insight.name,
+      reason: insight.message,
+      triggeringMetrics: insight.data,
+      confidence: insight.priority === 'HIGH' ? 0.9 : insight.priority === 'MEDIUM' ? 0.7 : 0.5,
+      action: insight.type,
+      signalType: insight.type,
+      severity: insight.priority,
+      priorityScore: insight.priority === 'HIGH' ? 90 : insight.priority === 'MEDIUM' ? 70 : 50,
+      details: insight.details,
+      actionRequired: insight.action
+    };
+
+    // Categorize into appropriate buckets
+    if (insight.type === 'URGENT_RESTOCK' || insight.type === 'LOW_STOCK_HIGH_MARGIN') {
+      recommendations.inventory.push(rec);
+    } else if (insight.type === 'HIGH_VELOCITY' || insight.type === 'ACCELERATING_DEMAND') {
+      recommendations.promotions.push(rec);
+    } else {
+      recommendations.inventory.push(rec);
+    }
+  }
+
+  return recommendations;
+}
+
+/**
  * Generate velocity-first recommendations using ONLY snapshot history
  *
  * NO external dependencies - works purely from cached snapshot comparisons
@@ -1125,36 +1168,39 @@ function mapConfidenceToNumeric(confidence) {
  * Format snapshot for email delivery
  */
 function formatSnapshotEmail(snapshot) {
-  const { metrics, recommendations } = snapshot;
+  const { metrics, recommendations, velocity, temporal } = snapshot;
+
+  // Check if we have real order-based intelligence
+  const hasRealIntelligence = temporal?.hasRealData && velocity?.insights && velocity.insights.length > 0;
 
   let email = `
 OMEN Weekly Operations Snapshot
-Generated: ${snapshot.generatedAt}
+Generated: ${new Date(snapshot.generatedAt).toLocaleString()}
+Period: ${snapshot.dateRange.startDate} to ${snapshot.dateRange.endDate}
 
 ═══════════════════════════════════════
-📊 FINANCIAL METRICS
+📊 BUSINESS SNAPSHOT
 ═══════════════════════════════════════
 
-Total Items: ${metrics.totalItems}
-Items with Pricing: ${metrics.itemsWithPricing}
-
+Total Revenue Potential: $${metrics.totalRevenue.toLocaleString()}
+Total Profit Potential: $${metrics.totalProfit.toLocaleString()}
 Average Margin: ${metrics.averageMargin}%
-Total Revenue: $${metrics.totalRevenue.toLocaleString()}
-Total Cost: $${metrics.totalCost.toLocaleString()}
-Total Profit: $${metrics.totalProfit.toLocaleString()}
 
-Highest Margin Item: ${metrics.highestMarginItem.name} (${metrics.highestMarginItem.margin}%)
-Lowest Margin Item: ${metrics.lowestMarginItem.name} (${metrics.lowestMarginItem.margin}%)
-
-⚠️ DATA NOTES:
-• Sales volume data is not currently tracked
-• Rankings are based on margin and stock levels only
-${metrics.dataQuality?.pricingNote ? `• ${metrics.dataQuality.pricingNote}\n` : ''}
+Total SKUs: ${metrics.totalItems}
+${hasRealIntelligence ? `Orders Analyzed: ${velocity.orderCount}
+Unique SKUs Sold: ${velocity.uniqueSKUs}` : 'Live Orders: Analyzing...'}
 
 ═══════════════════════════════════════
-💡 RECOMMENDED ACTIONS THIS WEEK
+🎯 WHAT YOU NEED TO KNOW
 ═══════════════════════════════════════
 `;
+
+  if (hasRealIntelligence) {
+    // Format real insights
+    email += formatInsightsForDisplay(velocity.insights);
+  } else {
+    // Fallback to basic recommendations
+    email += '\nℹ️ Order data unavailable - showing inventory status:\n\n';
 
   // Promotions
   if (recommendations.promotions.length > 0) {
@@ -1351,21 +1397,60 @@ app.post("/snapshot/generate", async (req, res) => {
       });
     }
 
-    // 7️⃣ GENERATE TEMPORAL RECOMMENDATIONS (from snapshot deltas)
-    const recommendations = generateRecommendations(inventory, metrics, timeframe);
+    // 7️⃣ ANALYZE REAL ORDER VELOCITY (from Supabase orders)
+    const velocityAnalysis = await analyzeInventoryVelocity(inventory, timeframe);
 
-    // 8️⃣ BUILD SNAPSHOT (with delta metadata)
+    console.log("📸 [OMEN] Velocity analysis complete", {
+      requestId,
+      hasRealData: velocityAnalysis.ok,
+      orderCount: velocityAnalysis.orderCount || 0,
+      insightCount: velocityAnalysis.insights?.length || 0
+    });
+
+    // 8️⃣ GENERATE RECOMMENDATIONS (prioritize real data, fallback to deltas)
+    let recommendations;
+    let intelligenceSource;
+
+    if (velocityAnalysis.ok && velocityAnalysis.insights && velocityAnalysis.insights.length > 0) {
+      // Use real order-based intelligence
+      recommendations = convertInsightsToRecommendations(velocityAnalysis.insights);
+      intelligenceSource = 'real_orders';
+      console.log("📸 [OMEN] Using REAL order-based intelligence", {
+        requestId,
+        insightCount: velocityAnalysis.insights.length
+      });
+    } else {
+      // Fallback to snapshot deltas (less valuable but better than nothing)
+      recommendations = generateRecommendations(inventory, metrics, timeframe);
+      intelligenceSource = 'snapshot_deltas';
+      console.log("📸 [OMEN] Falling back to snapshot delta intelligence", {
+        requestId,
+        reason: velocityAnalysis.error || 'No order data'
+      });
+    }
+
+    // 9️⃣ BUILD SNAPSHOT (with real intelligence)
     const snapshot = {
       requestId,
-      generatedAt: new Date().toISOString(), // When snapshot was generated
-      asOfDate: effectiveDate,                // Logical "as of" date
-      dateRange,                              // Full date range info
+      generatedAt: new Date().toISOString(),
+      asOfDate: effectiveDate,
+      dateRange,
       timeframe,
       store: "NJWeedWizard",
       metrics,
       recommendations,
+      // Real temporal intelligence
+      velocity: velocityAnalysis.ok ? {
+        orderCount: velocityAnalysis.orderCount,
+        uniqueSKUs: velocityAnalysis.uniqueSKUs,
+        insights: velocityAnalysis.insights,
+        velocityMetrics: velocityAnalysis.velocityMetrics
+      } : null,
+      // Legacy delta analysis
       deltas: deltas ? deltas.summary : null,
       temporal: {
+        intelligenceSource,
+        hasRealData: velocityAnalysis.ok,
         deltaAnalysisAvailable: deltas !== null,
         snapshotCount: deltaResult.snapshotCount || 1,
         dateRange: deltaResult.ok ? {
@@ -1373,8 +1458,8 @@ app.post("/snapshot/generate", async (req, res) => {
           previous: deltaResult.previousDate
         } : null
       },
-      enrichedInventory: inventory, // Store for future reference
-      confidence: "high",
+      enrichedInventory: inventory,
+      confidence: velocityAnalysis.ok ? "high" : "medium",
       itemCount: inventory.length
     };
 
@@ -1838,6 +1923,179 @@ app.post("/omen/run-daily", async (req, res) => {
     status: "ok",
     inventoryCount: inventory.length,
   });
+});
+
+/* ---------- Cron Job Endpoints (Railway Scheduled Tasks) ---------- */
+
+/**
+ * Daily snapshot cron job
+ * Called by Railway cron at 8 AM EST daily
+ */
+app.post("/cron/daily-snapshot", async (req, res) => {
+  const requestId = crypto.randomUUID();
+  console.log("⏰ [CRON] Daily snapshot triggered", { requestId, source: req.body?.source });
+
+  try {
+    // Generate daily snapshot
+    const inventory = getInventory("NJWeedWizard");
+
+    if (!inventory || inventory.length === 0) {
+      console.error("⏰ [CRON] No inventory available for daily snapshot");
+      return res.json({
+        ok: false,
+        error: "No inventory data available"
+      });
+    }
+
+    const metrics = calculateInventoryMetrics(inventory);
+    const dateRange = calculateDateRange('daily', null);
+    const velocityAnalysis = await analyzeInventoryVelocity(inventory, 'daily');
+
+    const snapshot = {
+      requestId,
+      generatedAt: new Date().toISOString(),
+      asOfDate: dateRange.asOfDate,
+      dateRange,
+      timeframe: 'daily',
+      store: "NJWeedWizard",
+      metrics,
+      velocity: velocityAnalysis.ok ? {
+        orderCount: velocityAnalysis.orderCount,
+        uniqueSKUs: velocityAnalysis.uniqueSKUs,
+        insights: velocityAnalysis.insights
+      } : null,
+      recommendations: velocityAnalysis.ok && velocityAnalysis.insights?.length > 0
+        ? convertInsightsToRecommendations(velocityAnalysis.insights)
+        : generateRecommendations(inventory, metrics, 'daily'),
+      temporal: {
+        intelligenceSource: velocityAnalysis.ok ? 'real_orders' : 'snapshot_deltas',
+        hasRealData: velocityAnalysis.ok
+      },
+      enrichedInventory: inventory,
+      confidence: velocityAnalysis.ok ? "high" : "medium",
+      itemCount: inventory.length
+    };
+
+    // Save snapshot
+    const indexEntry = createSnapshotEntry(snapshot, 'daily', dateRange.asOfDate, {
+      createdBy: 'railway_cron',
+      createdVia: 'cron'
+    });
+
+    const indexResult = addToIndex(indexEntry, false);
+    if (indexResult.success) {
+      saveSnapshot(snapshot, 'daily', dateRange.asOfDate);
+    }
+
+    console.log("⏰ [CRON] Daily snapshot complete", {
+      requestId,
+      hasRealData: velocityAnalysis.ok,
+      insightCount: velocityAnalysis.insights?.length || 0
+    });
+
+    return res.json({
+      ok: true,
+      requestId,
+      snapshotId: indexEntry.id,
+      hasRealIntelligence: velocityAnalysis.ok,
+      insightCount: velocityAnalysis.insights?.length || 0
+    });
+
+  } catch (error) {
+    console.error("⏰ [CRON] Daily snapshot failed", { requestId, error: error.message });
+    return res.status(500).json({
+      ok: false,
+      error: error.message
+    });
+  }
+});
+
+/**
+ * Weekly snapshot cron job
+ * Called by Railway cron on Monday at 9 AM EST
+ */
+app.post("/cron/weekly-snapshot", async (req, res) => {
+  const requestId = crypto.randomUUID();
+  console.log("⏰ [CRON] Weekly snapshot triggered", { requestId, source: req.body?.source });
+
+  try {
+    // Generate weekly snapshot
+    const inventory = getInventory("NJWeedWizard");
+
+    if (!inventory || inventory.length === 0) {
+      console.error("⏰ [CRON] No inventory available for weekly snapshot");
+      return res.json({
+        ok: false,
+        error: "No inventory data available"
+      });
+    }
+
+    const metrics = calculateInventoryMetrics(inventory);
+    const dateRange = calculateDateRange('weekly', null);
+    const velocityAnalysis = await analyzeInventoryVelocity(inventory, 'weekly');
+
+    const snapshot = {
+      requestId,
+      generatedAt: new Date().toISOString(),
+      asOfDate: dateRange.asOfDate,
+      dateRange,
+      timeframe: 'weekly',
+      store: "NJWeedWizard",
+      metrics,
+      velocity: velocityAnalysis.ok ? {
+        orderCount: velocityAnalysis.orderCount,
+        uniqueSKUs: velocityAnalysis.uniqueSKUs,
+        insights: velocityAnalysis.insights,
+        velocityMetrics: velocityAnalysis.velocityMetrics
+      } : null,
+      recommendations: velocityAnalysis.ok && velocityAnalysis.insights?.length > 0
+        ? convertInsightsToRecommendations(velocityAnalysis.insights)
+        : generateRecommendations(inventory, metrics, 'weekly'),
+      temporal: {
+        intelligenceSource: velocityAnalysis.ok ? 'real_orders' : 'snapshot_deltas',
+        hasRealData: velocityAnalysis.ok
+      },
+      enrichedInventory: inventory,
+      confidence: velocityAnalysis.ok ? "high" : "medium",
+      itemCount: inventory.length
+    };
+
+    // Save snapshot
+    const indexEntry = createSnapshotEntry(snapshot, 'weekly', dateRange.asOfDate, {
+      createdBy: 'railway_cron',
+      createdVia: 'cron'
+    });
+
+    const indexResult = addToIndex(indexEntry, false);
+    if (indexResult.success) {
+      saveSnapshot(snapshot, 'weekly', dateRange.asOfDate);
+    }
+
+    console.log("⏰ [CRON] Weekly snapshot complete", {
+      requestId,
+      hasRealData: velocityAnalysis.ok,
+      insightCount: velocityAnalysis.insights?.length || 0
+    });
+
+    // TODO: Send email to owner with snapshot
+    // For now, just log that it's ready
+    console.log("⏰ [CRON] Weekly snapshot ready for email delivery");
+
+    return res.json({
+      ok: true,
+      requestId,
+      snapshotId: indexEntry.id,
+      hasRealIntelligence: velocityAnalysis.ok,
+      insightCount: velocityAnalysis.insights?.length || 0
+    });
+
+  } catch (error) {
+    console.error("⏰ [CRON] Weekly snapshot failed", { requestId, error: error.message });
+    return res.status(500).json({
+      ok: false,
+      error: error.message
+    });
+  }
 });
 
 /* ---------- SPA Fallback (MUST BE LAST ROUTE) ---------- */
