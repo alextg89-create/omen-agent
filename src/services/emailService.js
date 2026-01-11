@@ -2,46 +2,52 @@
  * Email Service - SendGrid Integration
  *
  * Sends operational snapshots via SendGrid
+ * This module is OPTIONAL - system works without it
  */
-
-import sgMail from '@sendgrid/mail';
 
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY;
 const FROM_EMAIL = process.env.SENDGRID_FROM_EMAIL || 'noreply@primeagentvault.com';
 const SENDGRID_ENABLED = process.env.SENDGRID_ENABLED !== 'false';
 
 let isConfigured = false;
+let sgMail = null;
 
 /**
  * Initialize SendGrid client
  */
-function initializeSendGrid() {
+async function initializeSendGrid() {
   if (!SENDGRID_ENABLED) {
     console.log('[EmailService] SendGrid disabled via SENDGRID_ENABLED=false');
     return false;
   }
 
   if (!SENDGRID_API_KEY) {
-    console.warn('[EmailService] SendGrid not configured - missing SENDGRID_API_KEY');
-    console.warn('[EmailService] Set SENDGRID_API_KEY in .env to enable email delivery');
+    console.log('[EmailService] SendGrid not configured - email delivery disabled');
+    console.log('[EmailService] Set SENDGRID_API_KEY to enable email delivery');
     return false;
   }
 
   try {
+    // Dynamic import - only load if configured
+    const sendgrid = await import('@sendgrid/mail');
+    sgMail = sendgrid.default;
     sgMail.setApiKey(SENDGRID_API_KEY);
     isConfigured = true;
-    console.log('[EmailService] SendGrid initialized successfully');
+    console.log('[EmailService] ✅ SendGrid initialized successfully');
     console.log(`[EmailService] From address: ${FROM_EMAIL}`);
     return true;
   } catch (err) {
     console.error('[EmailService] SendGrid initialization failed:', err.message);
+    console.error('[EmailService] Email delivery will be disabled');
     isConfigured = false;
     return false;
   }
 }
 
-// Initialize on module load
-initializeSendGrid();
+// Initialize on module load (non-blocking)
+initializeSendGrid().catch(err => {
+  console.warn('[EmailService] Failed to initialize SendGrid:', err.message);
+});
 
 /**
  * Check if email service is configured
