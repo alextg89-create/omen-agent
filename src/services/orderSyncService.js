@@ -58,11 +58,34 @@ export async function syncOrdersFromWebhooks(lookbackDays = 30) {
   // Parse each webhook event
   for (const event of webhookEvents) {
     try {
-      const payload = event.raw_payload;
-      const data = payload?.data;
+      let rawPayload = event.raw_payload;
 
-      if (!data) {
-        console.warn(`[OrderSync] No data in event ${event.id}`);
+      // raw_payload is a STRING like: "Webhooks → Custom webhook →{JSON}"
+      // Need to strip prefix and parse JSON
+      if (typeof rawPayload === 'string') {
+        // Remove "Webhooks → Custom webhook →" prefix if present
+        const prefixMatch = rawPayload.match(/^Webhooks\s*→\s*Custom webhook\s*→\s*(.+)$/);
+        if (prefixMatch) {
+          rawPayload = prefixMatch[1];
+        }
+
+        // Parse JSON string to object
+        try {
+          rawPayload = JSON.parse(rawPayload);
+        } catch (parseError) {
+          console.error(`[OrderSync] Failed to parse JSON for event ${event.id}:`, parseError.message);
+          skipped++;
+          continue;
+        }
+      }
+
+      // Handle both wrapped and flat JSON structures
+      // Wix webhooks send flat structure: { orderNumber, payments, lineItems }
+      // Not wrapped: { data: { orderNumber, ... } }
+      const data = rawPayload?.data || rawPayload;
+
+      if (!data || !data.orderNumber) {
+        console.warn(`[OrderSync] No valid order data in event ${event.id}`);
         skipped++;
         continue;
       }
