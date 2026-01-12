@@ -23,6 +23,17 @@ export async function syncOrdersFromWebhooks(lookbackDays = 30) {
 
   console.log(`[OrderSync] Starting sync for last ${lookbackDays} days...`);
 
+  // Load inventory_live for SKU matching
+  const { data: inventory, error: inventoryError } = await client
+    .from('inventory_live')
+    .select('sku, strain, product_name, name, unit');
+
+  if (inventoryError) {
+    throw new Error(`Failed to load inventory: ${inventoryError.message}`);
+  }
+
+  console.log(`[OrderSync] Loaded ${inventory.length} inventory items for SKU matching`);
+
   // Get order events from webhook_events
   const lookbackDate = new Date();
   lookbackDate.setDate(lookbackDate.getDate() - lookbackDays);
@@ -109,7 +120,7 @@ export async function syncOrdersFromWebhooks(lookbackDays = 30) {
         const { strain, unit } = parseProductName(itemName);
 
         // Map to inventory_live SKU format
-        const sku = findMatchingSKU(strain, unit);
+        const sku = findMatchingSKU(strain, unit, inventory, itemName);
 
         orderRows.push({
           order_id: orderNumber,
@@ -193,13 +204,46 @@ function parseProductName(name) {
 }
 
 /**
- * Find matching SKU from inventory_live based on strain and unit
- * This would ideally query inventory_live, but for now returns a normalized SKU
+ * Find matching SKU from inventory_live based on product name
+ * Uses fuzzy matching to handle variations in product names
  */
-function findMatchingSKU(strain, unit) {
-  // Normalize to match inventory_live SKU format
-  const normalizedStrain = strain.toLowerCase().replace(/[^a-z0-9]+/g, '_');
-  const normalizedUnit = unit.toLowerCase().replace(/[^a-z0-9]+/g, '_');
+function findMatchingSKU(strain, unit, inventory, fullProductName) {
+  const strainLower = strain.toLowerCase().trim();
+  const unitLower = unit.toLowerCase().trim();
+  const fullLower = fullProductName.toLowerCase().trim();
+
+  // 1. Try exact strain + unit match
+  for (const inv of inventory) {
+    const invStrain = (inv.strain || inv.product_name || inv.name || '').toLowerCase().trim();
+    const invUnit = (inv.unit || '').toLowerCase().trim();
+
+    if (invStrain === strainLower && invUnit === unitLower) {
+      return inv.sku;
+    }
+  }
+
+  // 2. Try strain contains or contained by
+  for (const inv of inventory) {
+    const invStrain = (inv.strain || inv.product_name || inv.name || '').toLowerCase().trim();
+
+    if (invStrain.includes(strainLower) || strainLower.includes(invStrain)) {
+      // Match found - use this SKU
+      return inv.sku;
+    }
+  }
+
+  // 3. Try full product name match
+  for (const inv of inventory) {
+    const invFull = (inv.strain || inv.product_name || inv.name || '').toLowerCase().trim();
+
+    if (fullLower.includes(invFull) || invFull.includes(fullLower)) {
+      return inv.sku;
+    }
+  }
+
+  // 4. Fallback: generate normalized SKU (will not match velocity, but allows sync)
+  const normalizedStrain = strainLower.replace(/[^a-z0-9]+/g, '_');
+  const normalizedUnit = unitLower.replace(/[^a-z0-9]+/g, '_');
 
   return `${normalizedStrain}_${normalizedUnit}`;
 }
