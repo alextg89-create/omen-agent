@@ -630,6 +630,7 @@ Current Recommendations Available:
     // 6️⃣ INTELLIGENCE LAYER - Try insight-driven response first
     // This transforms flat responses into operator-focused insights
     let intelligentResponse = null;
+    let usingIntelligentResponse = false;
     if (needsRecommendations || needsInventory) {
       intelligentResponse = generateInsightResponse(message, recommendations, inventoryContext);
     }
@@ -637,6 +638,7 @@ Current Recommendations Available:
     // Use intelligent response if available, otherwise fallback to LLM/dev responses
     if (intelligentResponse) {
       llmResponse = intelligentResponse;
+      usingIntelligentResponse = true;
       console.log("💬 [OMEN] Using insight-driven response", { requestId });
     } else if (!llmResponse) {
       // FALLBACK FOR DEV MODE (no LLM and no intelligent response)
@@ -650,16 +652,18 @@ Current Recommendations Available:
     }
 
     // 🔥 CRITICAL: FORMAT RESPONSE BEFORE RETURNING
-    // This is the ONLY place responses are formatted - single source of truth
-    const isCalculationQuestion =
-      message.toLowerCase().includes('how') &&
-      message.toLowerCase().includes('calculat');
+    // SKIP formatting for intelligent responses - they're already crafted
+    if (!usingIntelligentResponse) {
+      const isCalculationQuestion =
+        message.toLowerCase().includes('how') &&
+        message.toLowerCase().includes('calculat');
 
-    llmResponse = formatChatResponse(llmResponse, {
-      hasSalesData: true,  // System tracks temporal movement via snapshot deltas
-      maxSentences: 5,  // Allow longer responses for insights
-      allowFormulas: isCalculationQuestion
-    });
+      llmResponse = formatChatResponse(llmResponse, {
+        hasSalesData: true,  // System tracks temporal movement via snapshot deltas
+        maxSentences: 5,  // Allow longer responses for insights
+        allowFormulas: isCalculationQuestion
+      });
+    }
 
     console.log("💬 [OMEN] Response formatted", {
       requestId,
