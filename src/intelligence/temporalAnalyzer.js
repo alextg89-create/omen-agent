@@ -27,13 +27,20 @@ export async function analyzeInventoryVelocity(currentInventory, timeframe = 'we
   // Query real order events from Supabase (optional - table may not exist yet)
   let ordersResult;
   try {
+    console.log('[TemporalAnalyzer] Calling queryOrderEvents...');
     ordersResult = await queryOrderEvents(startDate, endDate);
+    console.log('[TemporalAnalyzer] queryOrderEvents returned:', {
+      ok: ordersResult.ok,
+      dataLength: ordersResult.data?.length,
+      error: ordersResult.error
+    });
   } catch (err) {
-    console.warn('[TemporalAnalyzer] Orders table not available:', err.message);
+    console.error('[TemporalAnalyzer] ❌ QUERY FAILED:', err.message);
+    console.error('[TemporalAnalyzer] Stack:', err.stack);
     console.warn('[TemporalAnalyzer] Velocity analysis skipped - create "orders" table in Supabase to enable');
     return {
       ok: false,
-      error: 'Orders table not configured',
+      error: `Orders query failed: ${err.message}`,
       message: 'Velocity analysis requires "orders" table in Supabase',
       insights: [],
       hasData: false
@@ -41,7 +48,12 @@ export async function analyzeInventoryVelocity(currentInventory, timeframe = 'we
   }
 
   if (!ordersResult.ok || !ordersResult.data || ordersResult.data.length === 0) {
-    console.warn('[TemporalAnalyzer] No order data available:', ordersResult.error);
+    console.warn('[TemporalAnalyzer] ⚠️  NO ORDER DATA:', {
+      ok: ordersResult.ok,
+      hasData: !!ordersResult.data,
+      length: ordersResult.data?.length || 0,
+      error: ordersResult.error
+    });
     return {
       ok: false,
       error: ordersResult.error || 'No order data available',
