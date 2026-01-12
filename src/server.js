@@ -35,6 +35,7 @@ import {
 import { getConnectionStatus, testConnection } from "./db/supabaseClient.js";
 import { recordInventorySnapshot, updateLiveInventory } from "./db/supabaseQueries.js";
 import { sendSnapshotEmail, isEmailConfigured } from "./services/emailService.js";
+import { autoSyncOrders } from "./services/orderSyncService.js";
 import {
   generateTemporalRecommendationsFromSnapshots,
   computeInventoryDeltas
@@ -2464,8 +2465,16 @@ app.get('*', (_req, res) => {
 });
 
 /* ---------- Start Server (LAST) ---------- */
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
   console.log(`OMEN server running on port ${PORT}`);
   console.log(`Serving frontend from: ${publicPath}`);
+
+  // Auto-sync orders from webhook_events on startup
+  console.log('\n🔄 Auto-syncing orders from webhook_events...');
+  try {
+    await autoSyncOrders();
+  } catch (err) {
+    console.warn('[Startup] Order sync failed:', err.message);
+  }
 });
 
