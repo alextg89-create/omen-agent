@@ -25,32 +25,34 @@ export function generatePromotionInsight(message, recommendations, metrics) {
     const stock = top.triggeringMetrics?.quantity || 0;
     const velocity = top.triggeringMetrics?.velocity || null;
 
-    // Build headline based on signal strength
+    // Build headline based on signal strength - MORE EXCITING
     let headline;
     if (velocity && velocity > 10) {
-      headline = `${top.name} is your best move — it's already moving fast.`;
+      headline = `${top.name} — this one's HOT. Already moving fast and primed for promotion.`;
     } else if (margin > 65) {
-      headline = `${top.name} gives you the most breathing room on margin.`;
+      headline = `${top.name} — fat ${margin.toFixed(1)}% margin means you can push hard and still win.`;
     } else {
-      headline = `${top.name} is your strongest promotion candidate.`;
+      headline = `${top.name} is your strongest play right now.`;
     }
 
-    // Build why
-    let why = `${top.reason}`;
+    // Build why - SHOW THE URGENCY OR OPPORTUNITY
+    let why = `${top.reason}.`;
     if (stock < 10) {
-      why += ` Stock is low (${stock} units) — promote NOW before you run out.`;
+      why += ` CRITICAL: Only ${stock} unit${stock === 1 ? '' : 's'} left. This is a scarcity play — create urgency, sell out fast, bank profit.`;
     } else if (stock > 50) {
-      why += ` You have ${stock} units to work with.`;
+      why += ` You're stocked deep with ${stock} units — run a sustained campaign without fear of running dry.`;
+    } else {
+      why += ` ${stock} units on hand — enough for a solid push without overextending.`;
     }
 
-    // Build action
+    // Build action - CONCRETE AND TIME-BOUND
     let action;
     if (stock < 10) {
-      action = `Feature it immediately in limited-time messaging.`;
+      action = `Feature it NOW with "Almost Gone" messaging. Don't wait — this is a 48-hour move.`;
     } else if (promoRecs.length > 2) {
-      action = `Run it solo or bundle with ${promoRecs[1].name}.`;
+      action = `Run it solo as hero product, or bundle with ${promoRecs[1].name} for margin stacking.`;
     } else {
-      action = `Promote this week and monitor depletion rate.`;
+      action = `Feature it this week and track daily depletion — if it moves fast, reorder and ride the wave.`;
     }
 
     // Confidence
@@ -58,7 +60,7 @@ export function generatePromotionInsight(message, recommendations, metrics) {
       : top.confidence >= 0.6 ? 'Medium confidence'
       : 'Early signal';
 
-    return `${headline} ${why} ${action} (${confidence} — based on margin ${margin.toFixed(1)}%, stock level, and current velocity)`;
+    return `${headline} ${why} ${action} (${confidence} — ${margin.toFixed(1)}% margin, stock level ${stock}${velocity ? `, velocity tracked` : ''})`;
   }
 
   // Case 2: No promo recs, but have high-margin + low-stock items (OPPORTUNITY)
@@ -146,38 +148,38 @@ export function generateMarginInsight(message, metrics) {
   const highestItem = metrics.highestMarginItem;
   const lowestItem = metrics.lowestMarginItem;
 
-  // Headline: Context on margin health
+  // Headline: Context on margin health with emotion
   let headline;
   if (avgMargin > 65) {
-    headline = `Your margins are healthy at ${avgMargin.toFixed(1)}% average.`;
+    headline = `You're sitting pretty at ${avgMargin.toFixed(1)}% average margin — that's healthy breathing room.`;
   } else if (avgMargin > 55) {
-    headline = `Your margins are stable at ${avgMargin.toFixed(1)}% average.`;
+    headline = `Margins are stable at ${avgMargin.toFixed(1)}% average — you're in the safe zone.`;
   } else {
-    headline = `Your margins are thin at ${avgMargin.toFixed(1)}% average.`;
+    headline = `Margins are razor-thin at ${avgMargin.toFixed(1)}% average — you're one misstep from bleeding money.`;
   }
 
-  // Why it matters
+  // Why it matters - show the opportunity or risk
   let why = '';
   if (highestItem && lowestItem) {
     const spread = highestItem.margin - lowestItem.margin;
     if (spread > 20) {
-      why = `Big spread: ${highestItem.name} (${highestItem.margin.toFixed(1)}%) vs ${lowestItem.name} (${lowestItem.margin.toFixed(1)}%). `;
+      why = `Here's the play: ${highestItem.name} (${highestItem.margin.toFixed(1)}%) is crushing it while ${lowestItem.name} (${lowestItem.margin.toFixed(1)}%) is dragging you down. That ${spread.toFixed(1)}% gap is your roadmap — double down on winners, cut losers. `;
     } else {
-      why = `Margins are tight across products (${spread.toFixed(1)}% spread). `;
+      why = `Your margins are compressed across the board (${spread.toFixed(1)}% spread). No standout winners means you need velocity data to find your edge. `;
     }
   }
 
-  // Action
+  // Action - concrete next step
   let action;
   if (avgMargin < 55) {
-    action = `Consider raising prices on fast movers or cutting slow inventory.`;
+    action = `Urgent: raise prices on anything moving fast, or kill slow inventory before it kills you. Every point of margin matters here.`;
   } else if (highestItem && highestItem.margin > 70) {
-    action = `Push ${highestItem.name} (${highestItem.margin.toFixed(1)}%) — you have room to discount and still profit.`;
+    action = `Feature ${highestItem.name} (${highestItem.margin.toFixed(1)}%) HARD — you can discount 15% and still bank profit. That's your safety net.`;
   } else {
-    action = `Focus promotions on items above ${avgMargin.toFixed(0)}% margin to protect profitability.`;
+    action = `Stick to items above ${avgMargin.toFixed(0)}% margin for promotions. Anything below that is a gamble without sales data.`;
   }
 
-  return `${headline} ${why}${action} (Based on current inventory pricing only, not sales performance)`;
+  return `${headline} ${why}${action} (Medium confidence — pricing analysis only, no velocity tracking)`;
 }
 
 /**
@@ -253,23 +255,15 @@ export function generateWhatToPromoteInsight(recommendations, metrics) {
 export function generateInsightResponse(message, recommendations, metrics) {
   const lower = message.toLowerCase();
 
-  // Route to appropriate insight generator
+  // IMPORTANT: Check SPECIFIC patterns BEFORE generic ones
+  // Order matters - most specific first!
+
+  // 1. SPECIFIC: "what should i promote" - most common operator question
   if (lower.includes('what should i promote') || lower.includes('what to promote')) {
     return generateWhatToPromoteInsight(recommendations, metrics);
   }
 
-  if (lower.includes('promote') || lower.includes('feature') || lower.includes('highlight')) {
-    return generatePromotionInsight(message, recommendations, metrics);
-  }
-
-  if (lower.includes('low stock') || lower.includes('reorder') || lower.includes('running out')) {
-    return generateStockInsight(message, recommendations, metrics);
-  }
-
-  if (lower.includes('margin') || lower.includes('profit')) {
-    return generateMarginInsight(message, metrics);
-  }
-
+  // 2. SPECIFIC: "highest margin" or "best margin" - must come BEFORE generic "margin"
   if (lower.includes('highest margin') || lower.includes('best margin')) {
     if (metrics?.highestMarginItem) {
       const item = metrics.highestMarginItem;
@@ -280,11 +274,35 @@ export function generateInsightResponse(message, recommendations, metrics) {
       const isLowStock = invRecs.find(r => r.name === item.name);
 
       if (isLowStock && isLowStock.triggeringMetrics?.quantity <= 5) {
-        return `${item.name} at ${margin.toFixed(1)}% margin. BUT: only ${isLowStock.triggeringMetrics.quantity} units left. Promoting this is risky unless you want to sell out fast. Consider your second-best margin item for sustained promotion. (High confidence)`;
+        const stock = isLowStock.triggeringMetrics.quantity;
+        return `${item.name} — your biggest winner at ${margin.toFixed(1)}% margin. BUT here's the trap: only ${stock} unit${stock === 1 ? '' : 's'} left. Promoting this is a double-edged sword — you'll profit hard but sell out FAST. If you want sustained revenue, save this for emergency cash grabs and promote your second-best margin item instead. (High confidence — scarcity + margin analysis)`;
       }
 
-      return `${item.name} at ${margin.toFixed(1)}% margin. ${metrics.itemsWithPricing || 0} items analyzed. (Based on current pricing, not sales velocity)`;
+      // Positive case - good margin AND enough stock
+      const promoRecs = recommendations?.promotions || [];
+      const isRecommended = promoRecs.find(r => r.name === item.name);
+
+      if (isRecommended) {
+        return `${item.name} at ${margin.toFixed(1)}% margin — this is your profit king. It's ALREADY on the promotion shortlist. Feature it NOW and watch margin stack. You have breathing room to discount 10-15% and still win. (High confidence — margin + recommendation alignment)`;
+      }
+
+      return `${item.name} at ${margin.toFixed(1)}% margin — your #1 profit maker across ${metrics.itemsWithPricing || 0} items. Without velocity data, margin is your north star. Promote this and track how fast it moves — that tells you if it's a keeper or shelf warmer. (Medium confidence — pricing only, no sales history)`;
     }
+  }
+
+  // 3. GENERIC: "promote" or "feature" - comes after specific promotion questions
+  if (lower.includes('promote') || lower.includes('feature') || lower.includes('highlight')) {
+    return generatePromotionInsight(message, recommendations, metrics);
+  }
+
+  // 4. SPECIFIC: "low stock" or "reorder"
+  if (lower.includes('low stock') || lower.includes('reorder') || lower.includes('running out')) {
+    return generateStockInsight(message, recommendations, metrics);
+  }
+
+  // 5. GENERIC: "margin" or "profit" - comes AFTER "highest margin"
+  if (lower.includes('margin') || lower.includes('profit')) {
+    return generateMarginInsight(message, metrics);
   }
 
   // Default: return null to use original LLM response
