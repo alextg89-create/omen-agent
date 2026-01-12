@@ -2455,6 +2455,88 @@ app.post("/cron/weekly-snapshot", async (req, res) => {
   }
 });
 
+/**
+ * MANUAL ORDER SYNC: Force re-sync from webhook_events
+ */
+app.post('/api/sync-orders', async (req, res) => {
+  try {
+    const { syncOrdersFromWebhooks } = await import('./services/orderSyncService.js');
+
+    console.log('[API] Manual order sync requested');
+    const result = await syncOrdersFromWebhooks(30); // Last 30 days
+
+    return res.json({
+      ok: true,
+      ...result,
+      message: `Synced ${result.synced} items, skipped ${result.skipped}, errors ${result.errors}`
+    });
+
+  } catch (err) {
+    return res.status(500).json({
+      ok: false,
+      error: err.message
+    });
+  }
+});
+
+/**
+ * DIAGNOSTIC: Check order sync status
+ */
+app.get('/api/diagnostic/orders', async (req, res) => {
+  try {
+    const { getSupabaseClient, isSupabaseAvailable } = await import('./db/supabaseClient.js');
+
+    if (!isSupabaseAvailable()) {
+      return res.json({
+        ok: false,
+        error: 'Supabase not configured',
+        ordersTableExists: false,
+        orderCount: 0,
+        webhookEventCount: 0
+      });
+    }
+
+    const client = getSupabaseClient();
+
+    // Check orders table
+    const { data: orders, error: ordersError } = await client
+      .from('orders')
+      .select('id, order_id, order_date, sku, strain, quantity')
+      .order('order_date', { ascending: false })
+      .limit(10);
+
+    // Check webhook_events table
+    const { data: webhooks, error: webhooksError } = await client
+      .from('webhook_events')
+      .select('id, event_type, received_at')
+      .eq('event_type', 'wix.order.created')
+      .order('received_at', { ascending: false })
+      .limit(10);
+
+    return res.json({
+      ok: true,
+      supabaseConfigured: true,
+      orders: {
+        count: orders?.length || 0,
+        error: ordersError?.message || null,
+        sample: orders || []
+      },
+      webhookEvents: {
+        count: webhooks?.length || 0,
+        error: webhooksError?.message || null,
+        sample: webhooks || []
+      },
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (err) {
+    return res.status(500).json({
+      ok: false,
+      error: err.message
+    });
+  }
+});
+
 /* ---------- SPA Fallback (MUST BE LAST ROUTE) ---------- */
 // Handle all non-API routes - serve index.html for SPA routing
 // This allows frontend routes like /weekly-snapshot to work
