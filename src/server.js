@@ -2456,7 +2456,54 @@ app.post("/cron/weekly-snapshot", async (req, res) => {
 });
 
 /**
- * MANUAL ORDER SYNC: Force re-sync from webhook_events
+ * CLEAR AND RESYNC ORDERS: Delete all orders and re-sync with new SKU matching
+ */
+app.post('/api/resync-orders', async (req, res) => {
+  try {
+    const { getSupabaseClient, isSupabaseAvailable } = await import('./db/supabaseClient.js');
+    const { syncOrdersFromWebhooks } = await import('./services/orderSyncService.js');
+
+    if (!isSupabaseAvailable()) {
+      return res.status(500).json({
+        ok: false,
+        error: 'Supabase not configured'
+      });
+    }
+
+    const client = getSupabaseClient();
+
+    console.log('[API] RESYNC: Deleting all existing orders...');
+
+    // Delete ALL orders to clear old fake SKUs
+    const { error: deleteError } = await client
+      .from('orders')
+      .delete()
+      .neq('id', 0); // Delete all rows
+
+    if (deleteError) {
+      throw new Error(`Failed to clear orders: ${deleteError.message}`);
+    }
+
+    console.log('[API] RESYNC: Orders cleared, re-syncing with new SKU matching...');
+
+    const result = await syncOrdersFromWebhooks(30); // Last 30 days
+
+    return res.json({
+      ok: true,
+      ...result,
+      message: `Cleared old orders and synced ${result.synced} items with real SKUs`
+    });
+
+  } catch (err) {
+    return res.status(500).json({
+      ok: false,
+      error: err.message
+    });
+  }
+});
+
+/**
+ * MANUAL ORDER SYNC: Force re-sync from webhook_events (keeps existing)
  */
 app.post('/api/sync-orders', async (req, res) => {
   try {
