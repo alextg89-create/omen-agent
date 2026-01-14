@@ -1,6 +1,6 @@
 export const sampleInventory = [
   {
-    sku: "ABC123",
+    sku: "blue_dream_3_5g",
     name: "Blue Dream 3.5g",
     category: "Flower",
     onHand: 42,
@@ -18,7 +18,7 @@ export const sampleInventory = [
     },
   },
   {
-    sku: "EDB778",
+    sku: "mango_gummies_10pk",
     name: "Mango Gummies 10pk",
     category: "Edible",
     onHand: 6,
@@ -30,9 +30,9 @@ export const sampleInventory = [
     daysOnShelf: 24,
     vendor: "Sweet Labs",
     flags: {
-      expired: false,
+      expired: true,
       promo: true,
-      seasonal: false,
+      seasonal: true,
     },
   },
 ];

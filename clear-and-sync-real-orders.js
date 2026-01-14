@@ -2,6 +2,7 @@
  * Clear sample data and sync ONLY real webhook orders
  */
 
+import { normalizeSku } from './src/utils/normalizeSku.js';
 import { createClient } from '@supabase/supabase-js';
 
 const SUPABASE_URL = 'https://kaqnpprkwyxqwmumtmmh.supabase.co';
@@ -87,7 +88,8 @@ async function clearAndSync() {
       const itemName = item.itemName || item.productName?.original || 'Unknown';
       const { strain, unit } = parseProductName(itemName);
 
-      const sku = `${strain.toLowerCase().replace(/[^a-z0-9]+/g, '_')}_${unit.toLowerCase().replace(/[^a-z0-9]+/g, '_')}`;
+      const rawSku = `${strain} ${unit}`;
+      const sku = normalizeSku(rawSku);
 
       const pricePerUnit = parseFloat(item.totalPrice?.value || item.price || 0);
       const quantity = item.quantity || 1;
