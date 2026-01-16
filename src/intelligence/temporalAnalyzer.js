@@ -7,7 +7,7 @@
  * Core Principle: OMEN OBSERVES, NEVER GUESSES
  */
 
-import { queryLineItemOrders } from '../db/supabaseQueries.js';
+import { queryOrderEvents, queryLineItemOrders } from '../db/supabaseQueries.js';
 import { calculateDateRange } from '../utils/dateCalculations.js';
 
 /**
@@ -24,46 +24,43 @@ export async function analyzeInventoryVelocity(currentInventory, timeframe = 'we
 
   console.log(`[TemporalAnalyzer] Analyzing orders from ${startDate} to ${endDate}`);
 
-  // Query real order events from Supabase (optional - table may not exist yet)
-  let ordersResult;
+  // STEP 1: Check orders_agg to determine if orders exist in timeframe
+  let orderAggResult;
   try {
-    console.log('[TemporalAnalyzer] Calling queryLineItemOrders...');
-    ordersResult = await queryLineItemOrders(startDate, endDate);
-    console.log('[TemporalAnalyzer] queryLineItemOrders returned:', {
-      ok: ordersResult.ok,
-      dataLength: ordersResult.data?.length,
-      error: ordersResult.error
-    });
+    orderAggResult = await queryOrderEvents(startDate, endDate);
   } catch (err) {
-    console.error('[TemporalAnalyzer] ❌ QUERY FAILED:', err.message);
-    console.error('[TemporalAnalyzer] Stack:', err.stack);
-    console.warn('[TemporalAnalyzer] Velocity analysis skipped - create "orders" table in Supabase to enable');
+    console.error('[TemporalAnalyzer] ❌ orders_agg query failed:', err.message);
     return {
       ok: false,
       error: `Orders query failed: ${err.message}`,
-      message: 'Velocity analysis requires "orders" table in Supabase',
       insights: [],
       hasData: false
     };
   }
 
-  if (!ordersResult.ok || !ordersResult.data || ordersResult.data.length === 0) {
-    console.warn('[TemporalAnalyzer] ⚠️  NO ORDER DATA:', {
-      ok: ordersResult.ok,
-      hasData: !!ordersResult.data,
-      length: ordersResult.data?.length || 0,
-      error: ordersResult.error
-    });
+  const orderCount = orderAggResult.data?.length || 0;
+  console.log(`[TemporalAnalyzer] Found ${orderCount} orders in orders_agg`);
+
+  if (orderCount === 0) {
     return {
-      ok: false,
-      error: ordersResult.error || 'No order data available',
+      ok: true,
+      hasData: false,
+      orderCount: 0,
       insights: [],
-      hasData: false
+      message: 'No orders in timeframe'
     };
   }
 
-  const orders = ordersResult.data;
-  console.log(`[TemporalAnalyzer] Found ${orders.length} orders in timeframe`);
+  // STEP 2: Query line-item data for SKU velocity (optional)
+  let orders = [];
+  try {
+    const lineItemResult = await queryLineItemOrders(startDate, endDate);
+    orders = lineItemResult.data || [];
+  } catch (err) {
+    console.warn('[TemporalAnalyzer] Line-item query failed, velocity analysis skipped');
+  }
+
+  console.log(`[TemporalAnalyzer] Found ${orders.length} line items for velocity analysis`);
 
   // Aggregate orders by SKU
   const ordersBySkU = aggregateOrdersBySKU(orders);
@@ -79,7 +76,8 @@ export async function analyzeInventoryVelocity(currentInventory, timeframe = 'we
     hasData: true,
     timeframe,
     dateRange,
-    orderCount: orders.length,
+    orderCount,
+    lineItemCount: orders.length,
     uniqueSKUs: Object.keys(ordersBySkU).length,
     insights,
     velocityMetrics
