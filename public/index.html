@@ -382,6 +382,32 @@
       }
     });
 
+    // AUTO-FETCH: Load latest snapshot on page load
+    async function loadLatestSnapshot() {
+      try {
+        showStatus('Loading latest snapshot...', 'loading');
+        const response = await fetch(`${BACKEND_URL}/snapshot/history/last/1`);
+        const data = await response.json();
+
+        console.log('[UI] Raw snapshot response:', JSON.stringify(data, null, 2));
+
+        if (data.ok && data.snapshots && data.snapshots.length > 0) {
+          const latest = data.snapshots[0];
+          currentSnapshot = latest.snapshot;
+          displaySnapshot(latest.snapshot, true);
+          showStatus('Latest snapshot loaded from history', 'success');
+        } else {
+          showStatus('No existing snapshots. Click "Generate Snapshot" to create one.', 'loading');
+        }
+      } catch (err) {
+        console.error('[UI] Failed to load latest snapshot:', err);
+        showStatus('Click "Generate Snapshot" to create a new snapshot.', 'loading');
+      }
+    }
+
+    // Load on page init
+    loadLatestSnapshot();
+
     // ============================================================================
     // UTILITY FUNCTIONS
     // ============================================================================
