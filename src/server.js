@@ -2594,16 +2594,14 @@ app.get('*', (_req, res) => {
 });
 
 /* ---------- Start Server (LAST) ---------- */
-app.listen(PORT, async () => {
+app.listen(PORT, () => {
   console.log(`OMEN server running on port ${PORT}`);
   console.log(`Serving frontend from: ${publicPath}`);
 
-  // Auto-sync orders from webhook_events on startup
-  console.log('\n🔄 Auto-syncing orders from webhook_events...');
-  try {
-    await autoSyncOrders();
-  } catch (err) {
-    console.warn('[Startup] Order sync failed:', err.message);
-  }
+  // Auto-sync orders in background (non-blocking)
+  console.log('\n🔄 Starting background order sync...');
+  autoSyncOrders()
+    .then(result => console.log(`[Startup] Order sync complete: ${result.synced} synced`))
+    .catch(err => console.warn('[Startup] Order sync failed:', err.message));
 });
 
