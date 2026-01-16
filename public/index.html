@@ -382,14 +382,28 @@
       }
     });
 
-    // AUTO-FETCH: Load latest snapshot on page load
+    // AUTO-FETCH: Load latest snapshot on page load (fallback only)
+    let hasUserGeneratedSnapshot = false;
+
     async function loadLatestSnapshot() {
+      // Skip if user already generated a snapshot this session
+      if (hasUserGeneratedSnapshot) {
+        console.log('[UI] Skipping auto-load - user already generated snapshot');
+        return;
+      }
+
       try {
         showStatus('Loading latest snapshot...', 'loading');
         const response = await fetch(`${BACKEND_URL}/snapshot/history/last/1`);
         const data = await response.json();
 
         console.log('[UI] Raw snapshot response:', JSON.stringify(data, null, 2));
+
+        // Double-check user hasn't generated in the meantime
+        if (hasUserGeneratedSnapshot) {
+          console.log('[UI] Skipping display - user generated snapshot during fetch');
+          return;
+        }
 
         if (data.ok && data.snapshots && data.snapshots.length > 0) {
           const latest = data.snapshots[0];
@@ -482,7 +496,11 @@
         }
 
         if (data.ok) {
+          // Mark that user generated - prevents auto-load from overwriting
+          hasUserGeneratedSnapshot = true;
           currentSnapshot = data.snapshot;
+
+          console.log('[UI] Generate response snapshot:', JSON.stringify(data.snapshot, null, 2));
 
           // Calculate age and recommendations
           const totalRecs = (data.snapshot.recommendations?.promotions?.length || 0) +
