@@ -11,17 +11,16 @@
 import { getSupabaseClient, isSupabaseAvailable } from './supabaseClient.js';
 
 /**
- * Query order events within a date range
+ * Query order-level aggregates within a date range
  *
- * Expected table structure (adjust based on actual schema):
- * - orders table with columns: id, created_at, sku, quantity, unit, etc.
+ * SOURCE OF TRUTH: orders_agg table (order-level grain)
+ * Schema: order_id, store_id, source, created_at, item_count, total_revenue, total_cost, total_profit
  *
  * @param {string} startDate - ISO date string (YYYY-MM-DD)
  * @param {string} endDate - ISO date string (YYYY-MM-DD)
- * @param {string} tableName - Table name (default: 'orders')
  * @returns {Promise<{ok: boolean, data?: array, error?: string}>}
  */
-export async function queryOrderEvents(startDate, endDate, tableName = 'orders') {
+export async function queryOrderEvents(startDate, endDate) {
   if (!isSupabaseAvailable()) {
     throw new Error('FATAL: Supabase not configured - cannot query orders. Set SUPABASE_SERVICE_KEY in .env');
   }
@@ -29,20 +28,20 @@ export async function queryOrderEvents(startDate, endDate, tableName = 'orders')
   const client = getSupabaseClient();
 
   try {
-    console.log(`[Supabase] Querying ${tableName} from ${startDate} to ${endDate}`);
+    console.log(`[Supabase] Querying orders_agg from ${startDate} to ${endDate}`);
 
     const { data, error } = await client
-      .from(tableName)
-      .select('*')
+      .from('orders_agg')
+      .select('order_id, store_id, source, created_at, item_count, total_revenue, total_cost, total_profit')
       .gte('created_at', startDate)
       .lte('created_at', endDate)
       .order('created_at', { ascending: true });
 
     if (error) {
-      throw new Error(`FATAL: Failed to query ${tableName}: ${error.message}`);
+      throw new Error(`FATAL: Failed to query orders_agg: ${error.message}`);
     }
 
-    console.log(`[Supabase] Retrieved ${data?.length || 0} order events`);
+    console.log(`[Supabase] Retrieved ${data?.length || 0} orders from orders_agg`);
 
     return {
       ok: true,
@@ -53,6 +52,40 @@ export async function queryOrderEvents(startDate, endDate, tableName = 'orders')
     console.error('[Supabase] Query error:', err.message);
     throw err;
   }
+}
+
+/**
+ * Get sales totals for a time window (daily or weekly)
+ *
+ * SOURCE OF TRUTH: orders_agg
+ *
+ * @param {string} startDate - ISO date string
+ * @param {string} endDate - ISO date string
+ * @returns {Promise<{ok: boolean, totals?: object, error?: string}>}
+ */
+export async function getSalesTotals(startDate, endDate) {
+  const result = await queryOrderEvents(startDate, endDate);
+
+  if (!result.ok) {
+    return result;
+  }
+
+  const orders = result.data || [];
+
+  const totals = {
+    orderCount: orders.length,
+    itemCount: orders.reduce((sum, o) => sum + (o.item_count || 0), 0),
+    totalRevenue: orders.reduce((sum, o) => sum + (o.total_revenue || 0), 0),
+    totalCost: orders.reduce((sum, o) => sum + (o.total_cost || 0), 0),
+    totalProfit: orders.reduce((sum, o) => sum + (o.total_profit || 0), 0),
+    startDate,
+    endDate,
+    orders
+  };
+
+  console.log(`[Supabase] Sales totals: ${totals.orderCount} orders, $${totals.totalRevenue.toFixed(2)} revenue, $${totals.totalProfit.toFixed(2)} profit`);
+
+  return { ok: true, totals };
 }
 
 /**
