@@ -55,6 +55,50 @@ export async function queryOrderEvents(startDate, endDate) {
 }
 
 /**
+ * Query line-item order events (for SKU velocity analysis)
+ *
+ * SOURCE OF TRUTH: orders table (line-item grain)
+ * Schema: order_id, sku, strain, unit, quantity, price_per_unit, order_date
+ *
+ * @param {string} startDate - ISO date string
+ * @param {string} endDate - ISO date string
+ * @returns {Promise<{ok: boolean, data?: array, error?: string}>}
+ */
+export async function queryLineItemOrders(startDate, endDate) {
+  if (!isSupabaseAvailable()) {
+    throw new Error('FATAL: Supabase not configured - cannot query orders. Set SUPABASE_SERVICE_KEY in .env');
+  }
+
+  const client = getSupabaseClient();
+
+  try {
+    console.log(`[Supabase] Querying line-item orders from ${startDate} to ${endDate}`);
+
+    const { data, error } = await client
+      .from('orders')
+      .select('order_id, sku, strain, unit, quantity, price_per_unit, order_date, created_at')
+      .gte('order_date', startDate)
+      .lte('order_date', endDate)
+      .order('order_date', { ascending: true });
+
+    if (error) {
+      throw new Error(`FATAL: Failed to query orders (line-item): ${error.message}`);
+    }
+
+    console.log(`[Supabase] Retrieved ${data?.length || 0} line items from orders`);
+
+    return {
+      ok: true,
+      data: data || [],
+      count: data?.length || 0
+    };
+  } catch (err) {
+    console.error('[Supabase] Query error:', err.message);
+    throw err;
+  }
+}
+
+/**
  * Get sales totals for a time window (daily or weekly)
  *
  * SOURCE OF TRUTH: orders_agg

@@ -7,7 +7,7 @@
  * Core Principle: OMEN OBSERVES, NEVER GUESSES
  */
 
-import { queryOrderEvents } from '../db/supabaseQueries.js';
+import { queryLineItemOrders } from '../db/supabaseQueries.js';
 import { calculateDateRange } from '../utils/dateCalculations.js';
 
 /**
@@ -27,9 +27,9 @@ export async function analyzeInventoryVelocity(currentInventory, timeframe = 'we
   // Query real order events from Supabase (optional - table may not exist yet)
   let ordersResult;
   try {
-    console.log('[TemporalAnalyzer] Calling queryOrderEvents...');
-    ordersResult = await queryOrderEvents(startDate, endDate);
-    console.log('[TemporalAnalyzer] queryOrderEvents returned:', {
+    console.log('[TemporalAnalyzer] Calling queryLineItemOrders...');
+    ordersResult = await queryLineItemOrders(startDate, endDate);
+    console.log('[TemporalAnalyzer] queryLineItemOrders returned:', {
       ok: ordersResult.ok,
       dataLength: ordersResult.data?.length,
       error: ordersResult.error
