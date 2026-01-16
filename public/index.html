@@ -555,7 +555,7 @@
     // ============================================================================
 
     function displaySnapshot(snapshot, fromCache = false) {
-      const { metrics, recommendations, asOfDate, timeframe, generatedAt } = snapshot;
+      const { metrics, recommendations, asOfDate, timeframe, generatedAt, velocity } = snapshot;
 
       // STALENESS DETECTION based on generatedAt timestamp
       const now = new Date();
@@ -626,14 +626,28 @@
             <div class="metric-value">${formatPercent(metrics.averageMargin)}</div>
           </div>
           <div class="metric-card">
-            <div class="metric-label">Total Revenue</div>
+            <div class="metric-label">Potential Revenue</div>
             <div class="metric-value">${formatCurrency(metrics.totalRevenue)}</div>
           </div>
           <div class="metric-card">
-            <div class="metric-label">Total Profit</div>
+            <div class="metric-label">Potential Profit</div>
             <div class="metric-value">${formatCurrency(metrics.totalProfit)}</div>
           </div>
         </div>
+
+        ${velocity ? `
+        <h4>Sales Activity (${timeframe})</h4>
+        <div class="metrics-grid">
+          <div class="metric-card">
+            <div class="metric-label">Orders</div>
+            <div class="metric-value">${velocity.orderCount || 0}</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-label">Unique SKUs Sold</div>
+            <div class="metric-value">${velocity.uniqueSKUs || 0}</div>
+          </div>
+        </div>
+        ` : ''}
       `;
 
       // Recommendations
