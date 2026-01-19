@@ -9,6 +9,11 @@
  * - Why it matters (1-2 sentences)
  * - Concrete action (what to do)
  * - Confidence signal (based on real data)
+ *
+ * VELOCITY TRUTH:
+ * - metrics.hasVelocity = true when snapshot has real order data
+ * - When hasVelocity is true, NEVER say "without velocity data" or similar
+ * - Rank by velocity + margin when hasVelocity, margin-only when not
  */
 
 /**
@@ -77,15 +82,21 @@ export function generatePromotionInsight(message, recommendations, metrics) {
     return `Your biggest profit leak isn't low margin — it's slow movers. ${item.name} (${margin.toFixed(1)}% margin, ${stock} units left) is burning shelf space. Discount or bundle within 72 hours to free capital. (Medium confidence — based on stock velocity and margin)`;
   }
 
-  // Case 3: Fallback to highest margin item (always decisive)
-  if (metrics?.highestMarginItem) {
+  // Case 3: Fallback to highest margin item from snapshot.metrics (realized margin only)
+  if (metrics?.highestMarginItem && typeof metrics.highestMarginItem.margin === 'number') {
     const item = metrics.highestMarginItem;
-    const margin = item.margin || 0;
+    const margin = item.margin;
 
-    return `${item.name} has your highest margin at ${margin.toFixed(1)}%. Without velocity data, margin is your safest bet. Promote it this week and watch how fast it moves — that'll tell you if it's a keeper. (Early signal — baseline ranking only)`;
+    // Use velocity context if available
+    if (metrics.hasVelocity) {
+      return `${item.name} has your highest realized margin at ${margin.toFixed(1)}%. Based on ${metrics.velocity?.orderCount || 0} orders from the past week, this is backed by real sales data. Promote it this week. (Medium confidence — realized order profit + velocity)`;
+    }
+
+    return `${item.name} has your highest realized margin at ${margin.toFixed(1)}% based on actual order profit. Promote it this week and track how fast it moves. (Medium confidence — realized order profit)`;
   }
 
-  return `Promotion opportunity unclear without velocity data. Focus on your highest-margin items and track which ones deplete fastest — that's your answer.`;
+  // No snapshot metrics available - cannot provide margin-based recommendation
+  return `Insufficient data for margin-based recommendations. Generate a weekly snapshot first to analyze realized order profit.`;
 }
 
 /**
@@ -140,32 +151,32 @@ export function generateStockInsight(message, recommendations, metrics) {
  * Generate insight for margin questions
  */
 export function generateMarginInsight(message, metrics) {
-  if (!metrics) {
-    return `Margin data unavailable. Check inventory and pricing configuration.`;
+  if (!metrics || typeof metrics.averageMargin !== 'number') {
+    return `Margin data unavailable. Generate a weekly snapshot first to analyze realized order profit.`;
   }
 
-  const avgMargin = metrics.averageMargin || 0;
+  const avgMargin = metrics.averageMargin;
   const highestItem = metrics.highestMarginItem;
   const lowestItem = metrics.lowestMarginItem;
 
   // Headline: Context on margin health with emotion
   let headline;
   if (avgMargin > 65) {
-    headline = `You're sitting pretty at ${avgMargin.toFixed(1)}% average margin — that's healthy breathing room.`;
+    headline = `You're sitting pretty at ${avgMargin.toFixed(1)}% average realized margin — that's healthy breathing room.`;
   } else if (avgMargin > 55) {
-    headline = `Margins are stable at ${avgMargin.toFixed(1)}% average — you're in the safe zone.`;
+    headline = `Realized margins are stable at ${avgMargin.toFixed(1)}% average — you're in the safe zone.`;
   } else {
-    headline = `Margins are razor-thin at ${avgMargin.toFixed(1)}% average — you're one misstep from bleeding money.`;
+    headline = `Realized margins are razor-thin at ${avgMargin.toFixed(1)}% average — you're one misstep from bleeding money.`;
   }
 
   // Why it matters - show the opportunity or risk
   let why = '';
-  if (highestItem && lowestItem) {
+  if (highestItem && typeof highestItem.margin === 'number' && lowestItem && typeof lowestItem.margin === 'number') {
     const spread = highestItem.margin - lowestItem.margin;
     if (spread > 20) {
       why = `Here's the play: ${highestItem.name} (${highestItem.margin.toFixed(1)}%) is crushing it while ${lowestItem.name} (${lowestItem.margin.toFixed(1)}%) is dragging you down. That ${spread.toFixed(1)}% gap is your roadmap — double down on winners, cut losers. `;
     } else {
-      why = `Your margins are compressed across the board (${spread.toFixed(1)}% spread). No standout winners means you need velocity data to find your edge. `;
+      why = `Your margins are compressed across the board (${spread.toFixed(1)}% spread). No standout margin winners — look at which items are moving fastest. `;
     }
   }
 
@@ -173,13 +184,13 @@ export function generateMarginInsight(message, metrics) {
   let action;
   if (avgMargin < 55) {
     action = `Urgent: raise prices on anything moving fast, or kill slow inventory before it kills you. Every point of margin matters here.`;
-  } else if (highestItem && highestItem.margin > 70) {
+  } else if (highestItem && typeof highestItem.margin === 'number' && highestItem.margin > 70) {
     action = `Feature ${highestItem.name} (${highestItem.margin.toFixed(1)}%) HARD — you can discount 15% and still bank profit. That's your safety net.`;
   } else {
-    action = `Stick to items above ${avgMargin.toFixed(0)}% margin for promotions. Anything below that is a gamble without sales data.`;
+    action = `Stick to items above ${avgMargin.toFixed(0)}% margin for promotions. Anything below that is risky.`;
   }
 
-  return `${headline} ${why}${action} (Medium confidence — pricing analysis only, no velocity tracking)`;
+  return `${headline} ${why}${action} (Medium confidence — realized order profit)`;
 }
 
 /**
@@ -230,20 +241,25 @@ export function generateWhatToPromoteInsight(recommendations, metrics) {
     return response;
   }
 
-  // Strategy 2: No velocity data - use margin + stock intelligence
-  if (metrics?.highestMarginItem) {
+  // Strategy 2: Margin from snapshot.metrics (realized order profit only)
+  if (metrics?.highestMarginItem && typeof metrics.highestMarginItem.margin === 'number') {
     const item = metrics.highestMarginItem;
-    const margin = item.margin || 0;
+    const margin = item.margin;
 
     // Check if this item is also low stock (URGENCY)
     const isLowStock = invRecs.find(r => r.name === item.name);
 
     if (isLowStock) {
       const stock = isLowStock.triggeringMetrics?.quantity || 0;
-      return `${item.name} — highest margin (${margin.toFixed(1)}%) AND low stock (${stock} units). Create urgency: "Almost gone, last chance." This is a double win. (High confidence — margin + scarcity)`;
+      return `${item.name} — highest realized margin (${margin.toFixed(1)}%) AND low stock (${stock} units). Based on actual order profit. Create urgency now. (High confidence — realized profit + scarcity)`;
     }
 
-    return `${item.name} — it has your highest margin at ${margin.toFixed(1)}%. Without velocity data, I'm ranking by margin alone. Promote it and track depletion rate over 3 days — if it moves fast, you've found your winner. (Early signal)`;
+    // Use velocity context if available
+    if (metrics.hasVelocity) {
+      return `${item.name} — highest realized margin at ${margin.toFixed(1)}% from actual orders. With ${metrics.velocity?.orderCount || 0} orders tracked, this is your best pick. Promote it this week. (Medium confidence — realized order profit + velocity)`;
+    }
+
+    return `${item.name} — it has your highest realized margin at ${margin.toFixed(1)}% from actual order profit. Promote it and track depletion rate over 3 days — if it moves fast, you've found your winner. (Medium confidence — realized order profit)`;
   }
 
   return `Can't determine promotion priority without inventory data. Load inventory first.`;
@@ -265,9 +281,9 @@ export function generateInsightResponse(message, recommendations, metrics) {
 
   // 2. SPECIFIC: "highest margin" or "best margin" - must come BEFORE generic "margin"
   if (lower.includes('highest margin') || lower.includes('best margin')) {
-    if (metrics?.highestMarginItem) {
+    if (metrics?.highestMarginItem && typeof metrics.highestMarginItem.margin === 'number') {
       const item = metrics.highestMarginItem;
-      const margin = item.margin || 0;
+      const margin = item.margin;
 
       // Check if promoting this is actually smart
       const invRecs = recommendations?.inventory || [];
@@ -275,7 +291,7 @@ export function generateInsightResponse(message, recommendations, metrics) {
 
       if (isLowStock && isLowStock.triggeringMetrics?.quantity <= 5) {
         const stock = isLowStock.triggeringMetrics.quantity;
-        return `${item.name} — your biggest winner at ${margin.toFixed(1)}% margin. BUT here's the trap: only ${stock} unit${stock === 1 ? '' : 's'} left. Promoting this is a double-edged sword — you'll profit hard but sell out FAST. If you want sustained revenue, save this for emergency cash grabs and promote your second-best margin item instead. (High confidence — scarcity + margin analysis)`;
+        return `${item.name} — your biggest winner at ${margin.toFixed(1)}% realized margin. BUT here's the trap: only ${stock} unit${stock === 1 ? '' : 's'} left. Promoting this is a double-edged sword — you'll profit hard but sell out FAST. If you want sustained revenue, save this for emergency cash grabs and promote your second-best margin item instead. (High confidence — realized order profit + scarcity)`;
       }
 
       // Positive case - good margin AND enough stock
@@ -283,11 +299,19 @@ export function generateInsightResponse(message, recommendations, metrics) {
       const isRecommended = promoRecs.find(r => r.name === item.name);
 
       if (isRecommended) {
-        return `${item.name} at ${margin.toFixed(1)}% margin — this is your profit king. It's ALREADY on the promotion shortlist. Feature it NOW and watch margin stack. You have breathing room to discount 10-15% and still win. (High confidence — margin + recommendation alignment)`;
+        return `${item.name} at ${margin.toFixed(1)}% realized margin — this is your profit king from actual orders. It's ALREADY on the promotion shortlist. Feature it NOW and watch margin stack. You have breathing room to discount 10-15% and still win. (High confidence — realized order profit + recommendation alignment)`;
       }
 
-      return `${item.name} at ${margin.toFixed(1)}% margin — your #1 profit maker across ${metrics.itemsWithPricing || 0} items. Without velocity data, margin is your north star. Promote this and track how fast it moves — that tells you if it's a keeper or shelf warmer. (Medium confidence — pricing only, no sales history)`;
+      // Use velocity context if available
+      if (metrics.hasVelocity) {
+        return `${item.name} at ${margin.toFixed(1)}% realized margin — your #1 profit maker based on ${metrics.velocity?.orderCount || 0} orders tracked. Sales data backs this pick. Promote it this week. (Medium confidence — realized order profit + velocity)`;
+      }
+
+      return `${item.name} at ${margin.toFixed(1)}% realized margin — your #1 profit maker based on actual order profit. Promote this and track how fast it moves — that tells you if it's a keeper or shelf warmer. (Medium confidence — realized order profit)`;
     }
+
+    // No realized margin data available
+    return `Highest margin data unavailable. Generate a weekly snapshot first to analyze realized order profit.`;
   }
 
   // 3. GENERIC: "promote" or "feature" - comes after specific promotion questions
