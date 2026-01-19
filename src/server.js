@@ -688,12 +688,37 @@ Current Recommendations Available:
       let hasVelocity = weeklyHasVelocity || dailyHasVelocity;
       let velocityData = weeklyHasVelocity ? weekly?.velocity : (dailyHasVelocity ? daily?.velocity : null);
 
-      // If no snapshot velocity available, query Supabase directly (same as snapshot generation)
+      // If no snapshot velocity available, query Supabase directly
+      // Try weekly first, then fall back to checking if ANY orders exist
       if (!hasVelocity && inventoryData) {
         try {
           console.log("💬 [OMEN] No snapshot velocity - querying Supabase directly");
-          const liveVelocity = await analyzeInventoryVelocity(inventoryData, 'weekly');
-          if (liveVelocity?.orderCount > 0) {
+
+          // First try weekly (current week)
+          let liveVelocity = await analyzeInventoryVelocity(inventoryData, 'weekly');
+
+          // If no orders this week, check if we have ANY historical orders
+          if (!liveVelocity?.orderCount || liveVelocity.orderCount === 0) {
+            console.log("💬 [OMEN] No orders this week - checking historical data");
+            // Query orders table directly to see if ANY orders exist
+            const { queryOrderEvents } = await import('./db/supabaseQueries.js');
+            // Look back 90 days
+            const now = new Date();
+            const startDate = new Date(now);
+            startDate.setDate(startDate.getDate() - 90);
+            const histResult = await queryOrderEvents(startDate.toISOString(), now.toISOString());
+            if (histResult?.data?.length > 0) {
+              console.log("💬 [OMEN] Found historical orders:", histResult.data.length);
+              // We have historical data - set velocity context
+              hasVelocity = true;
+              velocityData = {
+                orderCount: histResult.data.length,
+                uniqueSKUs: 0, // Would need line items to calculate
+                hasData: true,
+                message: 'Historical orders found'
+              };
+            }
+          } else if (liveVelocity?.orderCount > 0) {
             hasVelocity = true;
             velocityData = liveVelocity;
             console.log("💬 [OMEN] Live velocity loaded:", { orderCount: liveVelocity.orderCount, uniqueSKUs: liveVelocity.uniqueSKUs });
