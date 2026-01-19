@@ -1,20 +1,11 @@
-import 'dotenv/config';
-import { createClient } from '@supabase/supabase-js';
+/**
+ * Catalog Lookup - SKU resolution from inventory_live
+ *
+ * Uses the AUTHORITATIVE Supabase client from supabaseClient.js
+ * No separate client initialization - single source of truth
+ */
 
-/* =========================
-   SHARED SUPABASE CLIENT
-   ========================= */
-
-const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-// Don't crash on startup if Supabase not configured - just log warning
-let supabase = null;
-if (!SUPABASE_URL || !SUPABASE_KEY) {
-  console.warn('[CatalogLookup] Supabase not configured - catalog lookup disabled');
-} else {
-  supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
-}
+import { getSupabaseClient, isSupabaseAvailable } from '../db/supabaseClient.js';
 
 /* =========================
    CATALOG LOOKUP
@@ -32,8 +23,9 @@ if (!SUPABASE_URL || !SUPABASE_KEY) {
  */
 export async function lookupCatalogSku({ strain, unit, brand, category }) {
   if (!strain || !unit) return null;
-  if (!supabase) return null; // Supabase not configured
+  if (!isSupabaseAvailable()) return null; // Supabase not configured
 
+  const supabase = getSupabaseClient();
   let query = supabase
     .from('inventory_live')
     .select('sku')
