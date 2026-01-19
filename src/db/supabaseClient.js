@@ -17,7 +17,7 @@ const SUPABASE_ENABLED = process.env.OMEN_USE_SUPABASE === 'true';
 
 // Environment validation
 const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY;
+const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY;
 
 let supabaseClient = null;
 let connectionStatus = {

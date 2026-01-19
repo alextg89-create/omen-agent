@@ -69,7 +69,7 @@ export async function syncOrdersFromWebhooks(lookbackDays = 30) {
   // Load inventory_live for SKU matching
   const { data: inventory, error: inventoryError } = await client
     .from('inventory_live')
-    .select('sku, strain, product_name, name, unit');
+    .select('sku, strain, product_name, unit');
 
   if (inventoryError) {
     throw new Error(`Failed to load inventory: ${inventoryError.message}`);
@@ -284,7 +284,7 @@ async function findMatchingSKU(strain, unit, inventory, fullProductName) {
 
   // 1. Try exact strain + unit match
   for (const inv of inventory) {
-    const invStrain = (inv.strain || inv.product_name || inv.name || '').toLowerCase().trim();
+    const invStrain = (inv.strain || inv.product_name || '').toLowerCase().trim();
     const invUnit = (inv.unit || '').toLowerCase().trim();
 
     if (invStrain === strainLower && invUnit === unitLower) {
@@ -294,7 +294,7 @@ async function findMatchingSKU(strain, unit, inventory, fullProductName) {
 
   // 2. Try strain contains or contained by
   for (const inv of inventory) {
-    const invStrain = (inv.strain || inv.product_name || inv.name || '').toLowerCase().trim();
+    const invStrain = (inv.strain || inv.product_name || '').toLowerCase().trim();
 
     if (invStrain.includes(strainLower) || strainLower.includes(invStrain)) {
       return inv.sku;
@@ -303,7 +303,7 @@ async function findMatchingSKU(strain, unit, inventory, fullProductName) {
 
   // 3. Try full product name match
   for (const inv of inventory) {
-    const invFull = (inv.strain || inv.product_name || inv.name || '').toLowerCase().trim();
+    const invFull = (inv.strain || inv.product_name || '').toLowerCase().trim();
 
     if (fullLower.includes(invFull) || invFull.includes(fullLower)) {
       return inv.sku;

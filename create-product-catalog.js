@@ -13,9 +13,9 @@
 import { createClient } from '@supabase/supabase-js';
 
 const SUPABASE_URL = 'https://kaqnpprkwyxqwmumtmmh.supabase.co';
-const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY || 'YOUR_SERVICE_KEY_HERE';
+const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImthcW5wcHJrd3l4cXdtdW10bW1oIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njc1NjA3ODYsImV4cCI6MjA4MzEzNjc4Nn0.2Xxddl7I33Sc5zdgMpop2jG65SSVD7K6pVa0N48FliY';
 
-const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 /**
  * Generate deterministic canonical SKU from product identity
@@ -113,19 +113,23 @@ async function createProductCatalog() {
     CREATE INDEX IF NOT EXISTS idx_product_catalog_unit ON public.product_catalog(unit);
   `;
 
-  const { error: createError } = await supabase.rpc('exec_sql', {
-    sql: createTableSQL
-  }).catch(() => {
-    // Fallback: try direct creation if RPC not available
-    return { error: null };
-  });
-
-  // Alternative approach if RPC not available
-  if (createError) {
-    console.log('   Using direct table creation approach...');
-  } else {
-    console.log('   ✓ Table created (or already exists)\n');
-  }
+  // Note: Table creation should be done via Supabase SQL Editor
+  // SQL for reference:
+  console.log('   SQL to create table (run in Supabase SQL Editor if needed):');
+  console.log('   CREATE TABLE IF NOT EXISTS public.product_catalog (');
+  console.log('     canonical_sku TEXT PRIMARY KEY,');
+  console.log('     strain_name TEXT NOT NULL,');
+  console.log('     unit TEXT NOT NULL,');
+  console.log('     category TEXT,');
+  console.log('     brand TEXT,');
+  console.log('     quality_tier TEXT,');
+  console.log('     created_at TIMESTAMPTZ DEFAULT NOW(),');
+  console.log('     updated_at TIMESTAMPTZ DEFAULT NOW(),');
+  console.log('     source_count INTEGER DEFAULT 1,');
+  console.log('     notes TEXT,');
+  console.log('     UNIQUE(strain_name, unit)');
+  console.log('   );');
+  console.log('');
 
   // STEP 2: Gather distinct products from inventory_live
   console.log('📦 Step 2: Scanning inventory_live for products...\n');

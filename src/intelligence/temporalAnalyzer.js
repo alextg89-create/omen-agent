@@ -38,6 +38,13 @@ export async function analyzeInventoryVelocity(currentInventory, timeframe = 'we
     };
   }
 
+    // 👇 STEP 1 DEBUG LOG GOES HERE
+    console.log('[TemporalAnalyzer] orderAggResult debug:', {
+    ok: orderAggResult?.ok,
+    length: orderAggResult?.data?.length,
+    sample: orderAggResult?.data?.[0],
+   });
+
   const orderCount = orderAggResult.data?.length || 0;
   console.log(`[TemporalAnalyzer] Found ${orderCount} orders in orders_agg`);
 
@@ -78,7 +85,7 @@ export async function analyzeInventoryVelocity(currentInventory, timeframe = 'we
     dateRange,
     orderCount,
     lineItemCount: orders.length,
-    uniqueSKUs: Object.keys(ordersBySkU).length,
+    uniqueSKUs: ordersBySkU.size,
     insights,
     velocityMetrics
   };
@@ -133,10 +140,8 @@ function calculateVelocityMetrics(ordersBySkU, currentInventory, dateRange) {
   const daysInPeriod = Math.max(1, Math.ceil((new Date(dateRange.endDate) - new Date(dateRange.startDate)) / (1000 * 60 * 60 * 24)));
 
   for (const [key, orderData] of ordersBySkU) {
-    // Find matching inventory item
-    const inventoryItem = currentInventory.find(item =>
-      item.sku === orderData.sku && (item.unit || 'each') === orderData.unit
-    );
+    // Find matching inventory item by SKU only (unit matching is unreliable from Wix)
+    const inventoryItem = currentInventory.find(item => item.sku === orderData.sku);
 
     if (!inventoryItem) {
       console.warn(`[TemporalAnalyzer] SKU ${orderData.sku} has orders but not in inventory`);
