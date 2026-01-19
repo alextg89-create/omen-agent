@@ -16,8 +16,9 @@ import { createClient } from '@supabase/supabase-js';
 const SUPABASE_ENABLED = process.env.OMEN_USE_SUPABASE === 'true';
 
 // Environment validation
-const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY;
+// CRITICAL: .trim() removes newlines/whitespace that cause "invalid header value" errors
+const SUPABASE_URL = (process.env.SUPABASE_URL || '').trim();
+const SUPABASE_SERVICE_KEY = (process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY || '').trim();
 
 let supabaseClient = null;
 let connectionStatus = {

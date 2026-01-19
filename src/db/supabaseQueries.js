@@ -135,6 +135,9 @@ export async function getSalesTotals(startDate, endDate) {
 /**
  * Query current inventory state
  *
+ * IMPORTANT: Inventory is OPTIONAL - failures must NEVER crash snapshot generation
+ * Returns empty data on failure instead of throwing
+ *
  * Expected table structure:
  * - inventory table with columns: sku, unit, quantity, quality, updated_at
  *
@@ -142,8 +145,10 @@ export async function getSalesTotals(startDate, endDate) {
  * @returns {Promise<{ok: boolean, data?: array, error?: string}>}
  */
 export async function queryInventoryState(tableName = 'inventory') {
+  // Inventory is OPTIONAL - don't crash if Supabase unavailable
   if (!isSupabaseAvailable()) {
-    throw new Error('FATAL: Supabase not configured - cannot query inventory. Set SUPABASE_SERVICE_KEY in .env');
+    console.warn('[Supabase] Inventory query skipped - Supabase not available');
+    return { ok: false, data: [], count: 0, error: 'Supabase not available', skipped: true };
   }
 
   const client = getSupabaseClient();
@@ -158,7 +163,9 @@ export async function queryInventoryState(tableName = 'inventory') {
       .order('updated_at', { ascending: false });
 
     if (error) {
-      throw new Error(`FATAL: Failed to query ${tableName}: ${error.message}`);
+      // WARN + CONTINUE instead of throwing - inventory is optional
+      console.warn(`[Supabase] Inventory query failed (non-fatal): ${error.message}`);
+      return { ok: false, data: [], count: 0, error: error.message };
     }
 
     console.log(`[Supabase] Retrieved ${data?.length || 0} inventory items`);
@@ -169,8 +176,9 @@ export async function queryInventoryState(tableName = 'inventory') {
       count: data?.length || 0
     };
   } catch (err) {
-    console.error('[Supabase] Query error:', err.message);
-    throw err;
+    // WARN + CONTINUE - inventory failures must never crash snapshots
+    console.warn('[Supabase] Inventory query error (non-fatal):', err.message);
+    return { ok: false, data: [], count: 0, error: err.message };
   }
 }
 
