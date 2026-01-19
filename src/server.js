@@ -523,17 +523,13 @@ app.post("/chat", async (req, res) => {
         inventoryData = await getInventory(STORE_ID);
       } catch (err) {
         console.error("💬 [OMEN] Failed to load inventory", { requestId, error: err.message });
-        return res.status(500).json({
-          response: "I encountered an error loading inventory data. Please ensure Supabase is configured correctly.",
+        return res.status(200).json({
+          ok: true,
+          response: "I encountered an error loading inventory data. Please try again or generate a snapshot first.",
           confidence: "low",
           reason: `Inventory load failed: ${err.message}`,
-          conversationContext: {
-            lastIntent: decision.intent,
-            messagesExchanged: 1
-          },
           meta: {
             requestId,
-            decision: decision.action,
             inventoryAvailable: false,
             error: err.message
           }
@@ -622,18 +618,110 @@ Current Recommendations Available:
       userPrompt = `User Question: ${message}\n\nInventory Data:\n${JSON.stringify(inventoryContext, null, 2)}`;
     }
 
-    let llmResponse = await callLLM({
-      system: systemPrompt,
-      user: userPrompt,
-      maxTokens: 500,
-    });
+    let llmResponse = null;
+
+    try {
+      llmResponse = await callLLM({
+        system: systemPrompt,
+        user: userPrompt,
+        maxTokens: 500,
+      });
+    } catch (err) {
+      console.error("[OMEN] LLM rate limit or failure - will use intelligent response fallback", {
+        requestId,
+        error: err.message,
+      });
+      // Don't return early - let the intelligence layer handle the response
+      llmResponse = null;
+    }
+
 
     // 6️⃣ INTELLIGENCE LAYER - Try insight-driven response first
-    // This transforms flat responses into operator-focused insights
+    // CRITICAL: Chat MUST use the SAME snapshot object as UI
+    // DO NOT re-query inventory, DO NOT re-derive metrics
     let intelligentResponse = null;
     let usingIntelligentResponse = false;
     if (needsRecommendations || needsInventory) {
-      intelligentResponse = generateInsightResponse(message, recommendations, inventoryContext);
+      // Fetch actual snapshots from storage - this is the authoritative source
+      let snapshots = [];
+      try {
+        snapshots = getLastSnapshots(STORE_ID, 10, null) || [];
+      } catch (snapshotErr) {
+        console.error("[OMEN] Failed to fetch snapshots", { requestId, error: snapshotErr.message });
+        snapshots = [];
+      }
+
+      // GUARD: Empty snapshot check - return safe 200, never 500
+      console.log("🧪 [OMEN] Chat snapshots debug", {
+        isArray: Array.isArray(snapshots),
+        length: snapshots.length,
+        sample: snapshots[0]?.id || null
+      });
+
+      if (!snapshots || snapshots.length === 0) {
+        console.log("💬 [OMEN] No snapshots available", { requestId });
+
+        return res.status(200).json({
+          ok: true,
+          response: "No snapshot data available yet. Generate a snapshot first to enable intelligent recommendations.",
+          confidence: "none",
+          reason: "No snapshots generated",
+          nextBestAction: "Generate a daily or weekly snapshot via the dashboard",
+          meta: {
+            requestId,
+            snapshotsAvailable: false
+          }
+        });
+      }
+
+      // Chat receives BOTH daily and weekly snapshots
+      // Weekly = baseline velocity (may have orders from past 7 days)
+      // Daily = current signal (may have 0 orders today)
+      // hasVelocity is TRUE if EITHER has order data
+
+      const daily = dailySnapshot;
+      const weekly = weeklySnapshot;
+
+      // Velocity exists if weekly has orders (daily may be 0 for today)
+      const weeklyHasVelocity = weekly?.velocity?.orderCount > 0;
+      const dailyHasVelocity = daily?.velocity?.orderCount > 0;
+      const hasVelocity = weeklyHasVelocity || dailyHasVelocity;
+
+      // Use weekly for velocity baseline, daily for current state
+      const velocitySource = weeklyHasVelocity ? weekly : (dailyHasVelocity ? daily : null);
+
+      console.log("💬 [OMEN] Chat snapshot context:", {
+        hasWeekly: !!weekly,
+        hasDaily: !!daily,
+        weeklyOrders: weekly?.velocity?.orderCount || 0,
+        dailyOrders: daily?.velocity?.orderCount || 0,
+        hasVelocity,
+        velocitySource: weeklyHasVelocity ? 'weekly' : (dailyHasVelocity ? 'daily' : 'none')
+      });
+
+      // Build chat context with BOTH snapshots
+      const chatContext = {
+        // Both snapshots available
+        daily,
+        weekly,
+        // Velocity from best available source
+        hasVelocity,
+        velocity: velocitySource?.velocity || null,
+        // Recommendations from weekly (more complete) or daily
+        recommendations: weekly?.recommendations || daily?.recommendations || recommendations,
+        // Metrics from weekly or fallback
+        metrics: weekly?.metrics || daily?.metrics || inventoryContext,
+        // Legacy fields
+        highestMarginItem: weekly?.metrics?.highestMarginItem || daily?.metrics?.highestMarginItem || inventoryContext?.highestMarginItem,
+        itemsWithPricing: weekly?.metrics?.itemsWithPricing || daily?.metrics?.itemsWithPricing || inventoryContext?.itemsWithPricing
+      };
+
+      try {
+        intelligentResponse = generateInsightResponse(message, chatContext.recommendations, chatContext);
+      } catch (insightErr) {
+        console.error("[OMEN] Insight generation failed", { requestId, error: insightErr.message });
+        intelligentResponse = null;
+      }
     }
 
     // Use intelligent response if available, otherwise fallback to LLM/dev responses
@@ -643,12 +731,17 @@ Current Recommendations Available:
       console.log("💬 [OMEN] Using insight-driven response", { requestId });
     } else if (!llmResponse) {
       // FALLBACK FOR DEV MODE (no LLM and no intelligent response)
-      if (needsRecommendations && recommendations) {
-        llmResponse = generateFallbackRecommendationResponseStrong(message, recommendations, inventoryContext);
-      } else if (needsInventory && inventoryContext) {
-        llmResponse = generateFallbackInventoryResponse(message, inventoryContext);
-      } else {
-        llmResponse = "How can I help you today? (LLM unavailable - dev mode)";
+      try {
+        if (needsRecommendations && recommendations) {
+          llmResponse = generateFallbackRecommendationResponseStrong(message, recommendations, inventoryContext);
+        } else if (needsInventory && inventoryContext) {
+          llmResponse = generateFallbackInventoryResponse(message, inventoryContext);
+        } else {
+          llmResponse = "How can I help you today?";
+        }
+      } catch (fallbackErr) {
+        console.error("[OMEN] Fallback generation failed", { requestId, error: fallbackErr.message });
+        llmResponse = "I'm having trouble generating a response. Please try again.";
       }
     }
 
@@ -1572,8 +1665,9 @@ Generated by OMEN Intelligence Engine
   }
 }
 
-// Global snapshot cache (used by chat)
-let latestSnapshot = null;
+// Global snapshot cache (used by chat) - SEPARATE daily and weekly
+let dailySnapshot = null;
+let weeklySnapshot = null;
 
 /* ---------- Weekly Snapshot Endpoint (with Historical Support) ---------- */
 /**
@@ -1812,7 +1906,14 @@ app.post("/snapshot/generate", async (req, res) => {
     }
 
     // 1️⃣1️⃣ UPDATE IN-MEMORY REFERENCE (for chat queries)
-    latestSnapshot = snapshot;
+    // Store daily and weekly SEPARATELY - chat needs BOTH
+    if (timeframe === 'daily') {
+      dailySnapshot = snapshot;
+      console.log("📸 [OMEN] Updated dailySnapshot", { orderCount: snapshot.velocity?.orderCount || 0 });
+    } else {
+      weeklySnapshot = snapshot;
+      console.log("📸 [OMEN] Updated weeklySnapshot", { orderCount: snapshot.velocity?.orderCount || 0 });
+    }
 
     console.log("📸 [OMEN] Snapshot generated successfully", {
       requestId,

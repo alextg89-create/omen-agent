@@ -443,6 +443,7 @@
     }
 
     function formatCurrency(value) {
+      if (typeof value !== 'number' || isNaN(value)) return '—';
       return new Intl.NumberFormat('en-US', {
         style: 'currency',
         currency: 'USD'
@@ -450,7 +451,14 @@
     }
 
     function formatPercent(value) {
+      if (value === null || value === undefined) return '—';
+      if (typeof value !== 'number' || Number.isNaN(value)) return '—';
       return `${value.toFixed(2)}%`;
+    }
+
+    function formatConfidence(value) {
+      if (typeof value !== 'number' || isNaN(value)) return '—';
+      return `${(value * 100).toFixed(0)}%`;
     }
 
     // ============================================================================
@@ -673,7 +681,7 @@
             ${recommendations.promotions.slice(0, 5).map(rec => `
               <div class="recommendation-item">
                 <strong>${rec.name}</strong>: ${rec.reason}
-                <small>Action: ${rec.action} | Margin: ${formatPercent(rec.triggeringMetrics.margin)} | Stock: ${rec.triggeringMetrics.quantity} | Confidence: ${(rec.confidence * 100).toFixed(0)}%</small>
+                <small>Action: ${rec.action} | Margin: ${formatPercent(rec.triggeringMetrics?.margin)} | Stock: ${rec.triggeringMetrics?.quantity ?? '—'} | Confidence: ${formatConfidence(rec.confidence)}</small>
               </div>
             `).join('')}
           </div>
@@ -687,7 +695,7 @@
             ${recommendations.pricing.slice(0, 5).map(rec => `
               <div class="recommendation-item">
                 <strong>${rec.name}</strong>: ${rec.reason}
-                <small>Action: ${rec.action} | Current Margin: ${formatPercent(rec.triggeringMetrics.margin)} | Confidence: ${(rec.confidence * 100).toFixed(0)}%</small>
+                <small>Action: ${rec.action} | Current Margin: ${formatPercent(rec.triggeringMetrics?.margin)} | Confidence: ${formatConfidence(rec.confidence)}</small>
               </div>
             `).join('')}
           </div>
@@ -708,7 +716,7 @@
               return `
               <div class="recommendation-item">
                 <strong>${rec.name}</strong> ${signalBadge}: ${rec.reason}
-                <small>Action: ${rec.action} | Stock: ${metrics.currentQuantity || metrics.quantity || 0}${depletion}${rate}${priority} | Confidence: ${(rec.confidence * 100).toFixed(0)}%</small>
+                <small>Action: ${rec.action} | Stock: ${metrics.currentQuantity || metrics.quantity || '—'}${depletion}${rate}${priority} | Confidence: ${formatConfidence(rec.confidence)}</small>
               </div>
             `}).join('')}
           </div>
