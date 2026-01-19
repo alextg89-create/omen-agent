@@ -8,11 +8,13 @@ import { createClient } from '@supabase/supabase-js';
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
+// Don't crash on startup if Supabase not configured - just log warning
+let supabase = null;
 if (!SUPABASE_URL || !SUPABASE_KEY) {
-  throw new Error('Missing Supabase env vars in catalogLookup');
+  console.warn('[CatalogLookup] Supabase not configured - catalog lookup disabled');
+} else {
+  supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 }
-
-const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 /* =========================
    CATALOG LOOKUP
@@ -30,6 +32,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
  */
 export async function lookupCatalogSku({ strain, unit, brand, category }) {
   if (!strain || !unit) return null;
+  if (!supabase) return null; // Supabase not configured
 
   let query = supabase
     .from('inventory_live')
