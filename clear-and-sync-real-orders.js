@@ -47,6 +47,7 @@ async function clearAndSync() {
 
   if (error) throw error;
 
+  
   for (const event of webhookEvents) {
     const payload = event.raw_payload;
 
