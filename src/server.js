@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import applyPricing from "./tools/applyPricing.js";
 import { saveInventory, getInventory, clearInventory } from "./tools/inventoryStore.js";
 import { detectLowStock } from "./inventorySignals.js";
