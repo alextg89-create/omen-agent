@@ -737,7 +737,10 @@ Current Recommendations Available:
         velocitySource: weeklyHasVelocity ? 'weekly' : (dailyHasVelocity ? 'daily' : (hasVelocity ? 'live' : 'none'))
       });
 
-      // Build chat context with BOTH snapshots + live fallback
+      // Build chat context - ONLY use snapshot metrics (realized margin from orders)
+      // Do NOT fall back to inventoryContext (catalog margin) for margin data
+      const snapshotMetrics = weekly?.metrics || daily?.metrics || null;
+
       const chatContext = {
         // Both snapshots available
         daily,
@@ -745,13 +748,15 @@ Current Recommendations Available:
         // Velocity from best available source (snapshot or live)
         hasVelocity,
         velocity: velocityData,
-        // Recommendations from weekly (more complete) or daily
-        recommendations: weekly?.recommendations || daily?.recommendations || recommendations,
-        // Metrics from weekly or fallback
-        metrics: weekly?.metrics || daily?.metrics || inventoryContext,
-        // Legacy fields
-        highestMarginItem: weekly?.metrics?.highestMarginItem || daily?.metrics?.highestMarginItem || inventoryContext?.highestMarginItem,
-        itemsWithPricing: weekly?.metrics?.itemsWithPricing || daily?.metrics?.itemsWithPricing || inventoryContext?.itemsWithPricing
+        // Recommendations from snapshot ONLY (contains realized margin data)
+        recommendations: weekly?.recommendations || daily?.recommendations || null,
+        // Metrics from snapshot ONLY - no fallback to catalog margin
+        metrics: snapshotMetrics,
+        // Margin fields from snapshot ONLY - null if no snapshot
+        highestMarginItem: snapshotMetrics?.highestMarginItem || null,
+        itemsWithPricing: snapshotMetrics?.itemsWithPricing || inventoryContext?.itemsWithPricing || 0,
+        // Flag for chat intelligence to know if margin data is available
+        hasRealizedMargin: !!snapshotMetrics?.highestMarginItem
       };
 
       try {
