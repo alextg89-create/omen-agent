@@ -4,14 +4,57 @@
  * Syncs order data from webhook_events to orders table
  * Parses Wix webhook payloads and extracts order line items
  *
- * This runs automatically to keep orders table in sync with webhook_events
+ * CRITICAL: created_at MUST be the actual order timestamp, NOT ingestion time.
+ * Velocity analysis, daily/weekly logic, and chat all depend on accurate timestamps.
+ *
+ * IDEMPOTENCY: Enforced by database constraint on (order_id, sku).
+ * No fallback logic - upsert fails hard if constraint missing.
  */
 
 import { getSupabaseClient, isSupabaseAvailable } from '../db/supabaseClient.js';
+import { lookupCatalogSku } from '../utils/catalogLookup.js';
+
+/**
+ * Extract the actual order timestamp from Wix payload
+ *
+ * Precedence (per spec):
+ * 1. data.paymentDate (Wix payment timestamp)
+ * 2. data.createdDate (Wix order creation)
+ * 3. payments[0].createdDate (first payment timestamp)
+ * 4. webhook.received_at (last resort)
+ *
+ * @param {object} data - Parsed Wix order data
+ * @param {string} webhookReceivedAt - Fallback timestamp from webhook_events
+ * @returns {string} ISO timestamp string
+ */
+function extractOrderTimestamp(data, webhookReceivedAt) {
+  // Try Wix timestamps in order of preference
+  const candidates = [
+    data.paymentDate,
+    data.createdDate,
+    data.payments?.[0]?.createdDate,
+    data.dateCreated,
+    webhookReceivedAt
+  ];
+
+  for (const ts of candidates) {
+    if (ts) {
+      // Validate it's a parseable date
+      const parsed = new Date(ts);
+      if (!isNaN(parsed.getTime())) {
+        return parsed.toISOString();
+      }
+    }
+  }
+
+  // Should never reach here, but fail safe
+  console.warn('[OrderSync] No valid timestamp found, using webhook received_at');
+  return webhookReceivedAt || new Date().toISOString();
+}
 
 /**
  * Sync orders from webhook_events to orders table
- * @param {string} lookbackDays - How many days to sync (default: 30)
+ * @param {number} lookbackDays - How many days to sync (default: 30)
  * @returns {Promise<{synced: number, skipped: number, errors: number}>}
  */
 export async function syncOrdersFromWebhooks(lookbackDays = 30) {
@@ -51,17 +94,6 @@ export async function syncOrdersFromWebhooks(lookbackDays = 30) {
 
   console.log(`[OrderSync] Found ${webhookEvents.length} order events`);
 
-  // Get existing orders to avoid duplicates
-  const { data: existingOrders, error: ordersError } = await client
-    .from('orders')
-    .select('order_id');
-
-  if (ordersError) {
-    throw new Error(`Failed to load existing orders: ${ordersError.message}`);
-  }
-
-  const existingOrderIds = new Set(existingOrders.map(o => o.order_id));
-
   let synced = 0;
   let skipped = 0;
   let errors = 0;
@@ -70,12 +102,13 @@ export async function syncOrdersFromWebhooks(lookbackDays = 30) {
   for (const event of webhookEvents) {
     try {
       let rawPayload = event.raw_payload;
+      let needsPayloadUpdate = false;
 
-      // raw_payload is a STRING like: "Webhooks → Custom webhook →{JSON}"
-      // Need to strip prefix and parse JSON
+      // raw_payload is stored as a JSON string in JSONB column
+      // Parse it once and update the row so SQL queries work
       if (typeof rawPayload === 'string') {
         // Remove "Webhooks → Custom webhook →" prefix if present
-        const prefixMatch = rawPayload.match(/^Webhooks\s*→\s*Custom webhook\s*→\s*(.+)$/);
+        const prefixMatch = rawPayload.match(/^Webhooks\s*→\s*Custom webhook\s*→\s*(.+)$/s);
         if (prefixMatch) {
           rawPayload = prefixMatch[1];
         }
@@ -83,10 +116,27 @@ export async function syncOrdersFromWebhooks(lookbackDays = 30) {
         // Parse JSON string to object
         try {
           rawPayload = JSON.parse(rawPayload);
+          needsPayloadUpdate = true; // Mark for update
         } catch (parseError) {
           console.error(`[OrderSync] Failed to parse JSON for event ${event.id}:`, parseError.message);
           skipped++;
           continue;
+        }
+      }
+
+      // Update webhook_events.raw_payload with parsed JSON object
+      // This fixes SQL queries: raw_payload->>'orderId' will now work
+      if (needsPayloadUpdate) {
+        const { error: updateError } = await client
+          .from('webhook_events')
+          .update({ raw_payload: rawPayload })
+          .eq('id', event.id);
+
+        if (updateError) {
+          console.warn(`[OrderSync] Failed to update raw_payload for event ${event.id}:`, updateError.message);
+          // Continue processing - this is not fatal
+        } else {
+          console.log(`[OrderSync] Fixed raw_payload for event ${event.id}`);
         }
       }
 
@@ -102,16 +152,18 @@ export async function syncOrdersFromWebhooks(lookbackDays = 30) {
       }
 
       const orderNumber = data.orderNumber;
-      const orderDate = data.payments?.[0]?.createdDate || event.received_at;
       const lineItems = data.lineItems || [];
 
-      // Skip if already synced
-      if (existingOrderIds.has(orderNumber)) {
+      // CRITICAL: Extract actual order timestamp (NOT ingestion time)
+      const orderTimestamp = extractOrderTimestamp(data, event.received_at);
+
+      if (lineItems.length === 0) {
+        console.warn(`[OrderSync] Order ${orderNumber} has no line items`);
         skipped++;
         continue;
       }
 
-      // Extract line items
+      // Build line item rows
       const orderRows = [];
 
       for (const item of lineItems) {
@@ -119,16 +171,17 @@ export async function syncOrdersFromWebhooks(lookbackDays = 30) {
         const itemName = item.itemName || item.productName?.original || 'Unknown';
         const { strain, unit } = parseProductName(itemName);
 
-        // Map to inventory_live SKU format
-        const sku = findMatchingSKU(strain, unit, inventory, itemName);
+        // Map to inventory_live SKU format (async catalog lookup)
+        const sku = await findMatchingSKU(strain, unit, inventory, itemName);
 
         orderRows.push({
           order_id: orderNumber,
-          order_date: orderDate,
-          sku: sku || `unknown_${Date.now()}`,
+          order_date: orderTimestamp,
+          created_at: orderTimestamp,  // ACTUAL ORDER TIME, NOT NOW()
+          sku: sku || `unknown_${orderNumber}_${strain.substring(0, 10)}`,
           strain: strain,
           unit: unit,
-          quality: null, // Not in webhook payload
+          quality: null,
           quantity: item.quantity || 1,
           price_per_unit: parseFloat(item.totalPrice?.value || item.price || 0),
           total_amount: parseFloat(item.totalPrice?.value || 0) * (item.quantity || 1),
@@ -137,19 +190,26 @@ export async function syncOrdersFromWebhooks(lookbackDays = 30) {
         });
       }
 
-      // Insert order rows
+      // SINGLE DETERMINISTIC UPSERT - NO FALLBACKS
+      // Requires unique constraint: (order_id, sku)
       if (orderRows.length > 0) {
-        const { error: insertError } = await client
+        const { error: upsertError } = await client
           .from('orders')
-          .insert(orderRows);
+          .upsert(orderRows, {
+            onConflict: 'order_id,sku',
+            ignoreDuplicates: true
+          });
 
-        if (insertError) {
-          console.error(`[OrderSync] Failed to insert order ${orderNumber}:`, insertError.message);
+        if (upsertError) {
+          // Hard fail - do not attempt insert fallback
+          console.error(`[OrderSync] UPSERT FAILED for order ${orderNumber}: ${upsertError.message}`);
+          console.error(`[OrderSync] Ensure unique constraint exists: ALTER TABLE orders ADD CONSTRAINT orders_order_id_sku_unique UNIQUE (order_id, sku);`);
           errors++;
-        } else {
-          synced += orderRows.length;
-          console.log(`[OrderSync] ✅ Synced order ${orderNumber} (${orderRows.length} items)`);
+          continue;
         }
+
+        synced += orderRows.length;
+        console.log(`[OrderSync] ✅ Order ${orderNumber}: ${orderRows.length} items @ ${orderTimestamp}`);
       }
 
     } catch (err) {
@@ -205,12 +265,22 @@ function parseProductName(name) {
 
 /**
  * Find matching SKU from inventory_live based on product name
- * Uses fuzzy matching to handle variations in product names
+ * Uses catalog lookup first, then fuzzy matching as fallback
  */
-function findMatchingSKU(strain, unit, inventory, fullProductName) {
+async function findMatchingSKU(strain, unit, inventory, fullProductName) {
   const strainLower = strain.toLowerCase().trim();
   const unitLower = unit.toLowerCase().trim();
   const fullLower = fullProductName.toLowerCase().trim();
+
+  // 0. Try catalog lookup first (canonical source)
+  try {
+    const catalogSku = await lookupCatalogSku({ strain, unit, brand: null, category: null });
+    if (catalogSku) {
+      return catalogSku;
+    }
+  } catch (err) {
+    // Catalog lookup failed, continue with fallback matching
+  }
 
   // 1. Try exact strain + unit match
   for (const inv of inventory) {
@@ -227,7 +297,6 @@ function findMatchingSKU(strain, unit, inventory, fullProductName) {
     const invStrain = (inv.strain || inv.product_name || inv.name || '').toLowerCase().trim();
 
     if (invStrain.includes(strainLower) || strainLower.includes(invStrain)) {
-      // Match found - use this SKU
       return inv.sku;
     }
   }
