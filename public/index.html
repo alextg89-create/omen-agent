@@ -395,6 +395,13 @@
       try {
         showStatus('Loading latest snapshot...', 'loading');
         const response = await fetch(`${BACKEND_URL}/snapshot/history/last/1`);
+
+        if (!response.ok) {
+          console.warn('[UI] Snapshot history request failed:', response.status);
+          showStatus('No existing snapshots. Click "Generate Snapshot" to create one.', 'loading');
+          return;
+        }
+
         const data = await response.json();
 
         console.log('[UI] Raw snapshot response:', JSON.stringify(data, null, 2));
@@ -405,8 +412,17 @@
           return;
         }
 
+        // DEFENSIVE: Validate snapshot structure before displaying
         if (data.ok && data.snapshots && data.snapshots.length > 0) {
           const latest = data.snapshots[0];
+
+          // Verify snapshot has minimum required structure
+          if (!latest.snapshot || typeof latest.snapshot !== 'object') {
+            console.warn('[UI] Invalid snapshot structure in history:', latest);
+            showStatus('No valid snapshots found. Click "Generate Snapshot" to create one.', 'loading');
+            return;
+          }
+
           currentSnapshot = latest.snapshot;
           displaySnapshot(latest.snapshot, true);
           showStatus('Latest snapshot loaded from history', 'success');
@@ -504,24 +520,30 @@
         }
 
         if (data.ok) {
+          // DEFENSIVE: Validate snapshot exists and is an object
+          if (!data.snapshot || typeof data.snapshot !== 'object') {
+            throw new Error('Invalid snapshot response from server');
+          }
+
           // Mark that user generated - prevents auto-load from overwriting
           hasUserGeneratedSnapshot = true;
           currentSnapshot = data.snapshot;
 
           console.log('[UI] Generate response snapshot:', JSON.stringify(data.snapshot, null, 2));
 
-          // Calculate age and recommendations
+          // DEFENSIVE: Calculate age with fallback for missing generatedAt
           const totalRecs = (data.snapshot.recommendations?.promotions?.length || 0) +
                            (data.snapshot.recommendations?.pricing?.length || 0) +
                            (data.snapshot.recommendations?.inventory?.length || 0);
 
           const now = new Date();
-          const generated = new Date(data.snapshot.generatedAt);
-          const ageMinutes = Math.floor((now - generated) / 1000 / 60);
+          const generatedAt = data.snapshot.generatedAt;
+          const generated = generatedAt ? new Date(generatedAt) : now;
+          const ageMinutes = generatedAt ? Math.floor((now - generated) / 1000 / 60) : 0;
 
           // Debug logging
           console.log('Snapshot loaded:', {
-            generatedAt: data.snapshot.generatedAt,
+            generatedAt: generatedAt || 'not set',
             ageMinutes: ageMinutes,
             fromCache: data.fromCache,
             totalRecommendations: totalRecs,
@@ -534,7 +556,7 @@
 
           // Staleness-aware status message
           let statusMsg = 'Snapshot loaded successfully';
-          if (ageMinutes < 5) {
+          if (!generatedAt || ageMinutes < 5) {
             statusMsg = 'Fresh snapshot generated successfully';
           } else if (ageMinutes < 60) {
             statusMsg = `Snapshot loaded (${ageMinutes} minutes old)`;
@@ -563,20 +585,36 @@
     // ============================================================================
 
     function displaySnapshot(snapshot, fromCache = false) {
-      const { metrics, recommendations, asOfDate, timeframe, generatedAt, velocity, temporal } = snapshot;
-      const hasRealData = temporal?.hasRealData || (velocity && velocity.orderCount > 0);
+      // DEFENSIVE: Guard against missing snapshot or properties
+      if (!snapshot) {
+        console.error('[UI] displaySnapshot called with null/undefined snapshot');
+        showStatus('Error: No snapshot data to display', 'error');
+        return;
+      }
+
+      // DEFENSIVE: Destructure with fallbacks for all optional properties
+      const metrics = snapshot.metrics || {};
+      const recommendations = snapshot.recommendations || { promotions: [], pricing: [], inventory: [] };
+      const { asOfDate, timeframe, generatedAt } = snapshot;
+      const velocity = snapshot.velocity || {};
+      const temporal = snapshot.temporal || {};
+
+      // DEFENSIVE: Safe check for real data - velocity may be empty object
+      const hasRealData = temporal.hasRealData === true || (typeof velocity.orderCount === 'number' && velocity.orderCount > 0);
 
       // STALENESS DETECTION based on generatedAt timestamp
+      // DEFENSIVE: Handle missing or invalid generatedAt
       const now = new Date();
-      const generated = new Date(generatedAt);
-      const ageMinutes = Math.floor((now - generated) / 1000 / 60);
+      const generated = generatedAt ? new Date(generatedAt) : now;
+      const isValidDate = generatedAt && !isNaN(generated.getTime());
+      const ageMinutes = isValidDate ? Math.floor((now - generated) / 1000 / 60) : 0;
       const ageHours = Math.floor(ageMinutes / 60);
       const ageDays = Math.floor(ageHours / 24);
 
       // Determine freshness
       let freshness, freshnessColor, freshnessBg, freshnessLabel, showWarning;
 
-      if (ageMinutes < 5) {
+      if (!isValidDate || ageMinutes < 5) {
         freshness = 'fresh';
         freshnessColor = '#28a745';
         freshnessBg = '#d4edda';
@@ -603,7 +641,7 @@
       }
 
       const dateInfo = asOfDate ? ` - ${new Date(asOfDate + 'T00:00:00Z').toLocaleDateString()}` : '';
-      const generatedInfo = generatedAt ? ` on ${generated.toLocaleString()}` : '';
+      const generatedInfo = isValidDate ? ` on ${generated.toLocaleString()}` : '';
 
       const refreshButton = showWarning ? `<button onclick="generateSnapshot()" style="margin-left: 10px; padding: 5px 10px; font-size: 12px; cursor: pointer; background: #0066cc; color: white; border: none; border-radius: 4px;">Refresh Now</button>` : '';
 
@@ -625,19 +663,19 @@
         </div>
 
         ${hasRealData ? `
-        <h4>Sales (${timeframe})</h4>
+        <h4>Sales (${timeframe || 'Period'})</h4>
         <div class="metrics-grid">
           <div class="metric-card">
             <div class="metric-label">Orders</div>
-            <div class="metric-value">${velocity?.orderCount || 0}</div>
+            <div class="metric-value">${velocity.orderCount || 0}</div>
           </div>
           <div class="metric-card">
             <div class="metric-label">SKUs Sold</div>
-            <div class="metric-value">${velocity?.uniqueSKUs || 0}</div>
+            <div class="metric-value">${velocity.uniqueSKUs || 0}</div>
           </div>
           <div class="metric-card">
             <div class="metric-label">Total Items</div>
-            <div class="metric-value">${metrics.totalItems}</div>
+            <div class="metric-value">${metrics.totalItems ?? '—'}</div>
           </div>
           <div class="metric-card">
             <div class="metric-label">Avg Margin</div>
@@ -649,7 +687,7 @@
         <div class="metrics-grid">
           <div class="metric-card">
             <div class="metric-label">Total Items</div>
-            <div class="metric-value">${metrics.totalItems}</div>
+            <div class="metric-value">${metrics.totalItems ?? '—'}</div>
           </div>
           <div class="metric-card">
             <div class="metric-label">Avg Margin</div>
@@ -670,63 +708,65 @@
         `}
       `;
 
-      // Recommendations
+      // Recommendations - DEFENSIVE: ensure arrays exist
+      const promotions = recommendations.promotions || [];
+      const pricing = recommendations.pricing || [];
+      const inventory = recommendations.inventory || [];
+
       html += '<div class="recommendations">';
       html += '<h4>Recommendations</h4>';
 
-      if (recommendations.promotions.length > 0) {
+      if (promotions.length > 0) {
         html += `
           <div class="recommendation-section">
-            <h4>🎯 Promotion Opportunities (${recommendations.promotions.length})</h4>
-            ${recommendations.promotions.slice(0, 5).map(rec => `
+            <h4>🎯 Promotion Opportunities (${promotions.length})</h4>
+            ${promotions.slice(0, 5).map(rec => `
               <div class="recommendation-item">
-                <strong>${rec.name}</strong>: ${rec.reason}
-                <small>Action: ${rec.action} | Margin: ${formatPercent(rec.triggeringMetrics?.margin)} | Stock: ${rec.triggeringMetrics?.quantity ?? '—'} | Confidence: ${formatConfidence(rec.confidence)}</small>
+                <strong>${rec.name || 'Unknown'}</strong>: ${rec.reason || 'No reason provided'}
+                <small>Action: ${rec.action || '—'} | Margin: ${formatPercent(rec.triggeringMetrics?.margin)} | Stock: ${rec.triggeringMetrics?.quantity ?? '—'} | Confidence: ${formatConfidence(rec.confidence)}</small>
               </div>
             `).join('')}
           </div>
         `;
       }
 
-      if (recommendations.pricing.length > 0) {
+      if (pricing.length > 0) {
         html += `
           <div class="recommendation-section">
-            <h4>💰 Pricing Actions (${recommendations.pricing.length})</h4>
-            ${recommendations.pricing.slice(0, 5).map(rec => `
+            <h4>💰 Pricing Actions (${pricing.length})</h4>
+            ${pricing.slice(0, 5).map(rec => `
               <div class="recommendation-item">
-                <strong>${rec.name}</strong>: ${rec.reason}
-                <small>Action: ${rec.action} | Current Margin: ${formatPercent(rec.triggeringMetrics?.margin)} | Confidence: ${formatConfidence(rec.confidence)}</small>
+                <strong>${rec.name || 'Unknown'}</strong>: ${rec.reason || 'No reason provided'}
+                <small>Action: ${rec.action || '—'} | Current Margin: ${formatPercent(rec.triggeringMetrics?.margin)} | Confidence: ${formatConfidence(rec.confidence)}</small>
               </div>
             `).join('')}
           </div>
         `;
       }
 
-      if (recommendations.inventory.length > 0) {
+      if (inventory.length > 0) {
         html += `
           <div class="recommendation-section">
-            <h4>📦 Inventory Actions (${recommendations.inventory.length})</h4>
-            ${recommendations.inventory.slice(0, 5).map(rec => {
-              const metrics = rec.triggeringMetrics || {};
+            <h4>📦 Inventory Actions (${inventory.length})</h4>
+            ${inventory.slice(0, 5).map(rec => {
+              const recMetrics = rec.triggeringMetrics || {};
               const signalBadge = rec.signalType ? `<span style="background: #ff6b6b; color: white; padding: 2px 6px; border-radius: 3px; font-size: 10px;">${rec.signalType}</span>` : '';
               const priority = rec.priorityScore ? ` | Priority: ${rec.priorityScore}` : '';
-              const depletion = metrics.daysUntilDepletion ? ` | ${metrics.daysUntilDepletion} days left` : '';
-              const rate = metrics.depletionRate ? ` | ${metrics.depletionRate} units/day` : '';
+              const depletion = recMetrics.daysUntilDepletion ? ` | ${recMetrics.daysUntilDepletion} days left` : '';
+              const rate = recMetrics.depletionRate ? ` | ${recMetrics.depletionRate} units/day` : '';
 
               return `
               <div class="recommendation-item">
-                <strong>${rec.name}</strong> ${signalBadge}: ${rec.reason}
-                <small>Action: ${rec.action} | Stock: ${metrics.currentQuantity || metrics.quantity || '—'}${depletion}${rate}${priority} | Confidence: ${formatConfidence(rec.confidence)}</small>
+                <strong>${rec.name || 'Unknown'}</strong> ${signalBadge}: ${rec.reason || 'No reason provided'}
+                <small>Action: ${rec.action || '—'} | Stock: ${recMetrics.currentQuantity || recMetrics.quantity || '—'}${depletion}${rate}${priority} | Confidence: ${formatConfidence(rec.confidence)}</small>
               </div>
             `}).join('')}
           </div>
         `;
       }
 
-      // Calculate total recommendations
-      const totalRecs = (recommendations.promotions?.length || 0) +
-                        (recommendations.pricing?.length || 0) +
-                        (recommendations.inventory?.length || 0);
+      // Calculate total recommendations (using safe local variables)
+      const totalRecs = promotions.length + pricing.length + inventory.length;
 
       if (totalRecs === 0) {
         html += '<p style="color: #666; padding: 15px; background: #f8f9fa; border-radius: 4px;">No urgent actions identified. Inventory metrics are stable.</p>';

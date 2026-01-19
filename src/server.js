@@ -2739,57 +2739,15 @@ app.get('*', (_req, res) => {
 });
 
 /* ---------- Start Server (LAST) ---------- */
-app.listen(PORT, async () => {
+app.listen(PORT, () => {
   console.log(`OMEN server running on port ${PORT}`);
   console.log(`Serving frontend from: ${publicPath}`);
 
-  // 1️⃣ LOAD CACHED SNAPSHOTS ON STARTUP (survives deployment)
-  console.log('\n📸 Loading cached snapshots...');
-  try {
-    const today = new Date().toISOString().split('T')[0];
+  // STATELESS STARTUP: Snapshots are DERIVED from Supabase on-demand
+  // NO disk-based snapshot loading - Railway deploys are ephemeral
+  // Snapshots generated via UI trigger POST /snapshot/generate
 
-    // Try to load today's daily snapshot
-    const dailyCached = loadSnapshot(STORE_ID, 'daily', today);
-    if (dailyCached?.snapshot) {
-      dailySnapshot = dailyCached.snapshot;
-      console.log(`[Startup] ✅ Loaded daily snapshot from cache (${dailyCached.cachedAt})`);
-    } else {
-      // Try to find most recent daily from history
-      const latestDaily = getLatestSnapshotEntry(STORE_ID, 'daily');
-      if (latestDaily) {
-        const loaded = loadSnapshot(STORE_ID, 'daily', latestDaily.asOfDate);
-        if (loaded?.snapshot) {
-          dailySnapshot = loaded.snapshot;
-          console.log(`[Startup] ✅ Loaded daily snapshot from ${latestDaily.asOfDate}`);
-        }
-      }
-    }
-
-    // Try to load this week's weekly snapshot
-    const weeklyCached = loadSnapshot(STORE_ID, 'weekly', today);
-    if (weeklyCached?.snapshot) {
-      weeklySnapshot = weeklyCached.snapshot;
-      console.log(`[Startup] ✅ Loaded weekly snapshot from cache (${weeklyCached.cachedAt})`);
-    } else {
-      // Try to find most recent weekly from history
-      const latestWeekly = getLatestSnapshotEntry(STORE_ID, 'weekly');
-      if (latestWeekly) {
-        const loaded = loadSnapshot(STORE_ID, 'weekly', latestWeekly.asOfDate);
-        if (loaded?.snapshot) {
-          weeklySnapshot = loaded.snapshot;
-          console.log(`[Startup] ✅ Loaded weekly snapshot from ${latestWeekly.asOfDate}`);
-        }
-      }
-    }
-
-    if (!dailySnapshot && !weeklySnapshot) {
-      console.log('[Startup] ⚠️ No cached snapshots found - generate one via UI');
-    }
-  } catch (err) {
-    console.warn('[Startup] Failed to load cached snapshots:', err.message);
-  }
-
-  // 2️⃣ Auto-sync orders in background (non-blocking)
+  // Auto-sync orders from webhook_events to orders table (non-blocking)
   console.log('\n🔄 Starting background order sync...');
   autoSyncOrders()
     .then(result => console.log(`[Startup] Order sync complete: ${result.synced} synced`))
