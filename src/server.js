@@ -683,12 +683,25 @@ Current Recommendations Available:
       const weekly = weeklySnapshot;
 
       // Velocity exists if weekly has orders (daily may be 0 for today)
-      const weeklyHasVelocity = weekly?.velocity?.orderCount > 0;
-      const dailyHasVelocity = daily?.velocity?.orderCount > 0;
-      const hasVelocity = weeklyHasVelocity || dailyHasVelocity;
+      let weeklyHasVelocity = weekly?.velocity?.orderCount > 0;
+      let dailyHasVelocity = daily?.velocity?.orderCount > 0;
+      let hasVelocity = weeklyHasVelocity || dailyHasVelocity;
+      let velocityData = weeklyHasVelocity ? weekly?.velocity : (dailyHasVelocity ? daily?.velocity : null);
 
-      // Use weekly for velocity baseline, daily for current state
-      const velocitySource = weeklyHasVelocity ? weekly : (dailyHasVelocity ? daily : null);
+      // If no snapshot velocity available, query Supabase directly (same as snapshot generation)
+      if (!hasVelocity && inventoryData) {
+        try {
+          console.log("💬 [OMEN] No snapshot velocity - querying Supabase directly");
+          const liveVelocity = await analyzeInventoryVelocity(inventoryData, 'weekly');
+          if (liveVelocity?.orderCount > 0) {
+            hasVelocity = true;
+            velocityData = liveVelocity;
+            console.log("💬 [OMEN] Live velocity loaded:", { orderCount: liveVelocity.orderCount, uniqueSKUs: liveVelocity.uniqueSKUs });
+          }
+        } catch (velErr) {
+          console.error("[OMEN] Failed to load live velocity", { error: velErr.message });
+        }
+      }
 
       console.log("💬 [OMEN] Chat snapshot context:", {
         hasWeekly: !!weekly,
@@ -696,17 +709,17 @@ Current Recommendations Available:
         weeklyOrders: weekly?.velocity?.orderCount || 0,
         dailyOrders: daily?.velocity?.orderCount || 0,
         hasVelocity,
-        velocitySource: weeklyHasVelocity ? 'weekly' : (dailyHasVelocity ? 'daily' : 'none')
+        velocitySource: weeklyHasVelocity ? 'weekly' : (dailyHasVelocity ? 'daily' : (hasVelocity ? 'live' : 'none'))
       });
 
-      // Build chat context with BOTH snapshots
+      // Build chat context with BOTH snapshots + live fallback
       const chatContext = {
         // Both snapshots available
         daily,
         weekly,
-        // Velocity from best available source
+        // Velocity from best available source (snapshot or live)
         hasVelocity,
-        velocity: velocitySource?.velocity || null,
+        velocity: velocityData,
         // Recommendations from weekly (more complete) or daily
         recommendations: weekly?.recommendations || daily?.recommendations || recommendations,
         // Metrics from weekly or fallback
