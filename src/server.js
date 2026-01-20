@@ -1804,35 +1804,41 @@ app.post("/snapshot/generate", async (req, res) => {
       }
     }
 
-    // 4️⃣ FETCH LIVE INVENTORY
-    let inventory;
+    // 4️⃣ FETCH LIVE INVENTORY (OPTIONAL - failures must NOT block snapshots)
+    let inventory = [];
+    let inventoryWarning = null;
     try {
       inventory = await getInventory(STORE_ID);
     } catch (err) {
-      return res.status(500).json({
-        ok: false,
-        error: "Failed to load inventory",
-        message: err.message
-      });
+      // WARN + CONTINUE - inventory is OPTIONAL, snapshots derive from orders_agg
+      console.warn(`[Snapshot] ⚠️ Inventory load failed (non-fatal): ${err.message}`);
+      inventoryWarning = `Inventory unavailable: ${err.message}`;
+      inventory = [];
     }
 
     if (!inventory || inventory.length === 0) {
-      return res.status(400).json({
-        ok: false,
-        error: "No inventory data available",
-        message: "Inventory is empty or unavailable"
-      });
+      console.warn('[Snapshot] ⚠️ Inventory empty or unavailable - continuing with orders_agg only');
+      inventoryWarning = inventoryWarning || 'Inventory empty or unavailable';
+      inventory = [];
     }
 
-    // 5️⃣ CALCULATE METRICS (reuse existing logic)
-    const metrics = calculateInventoryMetrics(inventory);
+    // 5️⃣ CALCULATE METRICS (inventory-based - fallback to empty when unavailable)
+    let metrics = calculateInventoryMetrics(inventory);
 
+    // If metrics calculation fails (empty inventory), provide fallback empty metrics
+    // Snapshot will still contain velocity data from orders_agg
     if (!metrics || metrics.error) {
-      return res.status(400).json({
-        ok: false,
-        error: "Unable to calculate metrics",
-        message: metrics?.error || "No items with valid pricing data"
-      });
+      console.warn(`[Snapshot] ⚠️ Inventory metrics unavailable: ${metrics?.error || 'empty'} - using fallback`);
+      metrics = {
+        totalItems: 0,
+        totalRevenue: 0,
+        totalCost: 0,
+        totalProfit: 0,
+        averageMargin: null,
+        itemsWithPricing: 0,
+        itemsWithoutPricing: 0,
+        warning: inventoryWarning || 'Inventory metrics unavailable'
+      };
     }
 
     // 6️⃣ COMPUTE DELTA (from snapshot history - NO external DB needed)
@@ -1917,7 +1923,8 @@ app.post("/snapshot/generate", async (req, res) => {
         dateRange: deltaResult.ok ? {
           current: deltaResult.currentDate,
           previous: deltaResult.previousDate
-        } : null
+        } : null,
+        inventoryWarning: inventoryWarning || null
       },
       enrichedInventory: inventory,
       confidence: velocityAnalysis.ok ? "high" : "medium",
