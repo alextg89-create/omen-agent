@@ -64,18 +64,35 @@ export async function syncOrdersFromWebhooks(lookbackDays = 30) {
 
   const client = getSupabaseClient();
 
+  // DIAGNOSTIC: Verify client state before inventory query
+  console.log('[OrderSync] Client state:', {
+    exists: !!client,
+    hasFrom: typeof client?.from === 'function'
+  });
+
   console.log(`[OrderSync] Starting sync for last ${lookbackDays} days...`);
 
-  // Load inventory_live for SKU matching
+  // Load inventory_live for SKU matching (OPTIONAL - continue if fails)
+  console.log('[OrderSync] Querying inventory_live via Supabase client...');
   const { data: inventory, error: inventoryError } = await client
     .from('inventory_live')
     .select('sku, strain, product_name, unit');
 
-  if (inventoryError) {
-    throw new Error(`Failed to load inventory: ${inventoryError.message}`);
-  }
+  // Use inventory for SKU matching, or empty array if unavailable
+  const inventoryItems = inventoryError ? [] : (inventory || []);
 
-  console.log(`[OrderSync] Loaded ${inventory.length} inventory items for SKU matching`);
+  if (inventoryError) {
+    // DIAGNOSTIC: Log full error details
+    console.error('[OrderSync] Inventory query error details:', {
+      message: inventoryError.message,
+      code: inventoryError.code,
+      details: inventoryError.details,
+      hint: inventoryError.hint
+    });
+    console.warn('[OrderSync] ⚠️ Inventory unavailable, continuing with fallback SKU matching');
+  } else {
+    console.log(`[OrderSync] Loaded ${inventoryItems.length} inventory items for SKU matching`);
+  }
 
   // Get order events from webhook_events
   const lookbackDate = new Date();
@@ -172,7 +189,7 @@ export async function syncOrdersFromWebhooks(lookbackDays = 30) {
         const { strain, unit } = parseProductName(itemName);
 
         // Map to inventory_live SKU format (async catalog lookup)
-        const sku = await findMatchingSKU(strain, unit, inventory, itemName);
+        const sku = await findMatchingSKU(strain, unit, inventoryItems, itemName);
 
         orderRows.push({
           order_id: orderNumber,
