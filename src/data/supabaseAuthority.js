@@ -26,11 +26,14 @@ const STRICT_MODE = process.env.OMEN_STRICT_TRUTH_MODE !== 'false';
  */
 export async function getAuthoritativeInventory() {
   if (!isSupabaseAvailable()) {
-    throw new Error('FATAL: Supabase not configured. Set SUPABASE_SERVICE_KEY in .env');
+    throw new Error('FATAL: Supabase not configured. Set SUPABASE_SERVICE_ROLE_KEY in .env');
   }
 
   const client = getSupabaseClient();
 
+  // DIAGNOSTIC: Confirm we're using the validated client
+  console.log('[Authority] Using validated Supabase client for inventory query');
+  console.log('[Authority] Client exists:', !!client);
   console.log('[Authority] Querying Supabase for inventory + pricing...');
 
   // Query inventory table (inventory_live = current inventory from Make webhook)
