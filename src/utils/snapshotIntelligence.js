@@ -511,6 +511,229 @@ export function analyzeMargins(snapshot) {
 }
 
 /**
+ * Generate OMEN's Verdict - THE single most important action
+ *
+ * This is the "if you do ONE thing this week" answer.
+ * Ranks all signals and returns the highest-consequence action.
+ */
+export function generateOMENVerdict(snapshot, previousSnapshot = null) {
+  const velocity = snapshot.velocity || {};
+  const velocityMetrics = velocity.velocityMetrics || [];
+  const recommendations = snapshot.recommendations || {};
+  const metrics = snapshot.metrics || {};
+  const inventory = snapshot.enrichedInventory || [];
+
+  // Collect all actionable signals with consequence scores
+  const signals = [];
+
+  // SIGNAL 1: Imminent stockout on high-velocity item (CRITICAL)
+  const stockoutRisks = velocityMetrics.filter(v =>
+    v.daysUntilStockout !== null &&
+    v.daysUntilStockout <= 7 &&
+    v.dailyVelocity >= 0.5
+  );
+
+  for (const risk of stockoutRisks) {
+    const lostRevenuePerDay = (risk.dailyVelocity || 0) * (risk.revenue || risk.pricePerUnit || 50);
+    signals.push({
+      priority: 1,
+      consequence: lostRevenuePerDay * risk.daysUntilStockout,
+      type: 'STOCKOUT_IMMINENT',
+      action: `REORDER NOW: ${risk.name || risk.sku}`,
+      reason: `Will stock out in ${risk.daysUntilStockout} days at current velocity (${risk.dailyVelocity.toFixed(1)}/day)`,
+      consequence_text: `If you don't act: You'll lose ~$${Math.round(lostRevenuePerDay * 7).toLocaleString()} in the next week from missed sales.`,
+      item: risk.name || risk.sku
+    });
+  }
+
+  // SIGNAL 2: High-margin item with low velocity = under-promoted (HIGH)
+  const highMarginLowVelocity = inventory.filter(item => {
+    const margin = item.pricing?.margin || 0;
+    const vel = velocityMetrics.find(v => v.sku === item.sku || v.sku === item.strain);
+    const velocity = vel?.dailyVelocity || 0;
+    return margin >= 50 && velocity < 0.5 && item.quantity >= 10;
+  });
+
+  for (const item of highMarginLowVelocity.slice(0, 2)) {
+    const margin = item.pricing?.margin || 0;
+    const potentialProfit = item.quantity * (item.pricing?.retail || 0) * (margin / 100);
+    signals.push({
+      priority: 2,
+      consequence: potentialProfit,
+      type: 'UNDER_PROMOTED',
+      action: `PROMOTE: ${item.name || item.strain}`,
+      reason: `${margin.toFixed(0)}% margin but barely moving. You're sitting on profit.`,
+      consequence_text: `If you don't act: $${Math.round(potentialProfit).toLocaleString()} potential profit sits on the shelf while cash-flow tightens.`,
+      item: item.name || item.strain
+    });
+  }
+
+  // SIGNAL 3: Revenue decline needs diagnosis (HIGH)
+  if (previousSnapshot) {
+    const currentRev = metrics.totalRevenue || 0;
+    const prevRev = previousSnapshot?.metrics?.totalRevenue || 0;
+    if (prevRev > 0 && currentRev < prevRev * 0.85) {
+      const decline = ((prevRev - currentRev) / prevRev) * 100;
+      signals.push({
+        priority: 2,
+        consequence: prevRev - currentRev,
+        type: 'REVENUE_DECLINE',
+        action: 'INVESTIGATE: Revenue down significantly',
+        reason: `Revenue dropped ${decline.toFixed(0)}% vs last period ($${currentRev.toLocaleString()} vs $${prevRev.toLocaleString()})`,
+        consequence_text: `If this continues: You're on track to lose $${Math.round((prevRev - currentRev) * 4).toLocaleString()} this month vs last month.`,
+        item: null
+      });
+    }
+  }
+
+  // SIGNAL 4: Dead stock tying up capital (MEDIUM)
+  const slowMovers = getSlowMovers(snapshot, 5);
+  const totalCapitalTiedUp = slowMovers.reduce((sum, s) => sum + (s.capitalTiedUp || 0), 0);
+
+  if (totalCapitalTiedUp >= 500) {
+    signals.push({
+      priority: 3,
+      consequence: totalCapitalTiedUp,
+      type: 'DEAD_STOCK',
+      action: 'CLEAR OUT: Slow inventory blocking cash flow',
+      reason: `${slowMovers.length} items with $${Math.round(totalCapitalTiedUp).toLocaleString()} tied up, moving at <0.2 units/day`,
+      consequence_text: `If you don't act: That capital stays frozen while you pay carrying costs. Discount 20% and free up cash.`,
+      item: slowMovers[0]?.name || null
+    });
+  }
+
+  // SIGNAL 5: Margin compression (MEDIUM)
+  if (previousSnapshot) {
+    const currentMargin = metrics.averageMargin || 0;
+    const prevMargin = previousSnapshot?.metrics?.averageMargin || 0;
+    if (prevMargin > 0 && currentMargin < prevMargin - 5) {
+      signals.push({
+        priority: 3,
+        consequence: (prevMargin - currentMargin) * 100,
+        type: 'MARGIN_COMPRESSION',
+        action: 'REVIEW PRICING: Margins are shrinking',
+        reason: `Average margin dropped from ${prevMargin.toFixed(1)}% to ${currentMargin.toFixed(1)}%`,
+        consequence_text: `If this continues: Every $100 in sales now makes you $${(currentMargin).toFixed(0)} instead of $${prevMargin.toFixed(0)}. That adds up fast.`,
+        item: null
+      });
+    }
+  }
+
+  // Sort by priority, then by consequence magnitude
+  signals.sort((a, b) => {
+    if (a.priority !== b.priority) return a.priority - b.priority;
+    return b.consequence - a.consequence;
+  });
+
+  const topSignal = signals[0] || null;
+  const runnerUp = signals[1] || null;
+
+  return {
+    verdict: topSignal ? topSignal.action : 'Business looks stable. Optimize incrementally.',
+    verdictType: topSignal?.type || 'STABLE',
+    reason: topSignal?.reason || 'No critical signals detected.',
+    consequence: topSignal?.consequence_text || 'Continue monitoring velocity and margins.',
+    focusItem: topSignal?.item || null,
+    runnerUp: runnerUp ? {
+      action: runnerUp.action,
+      reason: runnerUp.reason
+    } : null,
+    signalCount: signals.length,
+    allSignals: signals.slice(0, 5).map(s => ({
+      type: s.type,
+      action: s.action,
+      item: s.item
+    }))
+  };
+}
+
+/**
+ * Generate consequence forecasts - "If this continues for 2 weeks..."
+ */
+export function forecastConsequences(snapshot, previousSnapshot = null) {
+  const forecasts = [];
+  const velocity = snapshot.velocity || {};
+  const velocityMetrics = velocity.velocityMetrics || [];
+  const metrics = snapshot.metrics || {};
+
+  // Forecast 1: Stock depletion timeline
+  const riskItems = velocityMetrics.filter(v =>
+    v.daysUntilStockout !== null &&
+    v.daysUntilStockout <= 14 &&
+    v.dailyVelocity > 0
+  );
+
+  if (riskItems.length > 0) {
+    const soonest = riskItems.sort((a, b) => a.daysUntilStockout - b.daysUntilStockout)[0];
+    forecasts.push({
+      type: 'stockout_forecast',
+      horizon: '2 weeks',
+      prediction: `${soonest.name || soonest.sku} will be out of stock in ${soonest.daysUntilStockout} days`,
+      impact: riskItems.length > 1
+        ? `${riskItems.length - 1} other items also at risk of stockout within 2 weeks.`
+        : 'No other immediate stockout risks.',
+      action: 'Place orders now for lead time coverage.'
+    });
+  }
+
+  // Forecast 2: Revenue trajectory
+  if (previousSnapshot && metrics.totalRevenue) {
+    const currentRev = metrics.totalRevenue;
+    const prevRev = previousSnapshot?.metrics?.totalRevenue || currentRev;
+    const weeklyChange = currentRev - prevRev;
+    const monthlyProjection = currentRev + (weeklyChange * 3); // 3 more weeks
+
+    if (Math.abs(weeklyChange) >= prevRev * 0.05) {
+      forecasts.push({
+        type: 'revenue_forecast',
+        horizon: '1 month',
+        prediction: weeklyChange > 0
+          ? `At current trajectory, monthly revenue will be ~$${Math.round(monthlyProjection).toLocaleString()}`
+          : `Revenue trending down. Projected monthly: ~$${Math.round(Math.max(0, monthlyProjection)).toLocaleString()}`,
+        impact: weeklyChange > 0
+          ? `That's ${((monthlyProjection / (prevRev * 4)) * 100 - 100).toFixed(0)}% above baseline.`
+          : `That's ${((1 - monthlyProjection / (prevRev * 4)) * 100).toFixed(0)}% below baseline.`,
+        action: weeklyChange > 0
+          ? 'Keep momentum. Ensure top sellers stay stocked.'
+          : 'Diagnose the drop. Check traffic, pricing, and product mix.'
+      });
+    }
+  }
+
+  // Forecast 3: Margin pressure
+  const avgMargin = metrics.averageMargin || 0;
+  if (avgMargin > 0 && avgMargin < 45) {
+    forecasts.push({
+      type: 'margin_forecast',
+      horizon: 'ongoing',
+      prediction: `Operating at ${avgMargin.toFixed(1)}% margin leaves little room for error`,
+      impact: 'A 10% discount on any item could push you into loss territory.',
+      action: 'Review supplier costs or raise prices on low-margin SKUs.'
+    });
+  }
+
+  // Forecast 4: Velocity acceleration (good news)
+  const accelerating = velocityMetrics.filter(v => {
+    if (!previousSnapshot?.velocity?.velocityMetrics) return false;
+    const prev = previousSnapshot.velocity.velocityMetrics.find(p => p.sku === v.sku);
+    return prev && v.dailyVelocity > prev.dailyVelocity * 1.5;
+  });
+
+  if (accelerating.length > 0) {
+    const top = accelerating[0];
+    forecasts.push({
+      type: 'momentum_forecast',
+      horizon: '2 weeks',
+      prediction: `${top.name || top.sku} is accelerating (+${((top.dailyVelocity / (previousSnapshot?.velocity?.velocityMetrics?.find(p => p.sku === top.sku)?.dailyVelocity || 1)) * 100 - 100).toFixed(0)}% velocity)`,
+      impact: 'This could become a top performer if sustained.',
+      action: 'Ensure stock depth and consider featuring prominently.'
+    });
+  }
+
+  return forecasts;
+}
+
+/**
  * Enrich snapshot with intelligence layer
  *
  * @param {object} snapshot - Current snapshot
@@ -518,15 +741,31 @@ export function analyzeMargins(snapshot) {
  * @returns {object} Enriched snapshot with intelligence
  */
 export function enrichSnapshotWithIntelligence(snapshot, previousSnapshot = null) {
+  const executiveSummary = generateExecutiveSummary(snapshot, previousSnapshot);
+  const topSKUs = getTopSKUsByVelocity(snapshot, 5);
+  const slowMovers = getSlowMovers(snapshot, 5);
+  const anomalies = detectAnomalies(snapshot, previousSnapshot);
+  const marginAnalysis = analyzeMargins(snapshot);
+  const verdict = generateOMENVerdict(snapshot, previousSnapshot);
+  const forecasts = forecastConsequences(snapshot, previousSnapshot);
+
   return {
     ...snapshot,
     intelligence: {
-      executiveSummary: generateExecutiveSummary(snapshot, previousSnapshot),
-      topSKUs: getTopSKUsByVelocity(snapshot, 5),
-      slowMovers: getSlowMovers(snapshot, 5),
-      anomalies: detectAnomalies(snapshot, previousSnapshot),
-      marginAnalysis: analyzeMargins(snapshot),
-      generatedAt: new Date().toISOString()
+      // THE BRIEFING - What to read first
+      verdict,
+      forecasts,
+
+      // DETAILED ANALYSIS
+      executiveSummary,
+      topSKUs,
+      slowMovers,
+      anomalies,
+      marginAnalysis,
+
+      // META
+      generatedAt: new Date().toISOString(),
+      hasComparison: previousSnapshot !== null
     }
   };
 }

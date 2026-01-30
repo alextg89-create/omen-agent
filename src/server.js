@@ -8,7 +8,7 @@ import { sampleInventory as mockInventory } from "./mocks/inventory.sample.js";
 import { makeDecision } from "./decisionEngine.js";
 import { callLLM } from "./llm.js";
 import { formatChatResponse } from "./utils/responseFormatter.js";
-import { generateInsightResponse } from "./utils/chatIntelligence.js";
+import { generateInsightResponse, generateProactiveInsight, wrapWithProactiveInsight } from "./utils/chatIntelligence.js";
 import {
   evaluateGovernanceState,
   currentExecutionMode,
@@ -766,9 +766,23 @@ Current Recommendations Available:
       try {
         // Pass full context including weekly/daily snapshots for intelligence layer
         intelligentResponse = generateInsightResponse(message, chatContext.recommendations, chatContext, chatContext);
+
+        // PROACTIVE LAYER: Add "what you might not be seeing" to every response
+        if (intelligentResponse) {
+          intelligentResponse = wrapWithProactiveInsight(intelligentResponse, chatContext);
+        }
       } catch (insightErr) {
         console.error("[OMEN] Insight generation failed", { requestId, error: insightErr.message });
         intelligentResponse = null;
+      }
+
+      // Even if no direct answer, try to surface proactive insight
+      if (!intelligentResponse) {
+        const proactive = generateProactiveInsight(chatContext);
+        if (proactive) {
+          // Store proactive insight to append after LLM response
+          chatContext._proactiveInsight = proactive;
+        }
       }
     }
 
@@ -776,7 +790,7 @@ Current Recommendations Available:
     if (intelligentResponse) {
       llmResponse = intelligentResponse;
       usingIntelligentResponse = true;
-      console.log("💬 [OMEN] Using insight-driven response", { requestId });
+      console.log("💬 [OMEN] Using insight-driven response with proactive layer", { requestId });
     } else if (!llmResponse) {
       // FALLBACK FOR DEV MODE (no LLM and no intelligent response)
       try {
@@ -791,6 +805,12 @@ Current Recommendations Available:
         console.error("[OMEN] Fallback generation failed", { requestId, error: fallbackErr.message });
         llmResponse = "I'm having trouble generating a response. Please try again.";
       }
+    }
+
+    // PROACTIVE LAYER: Append insight to LLM response if we have one stored
+    if (!usingIntelligentResponse && chatContext?._proactiveInsight && llmResponse) {
+      llmResponse = `${llmResponse}\n\n---\n${chatContext._proactiveInsight}`;
+      console.log("💬 [OMEN] Appended proactive insight to LLM response", { requestId });
     }
 
     // 🔥 CRITICAL: FORMAT RESPONSE BEFORE RETURNING

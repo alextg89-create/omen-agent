@@ -605,3 +605,122 @@ export function generateInsightResponse(message, recommendations, metrics, conte
   // Default: return null to use original LLM response
   return null;
 }
+
+/**
+ * Generate proactive insight - "What you might not be seeing..."
+ *
+ * This adds unprompted intelligence to every response.
+ * OMEN should feel like it's watching the business, not just answering questions.
+ */
+export function generateProactiveInsight(context) {
+  const intelligence = context?.weekly?.intelligence || context?.daily?.intelligence;
+  if (!intelligence) return null;
+
+  const proactiveInsights = [];
+
+  // 1. Surface the verdict if there's a critical signal
+  const verdict = intelligence.verdict;
+  if (verdict && verdict.verdictType !== 'STABLE') {
+    if (verdict.verdictType === 'STOCKOUT_IMMINENT') {
+      proactiveInsights.push({
+        priority: 1,
+        text: `⚠️ **What you might not be seeing:** ${verdict.focusItem} is running low and will stock out soon. ${verdict.consequence}`
+      });
+    } else if (verdict.verdictType === 'UNDER_PROMOTED') {
+      proactiveInsights.push({
+        priority: 2,
+        text: `💡 **Hidden opportunity:** ${verdict.focusItem} has great margins but isn't moving. ${verdict.reason}`
+      });
+    } else if (verdict.verdictType === 'REVENUE_DECLINE') {
+      proactiveInsights.push({
+        priority: 1,
+        text: `📉 **Trend to watch:** ${verdict.reason} ${verdict.consequence}`
+      });
+    }
+  }
+
+  // 2. Surface forecasts that matter
+  const forecasts = intelligence.forecasts || [];
+  for (const forecast of forecasts.slice(0, 2)) {
+    if (forecast.type === 'stockout_forecast') {
+      proactiveInsights.push({
+        priority: 1,
+        text: `🔮 **Looking ahead:** ${forecast.prediction}. ${forecast.action}`
+      });
+    } else if (forecast.type === 'momentum_forecast') {
+      proactiveInsights.push({
+        priority: 3,
+        text: `📈 **Momentum alert:** ${forecast.prediction}. ${forecast.action}`
+      });
+    }
+  }
+
+  // 3. Surface anomalies the user didn't ask about
+  const anomalies = intelligence.anomalies || [];
+  const unusualChanges = anomalies.filter(a =>
+    a.type === 'velocity_spike' || a.type === 'velocity_drop'
+  );
+
+  if (unusualChanges.length > 0 && proactiveInsights.length < 2) {
+    const change = unusualChanges[0];
+    proactiveInsights.push({
+      priority: 2,
+      text: `🔍 **Unusual pattern:** ${change.message}. Worth investigating.`
+    });
+  }
+
+  // 4. Surface margin risks
+  const marginAnalysis = intelligence.marginAnalysis;
+  if (marginAnalysis?.averageMargin && marginAnalysis.averageMargin < 40 && proactiveInsights.length < 2) {
+    proactiveInsights.push({
+      priority: 2,
+      text: `💸 **Margin watch:** Average margin is ${marginAnalysis.averageMargin.toFixed(1)}% — that's tight. Small discounts could hurt.`
+    });
+  }
+
+  // Sort by priority and return top insight
+  proactiveInsights.sort((a, b) => a.priority - b.priority);
+
+  return proactiveInsights[0]?.text || null;
+}
+
+/**
+ * Wrap response with proactive intelligence
+ *
+ * Takes a direct answer and appends "what you might not be seeing"
+ */
+export function wrapWithProactiveInsight(response, context) {
+  if (!response) return null;
+
+  const proactive = generateProactiveInsight(context);
+
+  if (proactive) {
+    return `${response}\n\n---\n${proactive}`;
+  }
+
+  return response;
+}
+
+/**
+ * Enhanced insight response with proactive layer
+ *
+ * Use this instead of generateInsightResponse for full OMEN behavior
+ */
+export function generateEnhancedInsightResponse(message, recommendations, metrics, context = null) {
+  // Get the direct answer
+  const directResponse = generateInsightResponse(message, recommendations, metrics, context);
+
+  // If we have a direct answer, add proactive layer
+  if (directResponse) {
+    return wrapWithProactiveInsight(directResponse, context);
+  }
+
+  // If no direct answer, still try to surface something proactive
+  const proactive = generateProactiveInsight(context);
+  if (proactive) {
+    // Return null for the direct answer, but the proactive insight will be added by the caller
+    return null; // Let LLM handle, but proactive context exists
+  }
+
+  return null;
+}
