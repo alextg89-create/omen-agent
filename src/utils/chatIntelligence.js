@@ -266,13 +266,286 @@ export function generateWhatToPromoteInsight(recommendations, metrics) {
 }
 
 /**
- * Main router: Detect question type and generate appropriate insight
+ * Generate insight for "why" questions about performance changes
+ *
+ * Analyzes snapshot deltas and velocity to explain changes
  */
-export function generateInsightResponse(message, recommendations, metrics) {
+export function generateWhyInsight(message, metrics, context) {
+  const lower = message.toLowerCase();
+  const intelligence = context?.weekly?.intelligence || context?.daily?.intelligence || null;
+  const executiveSummary = intelligence?.executiveSummary || null;
+
+  // Revenue decline questions
+  if (lower.includes('revenue') && (lower.includes('down') || lower.includes('drop') || lower.includes('decline') || lower.includes('fell'))) {
+    if (executiveSummary?.metrics?.revenue?.delta) {
+      const revDelta = executiveSummary.metrics.revenue.delta;
+      const orderDelta = executiveSummary.metrics.orders?.delta;
+
+      if (revDelta.direction === 'down') {
+        let explanation = `Revenue declined ${Math.abs(revDelta.percent).toFixed(1)}% ($${Math.abs(revDelta.absolute).toLocaleString()}) week-over-week. `;
+
+        // Diagnose the cause
+        if (orderDelta && orderDelta.direction === 'down') {
+          explanation += `Primary driver: ${Math.abs(orderDelta.percent).toFixed(0)}% fewer orders. This suggests a demand or traffic issue. `;
+          explanation += `Action: Review marketing channels, check for seasonal patterns, or investigate external factors.`;
+        } else if (orderDelta && orderDelta.direction === 'up') {
+          explanation += `Interestingly, order volume was UP ${orderDelta.percent.toFixed(0)}%. This means average order value dropped. `;
+          explanation += `Action: Check if customers are buying cheaper items or if discounting was too aggressive.`;
+        } else {
+          explanation += `Order volume was stable, suggesting product mix shifted toward lower-priced items. `;
+          explanation += `Action: Analyze which SKUs drove revenue last week vs this week.`;
+        }
+
+        return explanation + ` (High confidence — based on actual order data)`;
+      } else if (revDelta.direction === 'up') {
+        return `Actually, revenue is UP ${revDelta.percent.toFixed(1)}% week-over-week! Current period: $${executiveSummary.metrics.revenue.current.toLocaleString()}. (High confidence — based on order data)`;
+      }
+    }
+
+    // No delta data available
+    if (!executiveSummary) {
+      return `I don't have comparison data to explain revenue changes. Generate snapshots for at least two periods to enable trend analysis.`;
+    }
+
+    return `Revenue appears stable. I don't see a significant decline in the current data. Current revenue: $${(metrics?.totalRevenue || 0).toLocaleString()}.`;
+  }
+
+  // Margin decline questions
+  if (lower.includes('margin') && (lower.includes('down') || lower.includes('drop') || lower.includes('decline') || lower.includes('hurt') || lower.includes('compress'))) {
+    const marginAnalysis = intelligence?.marginAnalysis;
+
+    if (marginAnalysis) {
+      const laggards = marginAnalysis.marginLaggards || [];
+      const avgMargin = marginAnalysis.averageMargin;
+
+      if (laggards.length > 0) {
+        const names = laggards.map(l => `${l.name} (${l.margin?.toFixed(1)}%)`).join(', ');
+        let response = `Your lowest-margin items are: ${names}. `;
+
+        if (avgMargin && avgMargin < 50) {
+          response += `Overall average margin is ${avgMargin.toFixed(1)}% which is thin. `;
+          response += `Action: Consider raising prices on low-margin items or discontinuing if they don't drive traffic.`;
+        } else {
+          response += `These are dragging down your average. Consider bundling them with high-margin items or adjusting pricing.`;
+        }
+
+        return response + ` (Medium confidence — based on realized order profit)`;
+      }
+    }
+
+    return `I need snapshot data with margin analysis to identify margin issues. Generate a weekly snapshot first.`;
+  }
+
+  // General "why" about performance
+  if (lower.includes('why') && (lower.includes('perform') || lower.includes('slow') || lower.includes('bad'))) {
+    if (executiveSummary?.keyInsights?.length > 0) {
+      const insights = executiveSummary.keyInsights
+        .filter(i => i.severity === 'high' || i.severity === 'medium')
+        .slice(0, 3);
+
+      if (insights.length > 0) {
+        let response = `Here's what I'm seeing: `;
+        response += insights.map(i => i.text).join(' ');
+        response += ` Recommended actions: ${insights.map(i => i.action).join(' ')}`;
+        return response + ` (Medium confidence)`;
+      }
+    }
+
+    return `I don't have enough data to diagnose performance issues. Generate snapshots over multiple periods for trend analysis.`;
+  }
+
+  return null; // Not a "why" question we can handle
+}
+
+/**
+ * Generate insight for reorder questions
+ *
+ * Uses velocity data to prioritize what needs restocking
+ */
+export function generateReorderInsight(message, recommendations, metrics, context) {
+  const velocity = context?.velocity || metrics?.velocity;
+  const insights = velocity?.insights || [];
+  const invRecs = recommendations?.inventory || [];
+
+  // Combine urgent restocks from insights and recommendations
+  const urgentItems = [];
+
+  // From velocity insights (order-based)
+  for (const insight of insights) {
+    if (insight.type === 'URGENT_RESTOCK' || insight.priority === 'HIGH') {
+      urgentItems.push({
+        name: insight.name,
+        reason: insight.message || insight.details,
+        daysLeft: insight.data?.daysUntilStockout,
+        stock: insight.data?.currentStock,
+        velocity: insight.data?.dailyVelocity,
+        source: 'velocity'
+      });
+    }
+  }
+
+  // From inventory recommendations (stock-based)
+  for (const rec of invRecs) {
+    const qty = rec.triggeringMetrics?.quantity || 0;
+    if (qty <= 5 && !urgentItems.find(u => u.name === rec.name)) {
+      urgentItems.push({
+        name: rec.name,
+        reason: rec.reason,
+        stock: qty,
+        source: 'stock_level'
+      });
+    }
+  }
+
+  if (urgentItems.length === 0) {
+    return `Stock levels look healthy across your inventory. No urgent reorders needed right now. Continue monitoring high-velocity items.`;
+  }
+
+  // Sort by urgency (days left, then stock level)
+  urgentItems.sort((a, b) => {
+    if (a.daysLeft && b.daysLeft) return a.daysLeft - b.daysLeft;
+    if (a.daysLeft) return -1;
+    if (b.daysLeft) return 1;
+    return (a.stock || 0) - (b.stock || 0);
+  });
+
+  // Build response
+  const critical = urgentItems.filter(i => (i.daysLeft && i.daysLeft <= 3) || (i.stock || 0) <= 2);
+  const soon = urgentItems.filter(i => !critical.includes(i)).slice(0, 3);
+
+  let response = '';
+
+  if (critical.length > 0) {
+    const names = critical.slice(0, 3).map(i => i.name).join(', ');
+    response = `URGENT REORDER NOW: ${names}. `;
+    if (critical[0].daysLeft) {
+      response += `${critical[0].name} will stock out in ${critical[0].daysLeft} days at current velocity. `;
+    } else {
+      response += `Only ${critical[0].stock} units left. `;
+    }
+  }
+
+  if (soon.length > 0) {
+    const names = soon.map(i => i.name).join(', ');
+    if (critical.length > 0) {
+      response += `Also add to next order: ${names}. `;
+    } else {
+      response = `Reorder soon: ${names}. `;
+      response += `${soon[0].name} has ${soon[0].stock || 'low'} units remaining. `;
+    }
+  }
+
+  const confidence = urgentItems[0].source === 'velocity' ? 'High confidence — based on sales velocity' : 'Medium confidence — based on current stock levels';
+  return response + `(${confidence})`;
+}
+
+/**
+ * Generate insight for "which SKUs" questions
+ */
+export function generateSKUAnalysisInsight(message, recommendations, metrics, context) {
+  const lower = message.toLowerCase();
+  const intelligence = context?.weekly?.intelligence || context?.daily?.intelligence;
+
+  // SKUs hurting margins
+  if (lower.includes('hurt') && lower.includes('margin')) {
+    const marginAnalysis = intelligence?.marginAnalysis;
+
+    if (marginAnalysis?.marginLaggards?.length > 0) {
+      const laggards = marginAnalysis.marginLaggards;
+      let response = `These SKUs are hurting your margins: `;
+      response += laggards.map(l => `${l.name} at ${l.margin?.toFixed(1)}% margin`).join(', ');
+      response += `. `;
+
+      const worst = laggards[0];
+      if (worst.quantity > 10) {
+        response += `${worst.name} has ${worst.quantity} units tying up capital at low profit. Consider discounting to clear.`;
+      } else {
+        response += `Consider raising prices or discontinuing low performers.`;
+      }
+
+      return response + ` (Medium confidence — realized order profit)`;
+    }
+  }
+
+  // Best performing SKUs
+  if ((lower.includes('best') || lower.includes('top')) && (lower.includes('sku') || lower.includes('product') || lower.includes('item') || lower.includes('perform'))) {
+    const topSKUs = intelligence?.topSKUs;
+
+    if (topSKUs?.length > 0) {
+      let response = `Your top performers by sales velocity: `;
+      response += topSKUs.slice(0, 3).map(s =>
+        `${s.name} (${s.dailyVelocity.toFixed(1)}/day, ${s.margin?.toFixed(0) || '?'}% margin)`
+      ).join(', ');
+      response += `. These are moving fast — keep them stocked and consider featuring in promotions.`;
+      return response + ` (High confidence — based on order velocity)`;
+    }
+  }
+
+  // Slow moving SKUs
+  if (lower.includes('slow') || lower.includes('dead') || lower.includes('not moving') || lower.includes('sitting')) {
+    const slowMovers = intelligence?.slowMovers;
+
+    if (slowMovers?.length > 0) {
+      let response = `Slow movers tying up capital: `;
+      response += slowMovers.slice(0, 3).map(s =>
+        `${s.name} (${s.quantity} units, ${s.daysToSellout ? s.daysToSellout + ' days to sell' : 'minimal movement'})`
+      ).join(', ');
+
+      const totalCapital = slowMovers.reduce((sum, s) => sum + (s.capitalTiedUp || 0), 0);
+      if (totalCapital > 0) {
+        response += `. Roughly $${totalCapital.toLocaleString()} tied up in slow inventory.`;
+      }
+
+      response += ` Action: Bundle with popular items or run clearance pricing.`;
+      return response + ` (Medium confidence)`;
+    }
+  }
+
+  return null; // Not a SKU analysis question we can handle
+}
+
+/**
+ * Main router: Detect question type and generate appropriate insight
+ *
+ * @param {string} message - User question
+ * @param {object} recommendations - Recommendations from snapshot
+ * @param {object} metrics - Metrics context (includes snapshot data)
+ * @param {object} context - Full context including weekly/daily snapshots (optional)
+ */
+export function generateInsightResponse(message, recommendations, metrics, context = null) {
   const lower = message.toLowerCase();
 
   // IMPORTANT: Check SPECIFIC patterns BEFORE generic ones
   // Order matters - most specific first!
+
+  // 0. "WHY" QUESTIONS - Explain performance changes (NEW)
+  if (lower.includes('why')) {
+    const whyResponse = generateWhyInsight(message, metrics, context);
+    if (whyResponse) return whyResponse;
+  }
+
+  // 0.5 "WHICH SKUs" QUESTIONS - SKU-level analysis (NEW)
+  if (lower.includes('which') && (lower.includes('sku') || lower.includes('product') || lower.includes('item'))) {
+    const skuResponse = generateSKUAnalysisInsight(message, recommendations, metrics, context);
+    if (skuResponse) return skuResponse;
+  }
+
+  // 0.6 REORDER QUESTIONS (NEW - enhanced)
+  if (lower.includes('reorder') || lower.includes('order more') || lower.includes('need to buy') || lower.includes('running low')) {
+    return generateReorderInsight(message, recommendations, metrics, context);
+  }
+
+  // 0.7 SLOW MOVERS / DEAD STOCK (NEW)
+  if (lower.includes('slow') || lower.includes('dead stock') || lower.includes('not moving') || lower.includes('sitting')) {
+    const skuResponse = generateSKUAnalysisInsight(message, recommendations, metrics, context);
+    if (skuResponse) return skuResponse;
+  }
+
+  // 0.8 TOP / BEST PERFORMERS (NEW)
+  if ((lower.includes('top') || lower.includes('best')) && (lower.includes('seller') || lower.includes('perform') || lower.includes('moving'))) {
+    const skuResponse = generateSKUAnalysisInsight(message, recommendations, metrics, context);
+    if (skuResponse) return skuResponse;
+  }
 
   // 1. SPECIFIC: "what should i promote" - most common operator question
   if (lower.includes('what should i promote') || lower.includes('what to promote')) {

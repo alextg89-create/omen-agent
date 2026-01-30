@@ -45,6 +45,9 @@ import {
   analyzeInventoryVelocity,
   formatInsightsForDisplay
 } from "./intelligence/temporalAnalyzer.js";
+import {
+  enrichSnapshotWithIntelligence
+} from "./utils/snapshotIntelligence.js";
 import express from "express";
 import cors from "cors";
 import crypto from "crypto";
@@ -761,7 +764,8 @@ Current Recommendations Available:
       };
 
       try {
-        intelligentResponse = generateInsightResponse(message, chatContext.recommendations, chatContext);
+        // Pass full context including weekly/daily snapshots for intelligence layer
+        intelligentResponse = generateInsightResponse(message, chatContext.recommendations, chatContext, chatContext);
       } catch (insightErr) {
         console.error("[OMEN] Insight generation failed", { requestId, error: insightErr.message });
         intelligentResponse = null;
@@ -1931,7 +1935,23 @@ app.post("/snapshot/generate", async (req, res) => {
       itemCount: inventory.length
     };
 
-    // 8️⃣ CREATE INDEX ENTRY
+    // 8️⃣ ENRICH WITH INTELLIGENCE LAYER
+    // Fetch previous snapshot for comparison (if exists)
+    const previousSnapshots = getLastSnapshots(STORE_ID, 2, timeframe) || [];
+    const previousSnapshot = previousSnapshots.length > 1 ? loadSnapshot(STORE_ID, timeframe, previousSnapshots[1].asOfDate)?.snapshot : null;
+
+    // Add executive-level insights
+    const enrichedSnapshot = enrichSnapshotWithIntelligence(snapshot, previousSnapshot);
+    Object.assign(snapshot, enrichedSnapshot);
+
+    console.log("📸 [OMEN] Intelligence layer added", {
+      requestId,
+      hasExecutiveSummary: !!snapshot.intelligence?.executiveSummary,
+      topSKUs: snapshot.intelligence?.topSKUs?.length || 0,
+      anomalies: snapshot.intelligence?.anomalies?.length || 0
+    });
+
+    // 9️⃣ CREATE INDEX ENTRY
     const indexEntry = createSnapshotEntry(snapshot, timeframe, effectiveDate, {
       createdBy: req.body.createdBy || 'api',
       createdVia: 'api',
