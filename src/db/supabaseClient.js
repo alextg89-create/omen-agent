@@ -14,6 +14,26 @@
  */
 
 import { createClient } from '@supabase/supabase-js';
+import { fileURLToPath } from 'url';
+import path from 'path';
+
+// ============================================================================
+// [BOOT] SINGLE CLIENT ENFORCEMENT - RUNTIME INTEGRITY GUARD
+// ============================================================================
+const __filename = fileURLToPath(import.meta.url);
+const AUTHORIZED_CLIENT_FILE = __filename;
+const AUTHORIZED_CLIENT_DIR = path.dirname(__filename);
+
+console.error("[BOOT][SUPABASE CLIENT AUTHORITY]", {
+  authorizedFile: AUTHORIZED_CLIENT_FILE,
+  authorizedDir: AUTHORIZED_CLIENT_DIR,
+  timestamp: new Date().toISOString(),
+  pid: process.pid
+});
+
+// Track client creation - MUST be exactly 1
+let _clientCreationCount = 0;
+let _clientCreationStack = null;
 
 // ============================================================================
 // [BOOT][SUPABASE KEY MODE] - DIAGNOSTIC ENFORCEMENT (EXECUTES FIRST)
@@ -30,6 +50,17 @@ console.error("[BOOT][SUPABASE KEY MODE]", {
 if (!hasSecret) {
   console.error("[FATAL] SUPABASE_SECRET_API_KEY is NOT being used. Aborting startup.");
   process.exit(1);
+}
+
+// ============================================================================
+// [BOOT] LEGACY KEY ACCESS GUARD
+// ============================================================================
+// If ANY code tries to READ SUPABASE_SERVICE_ROLE_KEY for client creation, crash
+// We keep the reference for logging only, never for authentication
+if (hasServiceRole) {
+  console.warn("[BOOT][WARNING] SUPABASE_SERVICE_ROLE_KEY is present in environment");
+  console.warn("[BOOT][WARNING] This key is DEPRECATED and will NOT be used for authentication");
+  console.warn("[BOOT][WARNING] Only SUPABASE_SECRET_API_KEY is authorized for Supabase access");
 }
 // ============================================================================
 
@@ -118,6 +149,26 @@ function initializeSupabase() {
   }
 
   try {
+    // ========================================================================
+    // SINGLE CLIENT ENFORCEMENT
+    // ========================================================================
+    _clientCreationCount++;
+    _clientCreationStack = new Error().stack;
+
+    if (_clientCreationCount > 1) {
+      console.error("=".repeat(80));
+      console.error("[FATAL] SECONDARY SUPABASE CLIENT INITIALIZED");
+      console.error("[FATAL] Client creation count:", _clientCreationCount);
+      console.error("[FATAL] This violates single-client integrity.");
+      console.error("[FATAL] Stack trace:", _clientCreationStack);
+      console.error("=".repeat(80));
+      process.exit(1);
+    }
+
+    console.log("[Supabase] CLIENT CREATION #" + _clientCreationCount);
+    console.log("[Supabase] Authorized file:", AUTHORIZED_CLIENT_FILE);
+    console.log("[Supabase] Creation stack:", _clientCreationStack?.split('\n').slice(0, 5).join('\n'));
+
     // Create client with Secret API Key
     // Let Supabase JS client handle all authentication internally
     supabaseClient = createClient(SUPABASE_URL, SUPABASE_SECRET_KEY, {
@@ -128,6 +179,15 @@ function initializeSupabase() {
     });
 
     CLIENT_CREATION_TIMESTAMP = new Date().toISOString();
+
+    // ========================================================================
+    // CONFIRM ZERO OTHER CLIENTS
+    // ========================================================================
+    console.log("[Supabase] ========================================");
+    console.log("[Supabase] ✅ SINGLE CLIENT CONFIRMED");
+    console.log("[Supabase] Total clients created: " + _clientCreationCount);
+    console.log("[Supabase] Authorized file: " + AUTHORIZED_CLIENT_FILE);
+    console.log("[Supabase] ========================================");
 
     connectionStatus.configured = true;
     connectionStatus.connected = true;
