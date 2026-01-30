@@ -58,25 +58,51 @@ function extractOrderTimestamp(data, webhookReceivedAt) {
  * @returns {Promise<{synced: number, skipped: number, errors: number}>}
  */
 export async function syncOrdersFromWebhooks(lookbackDays = 30) {
+  console.log('[OrderSync] ========== EXECUTION CONTEXT ==========');
+  console.log('[OrderSync] Function: syncOrdersFromWebhooks');
+  console.log('[OrderSync] Timestamp:', new Date().toISOString());
+  console.log('[OrderSync] Lookback days:', lookbackDays);
+  console.log('[OrderSync] Process ID:', process.pid);
+  console.log('[OrderSync] ===========================================');
+
   if (!isSupabaseAvailable()) {
+    console.error('[OrderSync] ❌ isSupabaseAvailable() returned false');
     throw new Error('Supabase not configured');
   }
+
+  console.log('[OrderSync] ✅ isSupabaseAvailable() returned true');
+  console.log('[OrderSync] Calling getSupabaseClient()...');
 
   const client = getSupabaseClient();
 
   // DIAGNOSTIC: Verify client state before inventory query
   console.log('[OrderSync] Client state:', {
     exists: !!client,
-    hasFrom: typeof client?.from === 'function'
+    hasFrom: typeof client?.from === 'function',
+    clientType: typeof client,
+    // Log client internal structure to detect tampering
+    hasRest: !!client?.rest,
+    hasAuth: !!client?.auth,
+    hasRealtime: !!client?.realtime
   });
 
   console.log(`[OrderSync] Starting sync for last ${lookbackDays} days...`);
 
   // Load inventory_live for SKU matching (OPTIONAL - continue if fails)
-  console.log('[OrderSync] Querying inventory_live via Supabase client...');
+  console.log('[OrderSync] 📡 QUERY 1: inventory_live');
+  console.log('[OrderSync] Query table: inventory_live');
+  console.log('[OrderSync] Query columns: sku, strain, product_name, unit');
+
   const { data: inventory, error: inventoryError } = await client
     .from('inventory_live')
     .select('sku, strain, product_name, unit');
+
+  console.log('[OrderSync] 📡 QUERY 1 COMPLETE:', {
+    success: !inventoryError,
+    rowCount: inventory?.length || 0,
+    errorMessage: inventoryError?.message || null,
+    errorCode: inventoryError?.code || null
+  });
 
   // Use inventory for SKU matching, or empty array if unavailable
   const inventoryItems = inventoryError ? [] : (inventory || []);

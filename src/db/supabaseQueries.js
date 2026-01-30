@@ -22,7 +22,7 @@ import { getSupabaseClient, isSupabaseAvailable } from './supabaseClient.js';
  */
 export async function queryOrderEvents(startDate, endDate) {
   if (!isSupabaseAvailable()) {
-    throw new Error('FATAL: Supabase not configured - cannot query orders. Set SUPABASE_SERVICE_KEY in .env');
+    throw new Error('FATAL: Supabase not configured - cannot query orders. Set SUPABASE_SECRET_API_KEY in .env');
   }
 
   const client = getSupabaseClient();
@@ -66,7 +66,7 @@ export async function queryOrderEvents(startDate, endDate) {
  */
 export async function queryLineItemOrders(startDate, endDate) {
   if (!isSupabaseAvailable()) {
-    throw new Error('FATAL: Supabase not configured - cannot query orders. Set SUPABASE_SERVICE_KEY in .env');
+    throw new Error('FATAL: Supabase not configured - cannot query orders. Set SUPABASE_SECRET_API_KEY in .env');
   }
 
   const client = getSupabaseClient();
@@ -195,7 +195,7 @@ export async function queryInventoryState(tableName = 'inventory') {
  */
 export async function getSalesSummary(sku, unit, daysSince = 30, tableName = 'orders') {
   if (!isSupabaseAvailable()) {
-    throw new Error('FATAL: Supabase not configured - cannot query sales. Set SUPABASE_SERVICE_KEY in .env');
+    throw new Error('FATAL: Supabase not configured - cannot query sales. Set SUPABASE_SECRET_API_KEY in .env');
   }
 
   const client = getSupabaseClient();

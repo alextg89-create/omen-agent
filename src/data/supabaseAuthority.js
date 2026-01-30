@@ -25,23 +25,48 @@ const STRICT_MODE = process.env.OMEN_STRICT_TRUTH_MODE !== 'false';
  * @returns {Promise<{items: Array, timestamp: string, source: string, count: number}>}
  */
 export async function getAuthoritativeInventory() {
+  console.log('[Authority] ========== EXECUTION CONTEXT ==========');
+  console.log('[Authority] Function: getAuthoritativeInventory');
+  console.log('[Authority] Timestamp:', new Date().toISOString());
+  console.log('[Authority] STRICT_MODE:', STRICT_MODE);
+  console.log('[Authority] Process ID:', process.pid);
+  console.log('[Authority] ===========================================');
+
   if (!isSupabaseAvailable()) {
-    throw new Error('FATAL: Supabase not configured. Set SUPABASE_SERVICE_ROLE_KEY in .env');
+    console.error('[Authority] ❌ isSupabaseAvailable() returned false');
+    throw new Error('FATAL: Supabase not configured. Set SUPABASE_SECRET_API_KEY in .env');
   }
+
+  console.log('[Authority] ✅ isSupabaseAvailable() returned true');
+  console.log('[Authority] Calling getSupabaseClient()...');
 
   const client = getSupabaseClient();
 
   // DIAGNOSTIC: Confirm we're using the validated client
   console.log('[Authority] Using validated Supabase client for inventory query');
-  console.log('[Authority] Client exists:', !!client);
-  console.log('[Authority] Querying Supabase for inventory + pricing...');
+  console.log('[Authority] Client state:', {
+    exists: !!client,
+    hasFrom: typeof client?.from === 'function',
+    hasRest: !!client?.rest,
+    hasAuth: !!client?.auth
+  });
 
   // Query inventory table (inventory_live = current inventory from Make webhook)
+  console.log('[Authority] 📡 QUERY: inventory_live (SELECT *)');
+
   const { data: inventory, error: invError } = await client
     .from('inventory_live')
     .select('*');
 
+  console.log('[Authority] 📡 QUERY COMPLETE:', {
+    success: !invError,
+    rowCount: inventory?.length || 0,
+    errorMessage: invError?.message || null,
+    errorCode: invError?.code || null
+  });
+
   if (invError) {
+    console.error('[Authority] ❌ FATAL ERROR:', invError);
     throw new Error(`FATAL: Cannot load inventory from Supabase: ${invError.message}`);
   }
 

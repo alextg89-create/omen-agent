@@ -1294,7 +1294,7 @@ app.post("/refresh", async (req, res) => {
       ok: false,
       error: 'Refresh failed',
       message: err.message,
-      hint: 'Check SUPABASE_SERVICE_KEY in .env and verify Supabase tables exist'
+      hint: 'Check SUPABASE_SECRET_API_KEY in .env and verify Supabase tables exist'
     });
   }
 });

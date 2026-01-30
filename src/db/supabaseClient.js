@@ -1,61 +1,88 @@
 /**
- * Supabase Client Configuration
+ * Supabase Client Configuration - Secret API Key Authentication
  *
- * READ-ONLY client for querying order events and inventory state
+ * AUTHENTICATION METHOD: Supabase Secret API Key
+ * - Uses SUPABASE_SECRET_API_KEY (not a JWT, not service_role)
+ * - No JWT decoding or role validation
+ * - Let Supabase JS client handle authentication internally
  *
  * Environment Variables Required:
  * - SUPABASE_URL: Your Supabase project URL
- * - SUPABASE_SERVICE_ROLE_KEY: Service role key (server-side only)
+ * - SUPABASE_SECRET_API_KEY: Secret API key from Supabase dashboard
  *
  * Feature Flag: OMEN_USE_SUPABASE (default: false)
  */
 
 import { createClient } from '@supabase/supabase-js';
 
-// Feature flag - must be explicitly enabled
-const SUPABASE_ENABLED = process.env.OMEN_USE_SUPABASE === 'true';
+// ============================================================================
+// [BOOT][SUPABASE KEY MODE] - DIAGNOSTIC ENFORCEMENT (EXECUTES FIRST)
+// ============================================================================
+const hasSecret = !!process.env.SUPABASE_SECRET_API_KEY;
+const hasServiceRole = !!process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-// Environment validation
-// CRITICAL: .trim() removes newlines/whitespace that cause "invalid header value" errors
-const SUPABASE_URL = (process.env.SUPABASE_URL || '').trim();
+console.error("[BOOT][SUPABASE KEY MODE]", {
+  hasSecret,
+  hasServiceRole,
+  using: hasSecret ? "SECRET_API_KEY" : "SERVICE_ROLE_KEY",
+});
 
-// EXPLICIT: Use ONLY SUPABASE_SERVICE_ROLE_KEY - no fallbacks that could pick up wrong key
-const SUPABASE_SERVICE_KEY = (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
-
-/**
- * Decode JWT payload and validate it's a service_role key
- * HARD FAIL if not service_role - prevents silent auth failures in production
- */
-function validateServiceRoleKey(key) {
-  if (!key) return { valid: false, error: 'No key provided' };
-
-  try {
-    const parts = key.split('.');
-    if (parts.length !== 3) {
-      return { valid: false, error: 'Invalid JWT format' };
-    }
-
-    const payload = JSON.parse(Buffer.from(parts[1], 'base64').toString());
-
-    const result = {
-      valid: payload.role === 'service_role',
-      role: payload.role,
-      ref: payload.ref,
-      error: payload.role !== 'service_role' ? `Expected role=service_role, got role=${payload.role}` : null
-    };
-
-    // Log key info (without exposing the key itself)
-    console.log('[Supabase] JWT Validation:', {
-      role: payload.role,
-      ref: payload.ref,
-      valid: result.valid
-    });
-
-    return result;
-  } catch (err) {
-    return { valid: false, error: `JWT decode failed: ${err.message}` };
-  }
+if (!hasSecret) {
+  console.error("[FATAL] SUPABASE_SECRET_API_KEY is NOT being used. Aborting startup.");
+  process.exit(1);
 }
+// ============================================================================
+
+// ============================================================================
+// ENVIRONMENT VALIDATION
+// ============================================================================
+
+const SUPABASE_ENABLED = process.env.OMEN_USE_SUPABASE === 'true';
+const SUPABASE_URL = (process.env.SUPABASE_URL || '').trim();
+const SUPABASE_SECRET_KEY = (process.env.SUPABASE_SECRET_API_KEY || '').trim();
+
+// Legacy key reference (kept for compatibility, not used)
+const LEGACY_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+// ============================================================================
+// FAIL FAST: Missing Secret API Key
+// ============================================================================
+
+if (SUPABASE_ENABLED && !SUPABASE_SECRET_KEY) {
+  console.error('='.repeat(80));
+  console.error('[Supabase] ❌ FATAL: SUPABASE_SECRET_API_KEY is not set');
+  console.error('[Supabase]');
+  console.error('[Supabase] The application requires a Supabase Secret API Key to function.');
+  console.error('[Supabase] This key is available in your Supabase dashboard under:');
+  console.error('[Supabase]   Project Settings → API → Secret API Key');
+  console.error('[Supabase]');
+  console.error('[Supabase] Set the environment variable:');
+  console.error('[Supabase]   SUPABASE_SECRET_API_KEY=<your-secret-key>');
+  console.error('[Supabase]');
+  if (LEGACY_SERVICE_ROLE_KEY) {
+    console.error('[Supabase] NOTE: SUPABASE_SERVICE_ROLE_KEY is present but no longer used.');
+    console.error('[Supabase] Please migrate to SUPABASE_SECRET_API_KEY.');
+  }
+  console.error('='.repeat(80));
+  process.exit(1);
+}
+
+if (SUPABASE_ENABLED && !SUPABASE_URL) {
+  console.error('='.repeat(80));
+  console.error('[Supabase] ❌ FATAL: SUPABASE_URL is not set');
+  console.error('[Supabase] Set the environment variable to your Supabase project URL.');
+  console.error('='.repeat(80));
+  process.exit(1);
+}
+
+// Key fingerprint for logging (safe prefix only)
+const KEY_FINGERPRINT = SUPABASE_SECRET_KEY
+  ? `${SUPABASE_SECRET_KEY.substring(0, 8)}...${SUPABASE_SECRET_KEY.substring(SUPABASE_SECRET_KEY.length - 4)}`
+  : 'NO_KEY';
+
+// ============================================================================
+// CLIENT STATE
+// ============================================================================
 
 let supabaseClient = null;
 let connectionStatus = {
@@ -65,67 +92,56 @@ let connectionStatus = {
   error: null
 };
 
+let CLIENT_CREATION_TIMESTAMP = null;
+
 /**
  * Initialize Supabase client
- * Only creates client if feature flag is enabled AND credentials exist
- * HARD FAILS if key is not service_role
+ * Uses Secret API Key - no JWT validation, no custom fetch wrappers
  */
 function initializeSupabase() {
+  console.log('[Supabase] ========================================');
+  console.log('[Supabase] INITIALIZATION');
+  console.log('[Supabase] ========================================');
+
   if (!SUPABASE_ENABLED) {
     console.log('[Supabase] Feature flag disabled (OMEN_USE_SUPABASE=false)');
     connectionStatus.error = 'Feature flag disabled';
     return;
   }
 
-  if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
-    console.warn('[Supabase] Missing credentials');
-    console.warn('[Supabase] Required: SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY');
-    connectionStatus.configured = false;
-    connectionStatus.error = 'Missing credentials';
-    return;
-  }
+  console.log(`[Supabase] URL: ${SUPABASE_URL}`);
+  console.log(`[Supabase] Key fingerprint: ${KEY_FINGERPRINT}`);
+  console.log(`[Supabase] Auth method: Secret API Key`);
 
-  // CRITICAL: Validate the key is actually service_role BEFORE creating client
-  const keyValidation = validateServiceRoleKey(SUPABASE_SERVICE_KEY);
-  if (!keyValidation.valid) {
-    console.error('[Supabase] ❌ FATAL: Invalid service role key');
-    console.error('[Supabase] Error:', keyValidation.error);
-    console.error('[Supabase] The SUPABASE_SERVICE_ROLE_KEY env var must contain a service_role JWT');
-    connectionStatus.configured = false;
-    connectionStatus.connected = false;
-    connectionStatus.error = `Invalid key: ${keyValidation.error}`;
-    return;
-  }
-
-  // Verify project ref matches URL
-  const urlRef = SUPABASE_URL.match(/\/\/([^.]+)\./)?.[1];
-  if (urlRef && keyValidation.ref !== urlRef) {
-    console.error('[Supabase] ❌ FATAL: Key/URL project mismatch');
-    console.error(`[Supabase] URL ref: ${urlRef}, Key ref: ${keyValidation.ref}`);
-    connectionStatus.configured = false;
-    connectionStatus.connected = false;
-    connectionStatus.error = 'Key/URL project mismatch';
-    return;
+  if (LEGACY_SERVICE_ROLE_KEY) {
+    console.log('[Supabase] NOTE: Legacy SUPABASE_SERVICE_ROLE_KEY detected but not used');
   }
 
   try {
-    supabaseClient = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY, {
+    // Create client with Secret API Key
+    // Let Supabase JS client handle all authentication internally
+    supabaseClient = createClient(SUPABASE_URL, SUPABASE_SECRET_KEY, {
       auth: {
         autoRefreshToken: false,
         persistSession: false
       }
     });
 
+    CLIENT_CREATION_TIMESTAMP = new Date().toISOString();
+
     connectionStatus.configured = true;
     connectionStatus.connected = true;
     connectionStatus.error = null;
 
-    console.log('[Supabase] ✅ Client initialized successfully');
+    console.log('[Supabase] ========================================');
+    console.log('[Supabase] ✅ CLIENT INITIALIZED');
+    console.log('[Supabase] ========================================');
     console.log(`[Supabase] URL: ${SUPABASE_URL}`);
-    console.log(`[Supabase] Role: ${keyValidation.role}`);
-    console.log(`[Supabase] Project: ${keyValidation.ref}`);
+    console.log(`[Supabase] Created at: ${CLIENT_CREATION_TIMESTAMP}`);
+    console.log('[Supabase] Authentication handled by Supabase JS client');
+    console.log('[Supabase] ========================================');
   } catch (err) {
-    console.error('[Supabase] Initialization failed:', err.message);
+    console.error('[Supabase] ❌ Initialization failed:', err.message);
     connectionStatus.configured = true;
     connectionStatus.connected = false;
     connectionStatus.error = err.message;
@@ -135,11 +151,56 @@ function initializeSupabase() {
 // Initialize on module load
 initializeSupabase();
 
+// ============================================================================
+// EXPORTS
+// ============================================================================
+
+let _clientAccessCount = 0;
+
+/**
+ * Get execution context for tracing
+ */
+function getExecutionContext() {
+  const stack = new Error().stack || '';
+
+  let context = 'UNKNOWN';
+  if (stack.includes('autoSyncOrders') || stack.includes('syncOrdersFromWebhooks')) {
+    context = 'BACKGROUND_JOB:OrderSync';
+  } else if (stack.includes('express') || stack.includes('router')) {
+    context = 'HTTP_REQUEST';
+  } else if (stack.includes('cron')) {
+    context = 'CRON_JOB';
+  } else if (stack.includes('getAuthoritativeInventory')) {
+    context = 'INVENTORY_AUTHORITY';
+  }
+
+  return context;
+}
+
 /**
  * Get Supabase client instance
- * Returns null if not configured/connected
+ *
+ * CRASHES if client not initialized
+ *
+ * @returns {object} Supabase client
  */
 export function getSupabaseClient() {
+  _clientAccessCount++;
+
+  if (!supabaseClient) {
+    console.error('='.repeat(80));
+    console.error('[Supabase] ❌ FATAL: getSupabaseClient() called but client is NULL');
+    console.error('[Supabase] Connection status:', JSON.stringify(connectionStatus, null, 2));
+    console.error('='.repeat(80));
+    throw new Error('FATAL: Supabase client is NULL. Check SUPABASE_SECRET_API_KEY in .env');
+  }
+
+  // Log periodic access
+  if (_clientAccessCount <= 3 || _clientAccessCount % 20 === 0) {
+    const context = getExecutionContext();
+    console.log(`[Supabase] 🔍 Access #${_clientAccessCount} | Context: ${context}`);
+  }
+
   return supabaseClient;
 }
 
@@ -147,19 +208,26 @@ export function getSupabaseClient() {
  * Check if Supabase is available
  */
 export function isSupabaseAvailable() {
-  return connectionStatus.enabled && connectionStatus.connected && supabaseClient !== null;
+  return connectionStatus.enabled &&
+         connectionStatus.connected &&
+         supabaseClient !== null;
 }
 
 /**
  * Get connection status for diagnostics
  */
 export function getConnectionStatus() {
-  return { ...connectionStatus };
+  return {
+    ...connectionStatus,
+    keyFingerprint: KEY_FINGERPRINT,
+    createdAt: CLIENT_CREATION_TIMESTAMP,
+    accessCount: _clientAccessCount,
+    authMethod: 'Secret API Key'
+  };
 }
 
 /**
  * Test connection by querying a table
- * Returns { ok: boolean, error?: string }
  */
 export async function testConnection(tableName = 'orders') {
   if (!isSupabaseAvailable()) {
@@ -170,20 +238,34 @@ export async function testConnection(tableName = 'orders') {
   }
 
   try {
-    const { data, error } = await supabaseClient
+    const client = getSupabaseClient();
+
+    console.log(`[Supabase] Testing connection to table: ${tableName}`);
+
+    const { data, error } = await client
       .from(tableName)
       .select('*')
       .limit(1);
 
     if (error) {
-      console.warn(`[Supabase] Test query failed: ${error.message}`);
-      return { ok: false, error: error.message };
+      console.error(`[Supabase] ❌ Test query failed: ${error.message}`);
+      console.error(`[Supabase] Error code: ${error.code}`);
+      console.error(`[Supabase] Error details:`, error);
+      return { ok: false, error: error.message, code: error.code };
     }
 
-    console.log(`[Supabase] Connection test passed (table: ${tableName})`);
-    return { ok: true };
+    console.log(`[Supabase] ✅ Connection test passed (table: ${tableName})`);
+    return { ok: true, rowCount: data?.length || 0 };
   } catch (err) {
-    console.error('[Supabase] Test connection error:', err.message);
+    console.error('[Supabase] ❌ Test connection error:', err.message);
     return { ok: false, error: err.message };
   }
+}
+
+/**
+ * Ensure initialization is complete (for async compatibility)
+ */
+export async function ensureInitialized() {
+  // Initialization is synchronous now, but keep this for API compatibility
+  return Promise.resolve();
 }
