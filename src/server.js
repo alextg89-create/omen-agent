@@ -33,7 +33,7 @@ import {
   getLatestSnapshotEntry,
   getStatistics as getSnapshotStatistics
 } from "./utils/snapshotHistory.js";
-import { getConnectionStatus, testConnection } from "./db/supabaseClient.js";
+import { getConnectionStatus, testConnection, getSupabaseClient, isSupabaseAvailable } from "./db/supabaseClient.js";
 import { recordInventorySnapshot, updateLiveInventory } from "./db/supabaseQueries.js";
 import { sendSnapshotEmail, isEmailConfigured } from "./services/emailService.js";
 import { autoSyncOrders } from "./services/orderSyncService.js";
@@ -48,6 +48,10 @@ import {
 import {
   enrichSnapshotWithIntelligence
 } from "./utils/snapshotIntelligence.js";
+import {
+  parseWixCsv,
+  validateItems
+} from "./utils/wixCsvParser.js";
 import express from "express";
 import cors from "cors";
 import crypto from "crypto";
@@ -489,6 +493,204 @@ app.post("/auth/dev-login", (req, res) => {
       },
     ],
   });
+});
+
+/* ---------- WIX INVENTORY SYNC (FULL REPLACE) ---------- */
+/**
+ * SYNC WIX INVENTORY
+ *
+ * Full-replace sync from Wix CSV export.
+ * Called by Make.com scenario: SYNC_WIX_INVENTORY
+ *
+ * BEHAVIOR:
+ * 1. Parse CSV content
+ * 2. DELETE all existing rows from wix_inventory_live
+ * 3. INSERT all parsed items
+ * 4. Return success/failure with stats
+ *
+ * ENDPOINT: POST /sync/wix-inventory
+ * BODY: { csvContent: "..." } OR raw CSV text
+ */
+app.post("/sync/wix-inventory", async (req, res) => {
+  const requestId = crypto.randomUUID();
+  const startTime = Date.now();
+
+  console.log("🔄 [OMEN] WIX INVENTORY SYNC REQUESTED", { requestId });
+
+  try {
+    // 1️⃣ CHECK SUPABASE AVAILABILITY
+    if (!isSupabaseAvailable()) {
+      return res.status(503).json({
+        ok: false,
+        error: "Supabase not configured",
+        message: "Cannot sync inventory: Supabase connection required",
+        requestId
+      });
+    }
+
+    // 2️⃣ EXTRACT CSV CONTENT
+    let csvContent;
+
+    if (typeof req.body === 'string') {
+      // Raw CSV text
+      csvContent = req.body;
+    } else if (req.body?.csvContent) {
+      // JSON with csvContent field
+      csvContent = req.body.csvContent;
+    } else if (req.body?.data) {
+      // Alternative field name
+      csvContent = req.body.data;
+    } else {
+      return res.status(400).json({
+        ok: false,
+        error: "Invalid payload",
+        message: "Expected CSV content in body or body.csvContent",
+        requestId
+      });
+    }
+
+    if (!csvContent || typeof csvContent !== 'string' || csvContent.trim().length < 100) {
+      return res.status(400).json({
+        ok: false,
+        error: "Invalid CSV content",
+        message: "CSV content is empty or too short",
+        requestId
+      });
+    }
+
+    console.log(`🔄 [OMEN] Received CSV content: ${csvContent.length} bytes`, { requestId });
+
+    // 3️⃣ PARSE CSV (with strict SKU exclusion)
+    const { items, stats, errors, skipped, summary } = parseWixCsv(csvContent);
+
+    // Log the required summary server-side
+    console.log(`🔄 [OMEN] PARSE SUMMARY:`, JSON.stringify(summary, null, 2), { requestId });
+
+    if (items.length === 0) {
+      return res.status(400).json({
+        ok: false,
+        error: "No valid items parsed",
+        message: "CSV parsing produced zero inventory items. All rows may have missing or duplicate SKUs.",
+        summary,
+        skipped: skipped.slice(0, 20),
+        parseErrors: errors.slice(0, 10),
+        requestId
+      });
+    }
+
+    // 4️⃣ VALIDATE ITEMS
+    const { valid, invalid } = validateItems(items);
+
+    console.log(`🔄 [OMEN] Parsed ${valid.length} valid items, ${invalid.length} invalid`, { requestId });
+
+    if (valid.length === 0) {
+      return res.status(400).json({
+        ok: false,
+        error: "No valid items after validation",
+        message: "All parsed items failed validation",
+        invalidSample: invalid.slice(0, 5),
+        requestId
+      });
+    }
+
+    // 5️⃣ FULL REPLACE IN SUPABASE
+    const client = getSupabaseClient();
+
+    // 5a. DELETE all existing rows
+    console.log(`🔄 [OMEN] Clearing wix_inventory_live...`, { requestId });
+
+    const { error: deleteError } = await client
+      .from('wix_inventory_live')
+      .delete()
+      .neq('sku', 'NEVER_MATCH_THIS'); // Delete all rows (Supabase requires a filter)
+
+    if (deleteError) {
+      console.error(`🔄 [OMEN] DELETE failed:`, deleteError, { requestId });
+      return res.status(500).json({
+        ok: false,
+        error: "Failed to clear existing inventory",
+        message: deleteError.message,
+        hint: "Ensure wix_inventory_live table exists. Run migration 003_wix_inventory_live.sql",
+        requestId
+      });
+    }
+
+    // 5b. INSERT all valid items
+    console.log(`🔄 [OMEN] Inserting ${valid.length} items...`, { requestId });
+
+    // Add synced_at timestamp
+    const itemsWithTimestamp = valid.map(item => ({
+      ...item,
+      synced_at: new Date().toISOString()
+    }));
+
+    const { data: insertedData, error: insertError } = await client
+      .from('wix_inventory_live')
+      .insert(itemsWithTimestamp)
+      .select();
+
+    if (insertError) {
+      console.error(`🔄 [OMEN] INSERT failed:`, insertError, { requestId });
+      return res.status(500).json({
+        ok: false,
+        error: "Failed to insert inventory items",
+        message: insertError.message,
+        itemsAttempted: valid.length,
+        requestId
+      });
+    }
+
+    const insertedCount = insertedData?.length || valid.length;
+    const duration = Date.now() - startTime;
+
+    console.log(`✅ [OMEN] WIX INVENTORY SYNC COMPLETE`, {
+      requestId,
+      insertedCount,
+      duration: `${duration}ms`
+    });
+
+    // 6️⃣ CLEAR OLD INVENTORY CACHE
+    // This forces OMEN to use fresh data on next request
+    clearInventory(STORE_ID);
+
+    return res.json({
+      ok: true,
+      message: `Successfully synced ${insertedCount} inventory items from Wix`,
+      // Required summary format
+      summary: {
+        rows_processed: summary.rows_processed,
+        rows_inserted: insertedCount,
+        rows_skipped: summary.rows_skipped,
+        skipped_breakdown: summary.skipped_breakdown
+      },
+      stats: {
+        ...stats,
+        itemsParsed: items.length,
+        itemsValid: valid.length,
+        itemsInvalid: invalid.length,
+        itemsInserted: insertedCount,
+        durationMs: duration
+      },
+      // Include skipped details for ops visibility
+      skipped: skipped.length > 0 ? skipped.slice(0, 50) : [],
+      requestId,
+      syncedAt: new Date().toISOString()
+    });
+
+  } catch (err) {
+    console.error(`❌ [OMEN] WIX INVENTORY SYNC FAILED`, {
+      requestId,
+      error: err.message,
+      stack: err.stack
+    });
+
+    return res.status(500).json({
+      ok: false,
+      error: "Sync failed",
+      message: err.message,
+      requestId
+    });
+  }
 });
 
 /* ---------- Chat Endpoint ---------- */
