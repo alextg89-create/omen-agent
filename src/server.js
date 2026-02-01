@@ -764,9 +764,15 @@ app.post("/chat", async (req, res) => {
       historyLength: conversationHistory.length,
     });
 
+    // ========== DIAGNOSTIC CHECKPOINT 1 ==========
+    console.log(`💬 [OMEN] [DIAG-1] Request received, requestId: ${requestId}`);
+
     // 1️⃣ INTENT DETECTION
     const needsInventory = detectInventoryIntent(message);
     const needsRecommendations = detectRecommendationIntent(message);
+
+    // ========== DIAGNOSTIC CHECKPOINT 2 ==========
+    console.log(`💬 [OMEN] [DIAG-2] Intent detected: needsInventory=${needsInventory}, needsRecommendations=${needsRecommendations}`);
 
     let inventoryData = null;
     let inventoryContext = null;
@@ -856,6 +862,8 @@ app.post("/chat", async (req, res) => {
 
     // 5️⃣ GENERATE LLM RESPONSE
     // GUARDRAIL: LLM is used ONLY for language expression, NOT reasoning
+    // ========== DIAGNOSTIC CHECKPOINT 3 ==========
+    console.log(`💬 [OMEN] [DIAG-3] About to generate LLM response`);
     let systemPrompt = "You are OMEN, an inventory intelligence assistant. Answer the user's question clearly and concisely.";
     let userPrompt = message;
 
@@ -894,12 +902,16 @@ Current Recommendations Available:
 
     let llmResponse = null;
 
+    // ========== DIAGNOSTIC CHECKPOINT 4 ==========
+    console.log(`💬 [OMEN] [DIAG-4] Calling LLM...`);
     try {
       llmResponse = await callLLM({
         system: systemPrompt,
         user: userPrompt,
         maxTokens: 500,
       });
+      // ========== DIAGNOSTIC CHECKPOINT 5 ==========
+      console.log(`💬 [OMEN] [DIAG-5] LLM call complete, response length: ${llmResponse?.length || 0}`);
     } catch (err) {
       console.error("[OMEN] LLM rate limit or failure - will use intelligent response fallback", {
         requestId,
@@ -909,6 +921,8 @@ Current Recommendations Available:
       llmResponse = null;
     }
 
+    // ========== DIAGNOSTIC CHECKPOINT 6 ==========
+    console.log(`💬 [OMEN] [DIAG-6] After LLM, llmResponse is: ${llmResponse === null ? 'null' : 'set'}`);
 
     // 6️⃣ INTELLIGENCE LAYER - Try insight-driven response first
     // CRITICAL: Chat MUST use the SAME snapshot object as UI
@@ -1057,12 +1071,15 @@ Current Recommendations Available:
     }
 
     // Use intelligent response if available, otherwise fallback to LLM/dev responses
+    // ========== DIAGNOSTIC CHECKPOINT 7 ==========
+    console.log(`💬 [OMEN] [DIAG-7] Choosing response: intelligentResponse=${!!intelligentResponse}, llmResponse=${!!llmResponse}`);
     if (intelligentResponse) {
       llmResponse = intelligentResponse;
       usingIntelligentResponse = true;
       console.log("💬 [OMEN] Using insight-driven response with proactive layer", { requestId });
     } else if (!llmResponse) {
       // FALLBACK FOR DEV MODE (no LLM and no intelligent response)
+      console.log(`💬 [OMEN] [DIAG-7a] Entering fallback path`);
       try {
         if (needsRecommendations && recommendations) {
           llmResponse = generateFallbackRecommendationResponseStrong(message, recommendations, inventoryContext);
@@ -1071,11 +1088,15 @@ Current Recommendations Available:
         } else {
           llmResponse = "How can I help you today?";
         }
+        console.log(`💬 [OMEN] [DIAG-7b] Fallback response set: ${llmResponse?.substring(0, 50)}`);
       } catch (fallbackErr) {
         console.error("[OMEN] Fallback generation failed", { requestId, error: fallbackErr.message });
         llmResponse = "I'm having trouble generating a response. Please try again.";
       }
     }
+
+    // ========== DIAGNOSTIC CHECKPOINT 8 ==========
+    console.log(`💬 [OMEN] [DIAG-8] Before proactive layer: llmResponse length=${llmResponse?.length || 0}`);
 
     // PROACTIVE LAYER: Append insight to LLM response if we have one stored
     if (!usingIntelligentResponse && chatContext?._proactiveInsight && llmResponse) {
@@ -1097,10 +1118,12 @@ Current Recommendations Available:
       });
     }
 
+    // ========== DIAGNOSTIC CHECKPOINT 9 ==========
+    console.log(`💬 [OMEN] [DIAG-9] After formatting: llmResponse=${llmResponse === null ? 'null' : llmResponse === undefined ? 'undefined' : 'set'}`);
     console.log("💬 [OMEN] Response formatted", {
       requestId,
       originalLength: llmResponse ? llmResponse.length : 0,
-      formattedLength: llmResponse.length
+      formattedLength: llmResponse?.length || 0
     });
 
     // 7️⃣ DETERMINE CONFIDENCE (use data freshness when available)
