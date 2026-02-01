@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>OMEN Admin - Weekly Snapshot</title>
+  <title>OMEN Vault</title>
   <style>
     * {
       margin: 0;
@@ -14,42 +14,165 @@
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
       padding: 20px;
-      background: #f5f5f5;
+      background: #1a1a1a;
+      color: #e0e0e0;
     }
 
     .container {
       max-width: 1200px;
       margin: 0 auto;
-      background: white;
+      background: #242424;
       padding: 30px;
       border-radius: 8px;
-      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+      box-shadow: 0 4px 20px rgba(0,0,0,0.4);
     }
 
     h1 {
       margin-bottom: 10px;
+      color: #fff;
     }
 
     .nav {
       margin-bottom: 30px;
+      border-bottom: 1px solid #333;
+      padding-bottom: 15px;
     }
 
     .nav a {
-      margin-right: 15px;
+      margin-right: 20px;
       text-decoration: none;
-      color: #0066cc;
+      color: #888;
+      font-weight: 500;
+      padding: 8px 0;
+      transition: color 0.2s;
+    }
+
+    .nav a:hover, .nav a.active {
+      color: #fff;
     }
 
     h2 {
       margin-top: 30px;
       margin-bottom: 15px;
+      color: #fff;
     }
 
     .description {
-      color: #666;
+      color: #888;
       margin-bottom: 20px;
     }
 
+    /* CONFIDENCE STRIP - TRUTH RENDERING */
+    .confidence-strip {
+      padding: 12px 16px;
+      border-radius: 4px;
+      margin-bottom: 20px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .confidence-high {
+      background: rgba(40, 167, 69, 0.15);
+      border: 1px solid #28a745;
+      color: #28a745;
+    }
+
+    .confidence-medium {
+      background: rgba(255, 152, 0, 0.15);
+      border: 1px solid #ff9800;
+      color: #ff9800;
+    }
+
+    .confidence-low {
+      background: rgba(220, 53, 69, 0.15);
+      border: 1px solid #dc3545;
+      color: #dc3545;
+    }
+
+    .confidence-unknown {
+      background: rgba(108, 117, 125, 0.15);
+      border: 1px solid #6c757d;
+      color: #6c757d;
+    }
+
+    /* WARNINGS PANEL - NON-DISMISSIBLE, ABOVE RESPONSE */
+    .warnings-panel {
+      background: rgba(220, 53, 69, 0.1);
+      border: 1px solid #dc3545;
+      border-radius: 4px;
+      padding: 16px;
+      margin-bottom: 20px;
+    }
+
+    .warnings-panel h4 {
+      color: #dc3545;
+      margin-bottom: 10px;
+      font-size: 14px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .warnings-panel ul {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+    }
+
+    .warnings-panel li {
+      color: #ff6b6b;
+      padding: 6px 0;
+      border-bottom: 1px solid rgba(220, 53, 69, 0.2);
+      font-size: 14px;
+    }
+
+    .warnings-panel li:last-child {
+      border-bottom: none;
+    }
+
+    /* DATA FRESHNESS INDICATOR */
+    .freshness-indicator {
+      font-size: 12px;
+      color: #888;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .freshness-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+    }
+
+    .freshness-fresh { background: #28a745; }
+    .freshness-aging { background: #ff9800; }
+    .freshness-stale { background: #dc3545; }
+    .freshness-unknown { background: #6c757d; }
+
+    /* REFUSAL STATE */
+    .refusal-state {
+      background: rgba(220, 53, 69, 0.1);
+      border: 2px solid #dc3545;
+      border-radius: 8px;
+      padding: 30px;
+      text-align: center;
+      margin: 20px 0;
+    }
+
+    .refusal-state h3 {
+      color: #dc3545;
+      margin-bottom: 15px;
+    }
+
+    .refusal-state p {
+      color: #888;
+      max-width: 500px;
+      margin: 0 auto;
+    }
+
+    /* FORM ELEMENTS */
     .form-group {
       margin-bottom: 20px;
     }
@@ -58,17 +181,26 @@
       display: block;
       margin-bottom: 5px;
       font-weight: 500;
+      color: #ccc;
     }
 
     input[type="email"],
     input[type="date"],
+    input[type="text"],
     select {
       width: 100%;
       max-width: 400px;
       padding: 10px;
-      border: 1px solid #ddd;
+      border: 1px solid #444;
       border-radius: 4px;
       font-size: 14px;
+      background: #1a1a1a;
+      color: #e0e0e0;
+    }
+
+    input:focus, select:focus {
+      outline: none;
+      border-color: #0066cc;
     }
 
     .button-group {
@@ -84,6 +216,7 @@
       font-size: 14px;
       cursor: pointer;
       transition: all 0.2s;
+      font-weight: 500;
     }
 
     button:disabled {
@@ -109,6 +242,7 @@
       background: #218838;
     }
 
+    /* STATUS MESSAGE */
     .status {
       margin-top: 20px;
       padding: 15px;
@@ -121,29 +255,30 @@
     }
 
     .status.success {
-      background: #d4edda;
-      border: 1px solid #c3e6cb;
-      color: #155724;
+      background: rgba(40, 167, 69, 0.15);
+      border: 1px solid #28a745;
+      color: #28a745;
     }
 
     .status.error {
-      background: #f8d7da;
-      border: 1px solid #f5c6cb;
-      color: #721c24;
+      background: rgba(220, 53, 69, 0.15);
+      border: 1px solid #dc3545;
+      color: #dc3545;
     }
 
     .status.loading {
-      background: #d1ecf1;
-      border: 1px solid #bee5eb;
-      color: #0c5460;
+      background: rgba(0, 102, 204, 0.15);
+      border: 1px solid #0066cc;
+      color: #6db3f2;
     }
 
+    /* SNAPSHOT PREVIEW */
     .snapshot-preview {
       margin-top: 30px;
       padding: 20px;
-      background: #f8f9fa;
+      background: #1a1a1a;
       border-radius: 4px;
-      border: 1px solid #dee2e6;
+      border: 1px solid #333;
       display: none;
     }
 
@@ -151,33 +286,44 @@
       display: block;
     }
 
+    /* METRICS GRID */
     .metrics-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
       gap: 15px;
       margin-top: 15px;
     }
 
     .metric-card {
       padding: 15px;
-      background: white;
+      background: #242424;
       border-radius: 4px;
-      border: 1px solid #dee2e6;
+      border: 1px solid #333;
     }
 
     .metric-label {
-      font-size: 12px;
-      color: #666;
+      font-size: 11px;
+      color: #888;
       text-transform: uppercase;
       margin-bottom: 5px;
+      letter-spacing: 0.5px;
     }
 
     .metric-value {
       font-size: 24px;
       font-weight: bold;
-      color: #333;
+      color: #fff;
     }
 
+    .metric-value.zero {
+      color: #ff9800;
+    }
+
+    .metric-value.null {
+      color: #dc3545;
+    }
+
+    /* RECOMMENDATIONS */
     .recommendations {
       margin-top: 20px;
     }
@@ -188,23 +334,23 @@
 
     .recommendation-section h4 {
       margin-bottom: 10px;
-      color: #333;
+      color: #ccc;
     }
 
     .recommendation-item {
-      padding: 10px;
-      background: white;
+      padding: 12px;
+      background: #1a1a1a;
       border-left: 3px solid #0066cc;
       margin-bottom: 10px;
       border-radius: 2px;
     }
 
     .recommendation-item strong {
-      color: #333;
+      color: #fff;
     }
 
     .recommendation-item small {
-      color: #666;
+      color: #888;
       display: block;
       margin-top: 5px;
     }
@@ -215,247 +361,274 @@
       margin-top: 5px;
     }
 
-    .scheduled-info {
-      background: #fff3cd;
-      border: 1px solid #ffeaa7;
-      padding: 15px;
+    /* CHAT */
+    #chatMessages {
+      background: #1a1a1a;
+      border: 1px solid #333;
       border-radius: 4px;
-      margin-top: 20px;
+      padding: 15px;
+      height: 400px;
+      overflow-y: auto;
+      margin-bottom: 15px;
     }
 
-    .date-controls {
-      display: flex;
-      gap: 15px;
-      align-items: end;
+    .chat-message {
+      margin-bottom: 15px;
+      padding: 10px 15px;
+      border-radius: 8px;
     }
 
-    .checkbox-group {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      margin-top: 10px;
+    .chat-message.user {
+      background: #0066cc;
+      color: white;
+      margin-left: 60px;
+      text-align: right;
     }
 
-    .checkbox-group input[type="checkbox"] {
-      width: auto;
+    .chat-message.assistant {
+      background: #333;
+      color: #e0e0e0;
+      margin-right: 60px;
+    }
+
+    .chat-role {
+      font-size: 11px;
+      font-weight: bold;
+      margin-bottom: 5px;
+      opacity: 0.8;
+    }
+
+    .chat-content {
+      white-space: pre-wrap;
+      line-height: 1.5;
+    }
+
+    .chat-meta {
+      margin-top: 8px;
+      padding-top: 8px;
+      border-top: 1px solid rgba(255,255,255,0.1);
+      font-size: 11px;
+    }
+
+    .section {
+      display: none;
+    }
+
+    .section.active {
+      display: block;
     }
   </style>
 </head>
 <body>
   <div class="container">
-    <h1>OMEN Admin</h1>
+    <h1>OMEN Vault</h1>
+    <p class="description">Operations Intelligence. Truth only.</p>
 
     <div class="nav">
-      <a href="#" onclick="showSection('chat'); return false;">Chat</a>
-      <a href="#" onclick="showSection('snapshot'); return false;">Weekly Snapshot</a>
+      <a href="#" onclick="showSection('chat'); return false;" id="navChat">Chat</a>
+      <a href="#" onclick="showSection('snapshot'); return false;" id="navSnapshot" class="active">Snapshot</a>
     </div>
 
     <!-- CHAT SECTION -->
-    <div id="chatSection" class="section" style="display: none;">
-      <h2 id="chat">Chat with OMEN</h2>
-      <p class="description">Ask OMEN about your inventory, recommendations, or business metrics.</p>
+    <div id="chatSection" class="section">
+      <h2>Ask OMEN</h2>
 
-      <div id="chatMessages" style="background: #f9f9f9; border: 1px solid #ddd; border-radius: 4px; padding: 15px; height: 400px; overflow-y: auto; margin-bottom: 15px;">
-        <div style="color: #666; text-align: center; margin-top: 170px;">Start a conversation with OMEN...</div>
+      <!-- CHAT WARNINGS (rendered above response) -->
+      <div id="chatWarnings" class="warnings-panel" style="display: none;">
+        <h4>Warnings</h4>
+        <ul id="chatWarningsList"></ul>
+      </div>
+
+      <!-- CHAT CONFIDENCE STRIP -->
+      <div id="chatConfidence" class="confidence-strip confidence-unknown" style="display: none;">
+        <span id="chatConfidenceLabel">Unknown</span>
+        <span class="freshness-indicator">
+          <span id="chatFreshnessDot" class="freshness-dot freshness-unknown"></span>
+          <span id="chatFreshnessText">No data</span>
+        </span>
+      </div>
+
+      <div id="chatMessages">
+        <div style="color: #666; text-align: center; margin-top: 170px;">Ask OMEN about your inventory...</div>
       </div>
 
       <div style="display: flex; gap: 10px;">
-        <input type="text" id="chatInput" placeholder="Ask OMEN anything about your inventory..." style="flex: 1; padding: 10px; border: 1px solid #ddd; border-radius: 4px;" onkeypress="if(event.key==='Enter') sendChatMessage()">
+        <input type="text" id="chatInput" placeholder="What should I promote this week?" onkeypress="if(event.key==='Enter') sendChatMessage()">
         <button onclick="sendChatMessage()" class="btn-primary">Send</button>
       </div>
-
-      <p class="help-text" style="margin-top: 10px;">
-        Try asking: "What should I promote this week?" or "Show me low stock items" or "What's my highest margin product?"
-      </p>
     </div>
 
     <!-- SNAPSHOT SECTION -->
-    <div id="snapshotSection" class="section">
-      <h2 id="weekly-snapshot">Weekly Operations Snapshot</h2>
-      <p class="description">Automated weekly intelligence generated by OMEN.</p>
+    <div id="snapshotSection" class="section active">
+      <h2>Operations Snapshot</h2>
 
-    <!-- FORM SECTION -->
-    <div class="form-group">
-      <label for="emailInput">Client Email Address</label>
-      <input type="email" id="emailInput" placeholder="user@example.com" value="alexfriedman89@gmail.com">
-    </div>
-
-    <div class="date-controls">
-      <div class="form-group" style="flex: 1;">
-        <label for="dateInput">Snapshot Date (Optional)</label>
-        <input type="date" id="dateInput" max="">
-        <div class="help-text">Leave empty for current snapshot. Select a past date for historical snapshot.</div>
+      <!-- SNAPSHOT WARNINGS (rendered above everything) -->
+      <div id="snapshotWarnings" class="warnings-panel" style="display: none;">
+        <h4>Warnings</h4>
+        <ul id="snapshotWarningsList"></ul>
       </div>
 
-      <div class="form-group" style="flex: 1;">
+      <!-- SNAPSHOT CONFIDENCE STRIP -->
+      <div id="snapshotConfidence" class="confidence-strip confidence-unknown" style="display: none;">
+        <span id="snapshotConfidenceLabel">Unknown</span>
+        <span class="freshness-indicator">
+          <span id="snapshotFreshnessDot" class="freshness-dot freshness-unknown"></span>
+          <span id="snapshotFreshnessText">No data</span>
+        </span>
+      </div>
+
+      <div class="form-group">
         <label for="timeframeInput">Timeframe</label>
         <select id="timeframeInput">
           <option value="weekly">Weekly</option>
           <option value="daily">Daily</option>
         </select>
       </div>
-    </div>
 
-    <div class="checkbox-group">
-      <input type="checkbox" id="useHistoricalMode">
-      <label for="useHistoricalMode" style="margin: 0;">Enable Historical Mode (use selected date)</label>
-    </div>
+      <div class="button-group">
+        <button id="generateBtn" class="btn-primary" onclick="generateSnapshot()">Generate Snapshot</button>
+      </div>
 
-    <div class="button-group">
-      <button id="generateBtn" class="btn-primary">Generate Snapshot</button>
-      <button id="sendBtn" class="btn-secondary" disabled>Send Snapshot Now</button>
-    </div>
+      <div id="statusMessage" class="status"></div>
 
-    <p class="help-text">Generate creates a preview. Send delivers the snapshot to the provided email address.</p>
+      <!-- REFUSAL STATE (shown when authority unavailable) -->
+      <div id="refusalState" class="refusal-state" style="display: none;">
+        <h3>Cannot Provide Intelligence</h3>
+        <p id="refusalMessage">Authority unavailable.</p>
+      </div>
 
-    <!-- STATUS MESSAGE -->
-    <div id="statusMessage" class="status"></div>
-
-    <!-- SNAPSHOT PREVIEW -->
-    <div id="snapshotPreview" class="snapshot-preview">
-      <h3>Snapshot Preview</h3>
-      <div id="snapshotContent"></div>
-    </div>
-
-      <!-- SCHEDULED SNAPSHOTS -->
-      <h2>Scheduled Snapshots</h2>
-      <div class="scheduled-info">
-        <strong>Last run:</strong> <span id="lastRun">Not configured</span><br>
-        <strong>Next run:</strong> <span id="nextRun">Configure cron job in Railway</span><br>
-        <p style="margin-top: 10px; font-size: 14px;">Scheduled jobs run automatically via Railway cron. Manual triggers coming soon.</p>
+      <!-- SNAPSHOT PREVIEW -->
+      <div id="snapshotPreview" class="snapshot-preview">
+        <div id="snapshotContent"></div>
       </div>
     </div>
-    <!-- End Snapshot Section -->
-
   </div>
 
   <script>
     // ============================================================================
     // CONFIGURATION
     // ============================================================================
-
-    // Use same domain for API calls (single-domain deployment)
     const BACKEND_URL = window.location.origin;
 
     // ============================================================================
-    // STATE MANAGEMENT
+    // STATE
     // ============================================================================
-
     let currentSnapshot = null;
-    let isGenerating = false;
-    let isSending = false;
+    let inventoryLastSyncedAt = null;
 
     // ============================================================================
-    // DOM ELEMENTS
+    // TRUTH RENDERING UTILITIES
     // ============================================================================
 
-    const emailInput = document.getElementById('emailInput');
-    const dateInput = document.getElementById('dateInput');
-    const timeframeInput = document.getElementById('timeframeInput');
-    const useHistoricalMode = document.getElementById('useHistoricalMode');
-    const generateBtn = document.getElementById('generateBtn');
-    const sendBtn = document.getElementById('sendBtn');
-    const statusMessage = document.getElementById('statusMessage');
-    const snapshotPreview = document.getElementById('snapshotPreview');
-    const snapshotContent = document.getElementById('snapshotContent');
-    const runScheduledBtn = document.getElementById('runScheduledBtn');
+    /**
+     * Render confidence strip - VERBATIM from response
+     * No defaults. No inference. Truth only.
+     */
+    function renderConfidence(elementPrefix, confidence, dataFreshness) {
+      const strip = document.getElementById(`${elementPrefix}Confidence`);
+      const label = document.getElementById(`${elementPrefix}ConfidenceLabel`);
+      const dot = document.getElementById(`${elementPrefix}FreshnessDot`);
+      const text = document.getElementById(`${elementPrefix}FreshnessText`);
 
-    // ============================================================================
-    // INITIALIZATION
-    // ============================================================================
+      if (!strip) return;
 
-    // Set max date to today
-    const today = new Date().toISOString().split('T')[0];
-    dateInput.max = today;
+      // Remove all confidence classes
+      strip.classList.remove('confidence-high', 'confidence-medium', 'confidence-low', 'confidence-unknown');
+      dot.classList.remove('freshness-fresh', 'freshness-aging', 'freshness-stale', 'freshness-unknown');
 
-    // Disable date input by default
-    dateInput.disabled = true;
-    timeframeInput.disabled = true;
-
-    // Toggle historical mode
-    useHistoricalMode.addEventListener('change', (e) => {
-      dateInput.disabled = !e.target.checked;
-      timeframeInput.disabled = !e.target.checked;
-
-      if (!e.target.checked) {
-        dateInput.value = '';
+      // Render confidence VERBATIM
+      if (confidence === 'high') {
+        strip.classList.add('confidence-high');
+        label.textContent = 'HIGH CONFIDENCE';
+      } else if (confidence === 'medium') {
+        strip.classList.add('confidence-medium');
+        label.textContent = 'MEDIUM CONFIDENCE';
+      } else if (confidence === 'low') {
+        strip.classList.add('confidence-low');
+        label.textContent = 'LOW CONFIDENCE';
+      } else {
+        strip.classList.add('confidence-unknown');
+        label.textContent = 'UNKNOWN';
       }
-    });
 
-    // AUTO-FETCH: Load latest snapshot on page load (fallback only)
-    let hasUserGeneratedSnapshot = false;
+      // Render freshness
+      if (dataFreshness) {
+        const status = dataFreshness.status || 'unknown';
+        if (status === 'fresh') {
+          dot.classList.add('freshness-fresh');
+          text.textContent = 'Data fresh';
+        } else if (status === 'aging') {
+          dot.classList.add('freshness-aging');
+          text.textContent = `Synced ${dataFreshness.age_hours || '?'}h ago`;
+        } else if (status === 'stale') {
+          dot.classList.add('freshness-stale');
+          text.textContent = `Stale (${dataFreshness.age_hours || '?'}h ago)`;
+        } else {
+          dot.classList.add('freshness-unknown');
+          text.textContent = 'Sync unknown';
+        }
+      } else {
+        dot.classList.add('freshness-unknown');
+        text.textContent = 'No freshness data';
+      }
 
-    async function loadLatestSnapshot() {
-      // Skip if user already generated a snapshot this session
-      if (hasUserGeneratedSnapshot) {
-        console.log('[UI] Skipping auto-load - user already generated snapshot');
+      strip.style.display = 'flex';
+    }
+
+    /**
+     * Render warnings - ALWAYS VISIBLE, NOT DISMISSIBLE, ABOVE RESPONSE
+     */
+    function renderWarnings(elementPrefix, warnings) {
+      const panel = document.getElementById(`${elementPrefix}Warnings`);
+      const list = document.getElementById(`${elementPrefix}WarningsList`);
+
+      if (!panel || !list) return;
+
+      if (!warnings || warnings.length === 0) {
+        panel.style.display = 'none';
         return;
       }
 
-      try {
-        showStatus('Loading latest snapshot...', 'loading');
-        const response = await fetch(`${BACKEND_URL}/snapshot/history/last/1`);
+      list.innerHTML = '';
+      warnings.forEach(warning => {
+        const li = document.createElement('li');
+        li.textContent = warning;
+        list.appendChild(li);
+      });
 
-        if (!response.ok) {
-          console.warn('[UI] Snapshot history request failed:', response.status);
-          showStatus('No existing snapshots. Click "Generate Snapshot" to create one.', 'loading');
-          return;
-        }
+      panel.style.display = 'block';
+    }
 
-        const data = await response.json();
-
-        console.log('[UI] Raw snapshot response:', JSON.stringify(data, null, 2));
-
-        // Double-check user hasn't generated in the meantime
-        if (hasUserGeneratedSnapshot) {
-          console.log('[UI] Skipping display - user generated snapshot during fetch');
-          return;
-        }
-
-        // DEFENSIVE: Validate snapshot structure before displaying
-        if (data.ok && data.snapshots && data.snapshots.length > 0) {
-          const latest = data.snapshots[0];
-
-          // Verify snapshot has minimum required structure
-          if (!latest.snapshot || typeof latest.snapshot !== 'object') {
-            console.warn('[UI] Invalid snapshot structure in history:', latest);
-            showStatus('No valid snapshots found. Click "Generate Snapshot" to create one.', 'loading');
-            return;
-          }
-
-          currentSnapshot = latest.snapshot;
-          displaySnapshot(latest.snapshot, true);
-          showStatus('Latest snapshot loaded from history', 'success');
-        } else {
-          showStatus('No existing snapshots. Click "Generate Snapshot" to create one.', 'loading');
-        }
-      } catch (err) {
-        console.error('[UI] Failed to load latest snapshot:', err);
-        showStatus('Click "Generate Snapshot" to create a new snapshot.', 'loading');
+    /**
+     * Render value - ZERO vs NULL distinction
+     * Zero = fact (render as "0")
+     * Null = absence (render as refusal marker)
+     */
+    function renderValue(value, format = 'number') {
+      // NULL = ABSENCE → Refusal marker
+      if (value === null || value === undefined) {
+        return '<span class="metric-value null">—</span>';
       }
-    }
 
-    // Load on page init
-    loadLatestSnapshot();
+      // ZERO = FACT → Render as zero
+      if (value === 0) {
+        if (format === 'currency') {
+          return '<span class="metric-value zero">$0.00</span>';
+        }
+        if (format === 'percent') {
+          return '<span class="metric-value zero">0%</span>';
+        }
+        return '<span class="metric-value zero">0</span>';
+      }
 
-    // ============================================================================
-    // UTILITY FUNCTIONS
-    // ============================================================================
-
-    function showStatus(message, type = 'loading') {
-      statusMessage.textContent = message;
-      statusMessage.className = `status show ${type}`;
-    }
-
-    function hideStatus() {
-      statusMessage.className = 'status';
-    }
-
-    function disableButtons(generating = false, sending = false) {
-      generateBtn.disabled = generating;
-      sendBtn.disabled = sending || !currentSnapshot;
-      isGenerating = generating;
-      isSending = sending;
+      // Valid value → Render normally
+      if (format === 'currency') {
+        return `<span class="metric-value">${formatCurrency(value)}</span>`;
+      }
+      if (format === 'percent') {
+        return `<span class="metric-value">${formatPercent(value)}</span>`;
+      }
+      return `<span class="metric-value">${value}</span>`;
     }
 
     function formatCurrency(value) {
@@ -469,12 +642,70 @@
     function formatPercent(value) {
       if (value === null || value === undefined) return '—';
       if (typeof value !== 'number' || Number.isNaN(value)) return '—';
-      return `${value.toFixed(2)}%`;
+      return `${value.toFixed(1)}%`;
     }
 
-    function formatConfidence(value) {
-      if (typeof value !== 'number' || isNaN(value)) return '—';
-      return `${(value * 100).toFixed(0)}%`;
+    /**
+     * Validate snapshot freshness against inventory sync
+     * Snapshot must be generated AFTER inventory sync
+     */
+    function validateSnapshotFreshness(snapshot) {
+      if (!snapshot) return { valid: false, reason: 'No snapshot' };
+
+      const dataFreshness = snapshot.data_freshness;
+      if (!dataFreshness) {
+        return { valid: false, reason: 'No freshness data' };
+      }
+
+      const syncedAt = dataFreshness.inventory_last_synced_at;
+      if (!syncedAt) {
+        return { valid: false, reason: 'Inventory never synced' };
+      }
+
+      const generatedAt = snapshot.generatedAt;
+      if (!generatedAt) {
+        return { valid: false, reason: 'Snapshot has no timestamp' };
+      }
+
+      const syncTime = new Date(syncedAt);
+      const genTime = new Date(generatedAt);
+
+      if (genTime < syncTime) {
+        return {
+          valid: false,
+          reason: `Snapshot generated BEFORE inventory sync. Regenerate snapshot.`
+        };
+      }
+
+      return { valid: true, reason: null };
+    }
+
+    // ============================================================================
+    // STATUS
+    // ============================================================================
+
+    function showStatus(message, type = 'loading') {
+      const el = document.getElementById('statusMessage');
+      el.textContent = message;
+      el.className = `status show ${type}`;
+    }
+
+    function hideStatus() {
+      document.getElementById('statusMessage').className = 'status';
+    }
+
+    // ============================================================================
+    // REFUSAL STATE
+    // ============================================================================
+
+    function showRefusal(message) {
+      document.getElementById('refusalMessage').textContent = message;
+      document.getElementById('refusalState').style.display = 'block';
+      document.getElementById('snapshotPreview').classList.remove('show');
+    }
+
+    function hideRefusal() {
+      document.getElementById('refusalState').style.display = 'none';
     }
 
     // ============================================================================
@@ -483,100 +714,60 @@
 
     async function generateSnapshot() {
       try {
-        // Prevent concurrent requests
-        if (isGenerating) {
-          showStatus('Generation already in progress...', 'loading');
-          return;
-        }
-
-        disableButtons(true, false);
         showStatus('Generating snapshot...', 'loading');
-        snapshotPreview.classList.remove('show');
+        hideRefusal();
+        document.getElementById('snapshotPreview').classList.remove('show');
 
-        // Build request body
-        const requestBody = {
-          timeframe: timeframeInput.value
-        };
-
-        // Only include asOfDate if historical mode is enabled and date is selected
-        if (useHistoricalMode.checked && dateInput.value) {
-          requestBody.asOfDate = dateInput.value;
-        }
-
-        console.log('Generating snapshot with params:', requestBody);
+        const timeframe = document.getElementById('timeframeInput').value;
 
         const response = await fetch(`${BACKEND_URL}/snapshot/generate`, {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(requestBody)
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ timeframe })
         });
 
         const data = await response.json();
 
-        if (!response.ok) {
-          throw new Error(data.error || data.message || 'Failed to generate snapshot');
+        // AUTHORITY ERROR → Show refusal
+        if (!data.ok && data.error === 'authority_unavailable') {
+          renderConfidence('snapshot', 'low', null);
+          renderWarnings('snapshot', data.warnings || [data.message]);
+          showRefusal(data.message);
+          showStatus('Authority unavailable', 'error');
+          return;
         }
 
-        if (data.ok) {
-          // DEFENSIVE: Validate snapshot exists and is an object
-          if (!data.snapshot || typeof data.snapshot !== 'object') {
-            throw new Error('Invalid snapshot response from server');
-          }
+        if (!data.ok) {
+          throw new Error(data.error || data.message || 'Generation failed');
+        }
 
-          // Mark that user generated - prevents auto-load from overwriting
-          hasUserGeneratedSnapshot = true;
-          currentSnapshot = data.snapshot;
+        const snapshot = data.snapshot;
+        if (!snapshot) {
+          throw new Error('No snapshot in response');
+        }
 
-          console.log('[UI] Generate response snapshot:', JSON.stringify(data.snapshot, null, 2));
+        currentSnapshot = snapshot;
 
-          // DEFENSIVE: Calculate age with fallback for missing generatedAt
-          const totalRecs = (data.snapshot.recommendations?.promotions?.length || 0) +
-                           (data.snapshot.recommendations?.pricing?.length || 0) +
-                           (data.snapshot.recommendations?.inventory?.length || 0);
-
-          const now = new Date();
-          const generatedAt = data.snapshot.generatedAt;
-          const generated = generatedAt ? new Date(generatedAt) : now;
-          const ageMinutes = generatedAt ? Math.floor((now - generated) / 1000 / 60) : 0;
-
-          // Debug logging
-          console.log('Snapshot loaded:', {
-            generatedAt: generatedAt || 'not set',
-            ageMinutes: ageMinutes,
-            fromCache: data.fromCache,
-            totalRecommendations: totalRecs,
-            promotions: data.snapshot.recommendations?.promotions?.length || 0,
-            pricing: data.snapshot.recommendations?.pricing?.length || 0,
-            inventory: data.snapshot.recommendations?.inventory?.length || 0
-          });
-
-          displaySnapshot(data.snapshot, data.fromCache);
-
-          // Staleness-aware status message
-          let statusMsg = 'Snapshot loaded successfully';
-          if (!generatedAt || ageMinutes < 5) {
-            statusMsg = 'Fresh snapshot generated successfully';
-          } else if (ageMinutes < 60) {
-            statusMsg = `Snapshot loaded (${ageMinutes} minutes old)`;
-          } else if (ageMinutes < 1440) {
-            statusMsg = `Snapshot loaded (${Math.floor(ageMinutes / 60)} hours old)`;
-          } else {
-            statusMsg = `⚠️ Stale snapshot loaded (${Math.floor(ageMinutes / 1440)} days old)`;
-          }
-
-          const recStatus = totalRecs > 0 ? ` - ${totalRecs} action${totalRecs > 1 ? 's' : ''} identified` : ' - no actions needed';
-          showStatus(`${statusMsg}${recStatus}`, ageMinutes > 60 ? 'error' : 'success');
-          disableButtons(false, false);
+        // FRESHNESS VALIDATION
+        const freshness = validateSnapshotFreshness(snapshot);
+        if (!freshness.valid) {
+          renderWarnings('snapshot', [freshness.reason, ...(snapshot.warnings || [])]);
         } else {
-          throw new Error(data.error || 'Unknown error');
+          renderWarnings('snapshot', snapshot.warnings || []);
         }
+
+        // Render confidence VERBATIM from response
+        renderConfidence('snapshot', snapshot.confidence, snapshot.data_freshness);
+
+        // Display snapshot
+        displaySnapshot(snapshot);
+        showStatus('Snapshot generated', 'success');
+
       } catch (error) {
-        console.error('Snapshot generation error:', error);
+        console.error('Snapshot error:', error);
         showStatus(`Error: ${error.message}`, 'error');
-        disableButtons(false, false);
-        currentSnapshot = null;
+        renderConfidence('snapshot', 'low', null);
+        renderWarnings('snapshot', [error.message]);
       }
     }
 
@@ -584,146 +775,82 @@
     // SNAPSHOT DISPLAY
     // ============================================================================
 
-    function displaySnapshot(snapshot, fromCache = false) {
-      // DEFENSIVE: Guard against missing snapshot or properties
+    function displaySnapshot(snapshot) {
       if (!snapshot) {
-        console.error('[UI] displaySnapshot called with null/undefined snapshot');
-        showStatus('Error: No snapshot data to display', 'error');
+        showRefusal('No snapshot data');
         return;
       }
 
-      // DEFENSIVE: Destructure with fallbacks for all optional properties
       const metrics = snapshot.metrics || {};
       const recommendations = snapshot.recommendations || { promotions: [], pricing: [], inventory: [] };
-      const { asOfDate, timeframe, generatedAt } = snapshot;
       const velocity = snapshot.velocity || {};
       const temporal = snapshot.temporal || {};
 
-      // DEFENSIVE: Safe check for real data - velocity may be empty object
-      const hasRealData = temporal.hasRealData === true || (typeof velocity.orderCount === 'number' && velocity.orderCount > 0);
-
-      // STALENESS DETECTION based on generatedAt timestamp
-      // DEFENSIVE: Handle missing or invalid generatedAt
-      const now = new Date();
-      const generated = generatedAt ? new Date(generatedAt) : now;
-      const isValidDate = generatedAt && !isNaN(generated.getTime());
-      const ageMinutes = isValidDate ? Math.floor((now - generated) / 1000 / 60) : 0;
-      const ageHours = Math.floor(ageMinutes / 60);
-      const ageDays = Math.floor(ageHours / 24);
-
-      // Determine freshness
-      let freshness, freshnessColor, freshnessBg, freshnessLabel, showWarning;
-
-      if (!isValidDate || ageMinutes < 5) {
-        freshness = 'fresh';
-        freshnessColor = '#28a745';
-        freshnessBg = '#d4edda';
-        freshnessLabel = 'Fresh (just generated)';
-        showWarning = false;
-      } else if (ageHours < 1) {
-        freshness = 'recent';
-        freshnessColor = '#28a745';
-        freshnessBg = '#d4edda';
-        freshnessLabel = `Fresh (${ageMinutes} minutes old)`;
-        showWarning = false;
-      } else if (ageHours < 24) {
-        freshness = 'aging';
-        freshnessColor = '#ff9800';
-        freshnessBg = '#fff3cd';
-        freshnessLabel = `Aging (${ageHours} hour${ageHours > 1 ? 's' : ''} old)`;
-        showWarning = true;
-      } else {
-        freshness = 'stale';
-        freshnessColor = '#dc3545';
-        freshnessBg = '#f8d7da';
-        freshnessLabel = `Stale (${ageDays} day${ageDays > 1 ? 's' : ''} old)`;
-        showWarning = true;
-      }
-
-      const dateInfo = asOfDate ? ` - ${new Date(asOfDate + 'T00:00:00Z').toLocaleDateString()}` : '';
-      const generatedInfo = isValidDate ? ` on ${generated.toLocaleString()}` : '';
-
-      const refreshButton = showWarning ? `<button onclick="generateSnapshot()" style="margin-left: 10px; padding: 5px 10px; font-size: 12px; cursor: pointer; background: #0066cc; color: white; border: none; border-radius: 4px;">Refresh Now</button>` : '';
+      const hasRealData = temporal.hasRealData === true || velocity.orderCount > 0;
 
       let html = `
-        <div style="margin-bottom: 20px; padding: 10px; background: ${freshnessBg}; border-radius: 4px; border: 1px solid ${freshnessColor};">
-          <div style="display: flex; justify-content: space-between; align-items: center;">
-            <div>
-              <strong>Timeframe:</strong> ${timeframe.charAt(0).toUpperCase() + timeframe.slice(1)}${dateInfo}
-            </div>
-            <div>
-              <span style="color: ${freshnessColor}; font-weight: 500;">${freshnessLabel}</span>
-              ${refreshButton}
-            </div>
-          </div>
-          <div style="margin-top: 5px; font-size: 12px; color: #666;">
-            Generated${generatedInfo}
-          </div>
-          ${showWarning ? '<div style="margin-top: 8px; font-size: 13px; color: #856404;">⚠️ This snapshot may not reflect current inventory. Click "Refresh Now" to get latest data.</div>' : ''}
-        </div>
+        <h3 style="color: #fff; margin-bottom: 20px;">${snapshot.timeframe?.charAt(0).toUpperCase()}${snapshot.timeframe?.slice(1) || ''} Snapshot</h3>
+      `;
 
-        ${hasRealData ? `
-        <h4>Sales (${timeframe || 'Period'})</h4>
-        <div class="metrics-grid">
+      // METRICS GRID - with ZERO vs NULL distinction
+      html += '<div class="metrics-grid">';
+
+      if (hasRealData) {
+        html += `
           <div class="metric-card">
             <div class="metric-label">Orders</div>
-            <div class="metric-value">${velocity.orderCount || 0}</div>
+            ${renderValue(velocity.orderCount)}
           </div>
           <div class="metric-card">
             <div class="metric-label">SKUs Sold</div>
-            <div class="metric-value">${velocity.uniqueSKUs || 0}</div>
+            ${renderValue(velocity.uniqueSKUs)}
           </div>
-          <div class="metric-card">
-            <div class="metric-label">Total Items</div>
-            <div class="metric-value">${metrics.totalItems ?? '—'}</div>
-          </div>
-          <div class="metric-card">
-            <div class="metric-label">Avg Margin</div>
-            <div class="metric-value">${formatPercent(metrics.averageMargin)}</div>
-          </div>
+        `;
+      }
+
+      html += `
+        <div class="metric-card">
+          <div class="metric-label">Total Items</div>
+          ${renderValue(metrics.totalItems)}
         </div>
-        ` : `
-        <h4>Inventory Estimates</h4>
-        <div class="metrics-grid">
-          <div class="metric-card">
-            <div class="metric-label">Total Items</div>
-            <div class="metric-value">${metrics.totalItems ?? '—'}</div>
-          </div>
-          <div class="metric-card">
-            <div class="metric-label">Avg Margin</div>
-            <div class="metric-value">${formatPercent(metrics.averageMargin)}</div>
-          </div>
+        <div class="metric-card">
+          <div class="metric-label">Avg Margin</div>
+          ${renderValue(metrics.averageMargin, 'percent')}
+        </div>
+      `;
+
+      if (!hasRealData) {
+        html += `
           <div class="metric-card">
             <div class="metric-label">Est. Revenue</div>
-            <div class="metric-value">${formatCurrency(metrics.totalRevenue)}</div>
+            ${renderValue(metrics.totalRevenue, 'currency')}
           </div>
           <div class="metric-card">
             <div class="metric-label">Est. Profit</div>
-            <div class="metric-value">${formatCurrency(metrics.totalProfit)}</div>
+            ${renderValue(metrics.totalProfit, 'currency')}
           </div>
-        </div>
-        <div style="font-size: 12px; color: #666; margin-top: 8px;">
-          No order data available. Showing inventory-based estimates.
-        </div>
-        `}
-      `;
+        `;
+      }
 
-      // Recommendations - DEFENSIVE: ensure arrays exist
+      html += '</div>';
+
+      // RECOMMENDATIONS
       const promotions = recommendations.promotions || [];
       const pricing = recommendations.pricing || [];
       const inventory = recommendations.inventory || [];
+      const totalRecs = promotions.length + pricing.length + inventory.length;
 
-      html += '<div class="recommendations">';
-      html += '<h4>Recommendations</h4>';
+      html += '<div class="recommendations" style="margin-top: 30px;">';
+      html += '<h4 style="color: #fff;">Recommendations</h4>';
 
       if (promotions.length > 0) {
         html += `
           <div class="recommendation-section">
-            <h4>🎯 Promotion Opportunities (${promotions.length})</h4>
+            <h4>Promotion Opportunities (${promotions.length})</h4>
             ${promotions.slice(0, 5).map(rec => `
               <div class="recommendation-item">
-                <strong>${rec.name || 'Unknown'}</strong>: ${rec.reason || 'No reason provided'}
-                <small>Action: ${rec.action || '—'} | Margin: ${formatPercent(rec.triggeringMetrics?.margin)} | Stock: ${rec.triggeringMetrics?.quantity ?? '—'} | Confidence: ${formatConfidence(rec.confidence)}</small>
+                <strong>${rec.name || 'Unknown'}</strong>: ${rec.reason || 'No reason'}
+                <small>Action: ${rec.action || '—'}</small>
               </div>
             `).join('')}
           </div>
@@ -733,11 +860,11 @@
       if (pricing.length > 0) {
         html += `
           <div class="recommendation-section">
-            <h4>💰 Pricing Actions (${pricing.length})</h4>
+            <h4>Pricing Actions (${pricing.length})</h4>
             ${pricing.slice(0, 5).map(rec => `
               <div class="recommendation-item">
-                <strong>${rec.name || 'Unknown'}</strong>: ${rec.reason || 'No reason provided'}
-                <small>Action: ${rec.action || '—'} | Current Margin: ${formatPercent(rec.triggeringMetrics?.margin)} | Confidence: ${formatConfidence(rec.confidence)}</small>
+                <strong>${rec.name || 'Unknown'}</strong>: ${rec.reason || 'No reason'}
+                <small>Action: ${rec.action || '—'}</small>
               </div>
             `).join('')}
           </div>
@@ -747,96 +874,29 @@
       if (inventory.length > 0) {
         html += `
           <div class="recommendation-section">
-            <h4>📦 Inventory Actions (${inventory.length})</h4>
-            ${inventory.slice(0, 5).map(rec => {
-              const recMetrics = rec.triggeringMetrics || {};
-              const signalBadge = rec.signalType ? `<span style="background: #ff6b6b; color: white; padding: 2px 6px; border-radius: 3px; font-size: 10px;">${rec.signalType}</span>` : '';
-              const priority = rec.priorityScore ? ` | Priority: ${rec.priorityScore}` : '';
-              const depletion = recMetrics.daysUntilDepletion ? ` | ${recMetrics.daysUntilDepletion} days left` : '';
-              const rate = recMetrics.depletionRate ? ` | ${recMetrics.depletionRate} units/day` : '';
-
-              return `
+            <h4>Inventory Actions (${inventory.length})</h4>
+            ${inventory.slice(0, 5).map(rec => `
               <div class="recommendation-item">
-                <strong>${rec.name || 'Unknown'}</strong> ${signalBadge}: ${rec.reason || 'No reason provided'}
-                <small>Action: ${rec.action || '—'} | Stock: ${recMetrics.currentQuantity || recMetrics.quantity || '—'}${depletion}${rate}${priority} | Confidence: ${formatConfidence(rec.confidence)}</small>
+                <strong>${rec.name || 'Unknown'}</strong>: ${rec.reason || 'No reason'}
+                <small>Action: ${rec.action || '—'}</small>
               </div>
-            `}).join('')}
+            `).join('')}
           </div>
         `;
       }
 
-      // Calculate total recommendations (using safe local variables)
-      const totalRecs = promotions.length + pricing.length + inventory.length;
-
       if (totalRecs === 0) {
-        html += '<p style="color: #666; padding: 15px; background: #f8f9fa; border-radius: 4px;">No urgent actions identified. Inventory metrics are stable.</p>';
-      } else {
-        html += `<p style="color: #28a745; font-weight: 500; margin-top: 15px;">✓ ${totalRecs} action item${totalRecs > 1 ? 's' : ''} identified</p>`;
+        html += '<p style="color: #888; padding: 15px; background: #1a1a1a; border-radius: 4px;">No actions identified.</p>';
       }
 
       html += '</div>';
 
-      snapshotContent.innerHTML = html;
-      snapshotPreview.classList.add('show');
+      document.getElementById('snapshotContent').innerHTML = html;
+      document.getElementById('snapshotPreview').classList.add('show');
     }
 
     // ============================================================================
-    // SEND SNAPSHOT
-    // ============================================================================
-
-    async function sendSnapshot() {
-      try {
-        const email = emailInput.value.trim();
-
-        if (!email) {
-          showStatus('Please enter an email address', 'error');
-          return;
-        }
-
-        if (!currentSnapshot) {
-          showStatus('Please generate a snapshot first', 'error');
-          return;
-        }
-
-        if (isSending) {
-          showStatus('Send already in progress...', 'loading');
-          return;
-        }
-
-        disableButtons(false, true);
-        showStatus('Preparing email...', 'loading');
-
-        const response = await fetch(`${BACKEND_URL}/snapshot/send`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ email })
-        });
-
-        const data = await response.json();
-
-        if (!response.ok) {
-          throw new Error(data.error || data.message || 'Failed to send snapshot');
-        }
-
-        if (data.ok) {
-          const dateInfo = data.snapshotDate ? ` for ${data.snapshotDate}` : '';
-          showStatus(`Snapshot${dateInfo} prepared for delivery to ${email}!`, 'success');
-          console.log('Email prepared:', data.email);
-          disableButtons(false, false);
-        } else {
-          throw new Error(data.error || 'Unknown error');
-        }
-      } catch (error) {
-        console.error('Send error:', error);
-        showStatus(`Error: ${error.message}`, 'error');
-        disableButtons(false, false);
-      }
-    }
-
-    // ============================================================================
-    // CHAT FUNCTIONALITY
+    // CHAT
     // ============================================================================
 
     let conversationHistory = [];
@@ -844,126 +904,106 @@
     async function sendChatMessage() {
       const input = document.getElementById('chatInput');
       const message = input.value.trim();
-
       if (!message) return;
 
-      // Add user message to UI
       addChatMessage('user', message);
       input.value = '';
 
-      // Show thinking indicator
       const thinkingId = addChatMessage('assistant', 'Thinking...');
 
       try {
         const response = await fetch(`${BACKEND_URL}/chat`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            message,
-            conversationHistory
-          })
+          body: JSON.stringify({ message, conversationHistory })
         });
 
         const data = await response.json();
-
-        // Remove thinking indicator
         document.getElementById(thinkingId).remove();
 
-        if (data.response) {
-          // Add OMEN's response
-          addChatMessage('assistant', data.response);
+        // Render confidence and warnings
+        renderConfidence('chat', data.confidence, data.data_freshness);
+        renderWarnings('chat', data.warnings);
 
-          // Update conversation history
+        if (data.response) {
+          addChatMessage('assistant', data.response, data.confidence);
+
           conversationHistory.push(
             { role: 'user', content: message },
             { role: 'assistant', content: data.response }
           );
 
-          // Keep only last 10 messages to avoid token limits
           if (conversationHistory.length > 20) {
             conversationHistory = conversationHistory.slice(-20);
           }
         } else {
-          addChatMessage('assistant', 'Sorry, I encountered an error. Please try again.');
+          addChatMessage('assistant', 'Unable to respond.', 'low');
         }
       } catch (error) {
         document.getElementById(thinkingId).remove();
-        addChatMessage('assistant', `Error: ${error.message}`);
+        addChatMessage('assistant', `Error: ${error.message}`, 'low');
+        renderWarnings('chat', [error.message]);
       }
     }
 
-    function addChatMessage(role, content) {
+    function addChatMessage(role, content, confidence = null) {
       const messagesDiv = document.getElementById('chatMessages');
       const messageId = 'msg-' + Date.now();
 
-      // Remove placeholder if exists
-      if (messagesDiv.querySelector('[style*="Start a conversation"]')) {
-        messagesDiv.innerHTML = '';
-      }
+      // Clear placeholder
+      const placeholder = messagesDiv.querySelector('[style*="Ask OMEN"]');
+      if (placeholder) messagesDiv.innerHTML = '';
 
       const messageDiv = document.createElement('div');
       messageDiv.id = messageId;
-      messageDiv.style.cssText = `
-        margin-bottom: 15px;
-        padding: 10px 15px;
-        border-radius: 8px;
-        ${role === 'user' ?
-          'background: #007bff; color: white; margin-left: 60px; text-align: right;' :
-          'background: #e9ecef; color: #333; margin-right: 60px;'
-        }
-      `;
+      messageDiv.className = `chat-message ${role}`;
 
       const roleLabel = document.createElement('div');
-      roleLabel.style.cssText = 'font-size: 11px; font-weight: bold; margin-bottom: 5px; opacity: 0.8;';
+      roleLabel.className = 'chat-role';
       roleLabel.textContent = role === 'user' ? 'YOU' : 'OMEN';
 
       const contentDiv = document.createElement('div');
-      contentDiv.style.cssText = 'white-space: pre-wrap; line-height: 1.5;';
+      contentDiv.className = 'chat-content';
       contentDiv.textContent = content;
 
       messageDiv.appendChild(roleLabel);
       messageDiv.appendChild(contentDiv);
-      messagesDiv.appendChild(messageDiv);
 
-      // Scroll to bottom
+      // Show confidence on assistant messages
+      if (role === 'assistant' && confidence) {
+        const metaDiv = document.createElement('div');
+        metaDiv.className = 'chat-meta';
+        metaDiv.textContent = `Confidence: ${confidence.toUpperCase()}`;
+        messageDiv.appendChild(metaDiv);
+      }
+
+      messagesDiv.appendChild(messageDiv);
       messagesDiv.scrollTop = messagesDiv.scrollHeight;
 
       return messageId;
     }
 
     // ============================================================================
-    // SECTION SWITCHING
+    // NAVIGATION
     // ============================================================================
 
     function showSection(section) {
-      const chatSection = document.getElementById('chatSection');
-      const snapshotSection = document.getElementById('snapshotSection');
+      document.querySelectorAll('.section').forEach(el => el.classList.remove('active'));
+      document.querySelectorAll('.nav a').forEach(el => el.classList.remove('active'));
 
       if (section === 'chat') {
-        chatSection.style.display = 'block';
-        snapshotSection.style.display = 'none';
+        document.getElementById('chatSection').classList.add('active');
+        document.getElementById('navChat').classList.add('active');
       } else {
-        chatSection.style.display = 'none';
-        snapshotSection.style.display = 'block';
+        document.getElementById('snapshotSection').classList.add('active');
+        document.getElementById('navSnapshot').classList.add('active');
       }
     }
 
     // ============================================================================
-    // EVENT LISTENERS
+    // INIT
     // ============================================================================
-
-    generateBtn.addEventListener('click', generateSnapshot);
-    sendBtn.addEventListener('click', sendSnapshot);
-
-    // Show snapshot section by default
-    showSection('snapshot');
-
-    // ============================================================================
-    // INITIAL LOAD
-    // ============================================================================
-
-    console.log('OMEN Admin UI initialized');
-    console.log('Backend URL:', BACKEND_URL);
+    console.log('OMEN Vault initialized');
   </script>
 </body>
 </html>

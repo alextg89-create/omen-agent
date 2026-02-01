@@ -1,6 +1,57 @@
 import 'dotenv/config';
 import applyPricing from "./tools/applyPricing.js";
-import { saveInventory, getInventory, clearInventory } from "./tools/inventoryStore.js";
+import { saveInventory, getInventory, clearInventory, getInventoryWithMetadata, AUTHORITY_ERROR } from "./tools/inventoryStore.js";
+import { computeDataFreshness } from "./utils/dataFreshness.js";
+
+/**
+ * Build OMEN refusal response for authority errors
+ * OMEN refuses cleanly when authority is unavailable
+ */
+function buildAuthorityRefusal(error, requestId) {
+  const isAuthorityError = error.authorityError === true;
+  const errorType = isAuthorityError ? error.type : 'UNKNOWN';
+  const hint = error.details?.hint || null;
+  const migration = error.details?.migration || null;
+
+  let refusalMessage;
+  let actionRequired;
+
+  switch (errorType) {
+    case AUTHORITY_ERROR.TABLE_MISSING:
+      refusalMessage = "I cannot provide inventory intelligence. The authority table does not exist.";
+      actionRequired = `Run migration ${migration || '003_wix_inventory_live.sql'} in Supabase SQL Editor, then sync inventory via POST /sync/wix-inventory.`;
+      break;
+    case AUTHORITY_ERROR.EMPTY:
+      refusalMessage = "I cannot provide inventory intelligence. The authority table exists but contains no data.";
+      actionRequired = "Sync inventory via POST /sync/wix-inventory with a Wix CSV export.";
+      break;
+    case AUTHORITY_ERROR.UNAVAILABLE:
+      refusalMessage = "I cannot provide inventory intelligence. Supabase connection is not configured.";
+      actionRequired = "Set SUPABASE_SECRET_API_KEY in environment variables.";
+      break;
+    default:
+      refusalMessage = "I cannot provide inventory intelligence. An unexpected authority error occurred.";
+      actionRequired = hint || "Check server logs for details.";
+  }
+
+  return {
+    response: refusalMessage,
+    confidence: "low",
+    reason: `Authority error: ${errorType}`,
+    data_freshness: null,
+    warnings: [
+      error.message,
+      actionRequired
+    ],
+    meta: {
+      requestId,
+      authorityError: true,
+      errorType,
+      hint,
+      migration
+    }
+  };
+}
 import { detectLowStock } from "./inventorySignals.js";
 import { ingestNjWeedWizardCsv } from "./njweedwizardCsvIngest.js";
 import { normalizeInventory } from "./normalizeInventory.js";
@@ -719,21 +770,35 @@ app.post("/chat", async (req, res) => {
     let inventoryData = null;
     let inventoryContext = null;
     let recommendations = null;
+    let inventoryMetadata = null;
+    let dataFreshness = null;
 
     // 2️⃣ FETCH INVENTORY (when needed for inventory or recommendations)
     if (needsInventory || needsRecommendations) {
       console.log("💬 [OMEN] Inventory required for query", { requestId, needsRecommendations });
 
       try {
-        // Reuse existing inventory store logic
-        inventoryData = await getInventory(STORE_ID);
+        // Fetch inventory with metadata for freshness tracking
+        const result = await getInventoryWithMetadata(STORE_ID);
+        inventoryData = result.items;
+        inventoryMetadata = result.metadata;
+        dataFreshness = computeDataFreshness(inventoryMetadata?.inventoryLastSyncedAt);
       } catch (err) {
-        console.error("💬 [OMEN] Failed to load inventory", { requestId, error: err.message });
+        console.error("💬 [OMEN] Failed to load inventory", { requestId, error: err.message, authorityError: err.authorityError });
+
+        // AUTHORITY ERROR → Clean OMEN refusal
+        if (err.authorityError) {
+          const refusal = buildAuthorityRefusal(err, requestId);
+          return res.status(200).json(refusal);
+        }
+
+        // Non-authority error → Generic refusal
         return res.status(200).json({
-          ok: true,
-          response: "I encountered an error loading inventory data. Please try again or generate a snapshot first.",
+          response: "I cannot provide inventory intelligence. An error occurred accessing the data source.",
           confidence: "low",
           reason: `Inventory load failed: ${err.message}`,
+          data_freshness: null,
+          warnings: [err.message],
           meta: {
             requestId,
             inventoryAvailable: false,
@@ -746,10 +811,12 @@ app.post("/chat", async (req, res) => {
         console.warn("💬 [OMEN] Inventory unavailable", { requestId });
 
         return res.json({
-          response: "Inventory data is currently unavailable. I can still explain how margins are calculated if you'd like.",
-          confidence: "medium",
-          reason: "Inventory data not available",
-          nextBestAction: "Please ensure inventory has been ingested via /ingest/njweedwizard",
+          response: "I cannot provide inventory intelligence. The data source contains no inventory records.",
+          confidence: "low",
+          reason: "Inventory data empty",
+          data_freshness: null,
+          warnings: ["Authority table exists but contains no data. Sync inventory via POST /sync/wix-inventory."],
+          nextBestAction: "Sync inventory via POST /sync/wix-inventory with a Wix CSV export",
           conversationContext: {
             lastIntent: extractIntent(message),
             recentTopics: ["inventory", "unavailable"],
@@ -1035,8 +1102,17 @@ Current Recommendations Available:
       formattedLength: llmResponse.length
     });
 
-    // 7️⃣ DETERMINE CONFIDENCE
-    const confidence = (needsInventory || needsRecommendations) && inventoryContext ? "high" : "medium";
+    // 7️⃣ DETERMINE CONFIDENCE (use data freshness when available)
+    let confidence;
+    if (dataFreshness && inventoryContext) {
+      // Use freshness-based confidence for inventory queries
+      confidence = dataFreshness.confidence;
+    } else if ((needsInventory || needsRecommendations) && inventoryContext) {
+      confidence = "high";
+    } else {
+      confidence = "medium";
+    }
+
     const reason = needsRecommendations && recommendations
       ? `Answered using live recommendations (${recommendations.promotions.length + recommendations.pricing.length + recommendations.inventory.length} total)`
       : needsInventory && inventoryContext
@@ -1059,6 +1135,12 @@ Current Recommendations Available:
       reason,
       nextBestAction: null,
       conversationContext,
+      data_freshness: dataFreshness ? {
+        inventory_last_synced_at: inventoryMetadata?.inventoryLastSyncedAt || null,
+        status: dataFreshness.freshnessState?.status || 'unknown',
+        age_hours: dataFreshness.freshnessState?.ageHours || null
+      } : null,
+      warnings: dataFreshness?.warnings || [],
       meta: {
         requestId,
         decision: "RESPOND_DIRECT",
@@ -2030,21 +2112,44 @@ app.post("/snapshot/generate", async (req, res) => {
       }
     }
 
-    // 4️⃣ FETCH LIVE INVENTORY (OPTIONAL - failures must NOT block snapshots)
+    // 4️⃣ FETCH LIVE INVENTORY - AUTHORITY ERRORS ARE FATAL
     let inventory = [];
     let inventoryWarning = null;
+    let inventoryMetadata = null;
+    let snapshotDataFreshness = null;
     try {
-      inventory = await getInventory(STORE_ID);
+      const invResult = await getInventoryWithMetadata(STORE_ID);
+      inventory = invResult.items;
+      inventoryMetadata = invResult.metadata;
+      snapshotDataFreshness = computeDataFreshness(inventoryMetadata?.inventoryLastSyncedAt);
     } catch (err) {
-      // WARN + CONTINUE - inventory is OPTIONAL, snapshots derive from orders_agg
-      console.warn(`[Snapshot] ⚠️ Inventory load failed (non-fatal): ${err.message}`);
-      inventoryWarning = `Inventory unavailable: ${err.message}`;
+      // AUTHORITY TABLE MISSING → Clean refusal (OMEN refuses to fabricate)
+      if (err.authorityError && err.type === AUTHORITY_ERROR.TABLE_MISSING) {
+        console.error(`[Snapshot] ❌ AUTHORITY_TABLE_MISSING - refusing snapshot generation`);
+        const refusal = buildAuthorityRefusal(err, requestId);
+        return res.status(200).json({
+          ok: false,
+          error: 'authority_unavailable',
+          message: refusal.response,
+          confidence: 'low',
+          warnings: refusal.warnings,
+          data_freshness: null,
+          meta: refusal.meta
+        });
+      }
+
+      // Other authority errors → Include warning but continue with orders_agg
+      console.warn(`[Snapshot] ⚠️ Inventory load failed: ${err.message}`);
+      inventoryWarning = err.authorityError
+        ? `Authority error: ${err.message}`
+        : `Inventory unavailable: ${err.message}`;
       inventory = [];
+      snapshotDataFreshness = computeDataFreshness(null);
     }
 
     if (!inventory || inventory.length === 0) {
-      console.warn('[Snapshot] ⚠️ Inventory empty or unavailable - continuing with orders_agg only');
-      inventoryWarning = inventoryWarning || 'Inventory empty or unavailable';
+      console.warn('[Snapshot] ⚠️ Inventory empty or unavailable - including warning');
+      inventoryWarning = inventoryWarning || 'Inventory empty or unavailable. Sync via POST /sync/wix-inventory.';
       inventory = [];
     }
 
@@ -2152,8 +2257,16 @@ app.post("/snapshot/generate", async (req, res) => {
         } : null,
         inventoryWarning: inventoryWarning || null
       },
+      // DATA FRESHNESS - OMEN truth enforcement
+      data_freshness: {
+        inventory_last_synced_at: inventoryMetadata?.inventoryLastSyncedAt || null,
+        status: snapshotDataFreshness?.freshnessState?.status || 'unknown',
+        age_hours: snapshotDataFreshness?.freshnessState?.ageHours || null,
+        confidence: snapshotDataFreshness?.confidence || 'low'
+      },
+      warnings: snapshotDataFreshness?.warnings || [],
       enrichedInventory: inventory,
-      confidence: velocityAnalysis.ok ? "high" : "medium",
+      confidence: snapshotDataFreshness?.confidence || (velocityAnalysis.ok ? "high" : "medium"),
       itemCount: inventory.length
     };
 

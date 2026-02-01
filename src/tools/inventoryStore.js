@@ -12,9 +12,13 @@
  * - Explicit cache invalidation via clearInventory()
  */
 
-import { getAuthoritativeInventory } from '../data/supabaseAuthority.js';
+import { getAuthoritativeInventory, AUTHORITY_ERROR } from '../data/supabaseAuthority.js';
+
+// Re-export for consumers
+export { AUTHORITY_ERROR };
 
 let cachedInventory = null;
+let cachedMetadata = null;
 let cacheTimestamp = null;
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
@@ -44,6 +48,12 @@ export async function getInventory(source) {
     const result = await getAuthoritativeInventory();
 
     cachedInventory = result.items;
+    cachedMetadata = {
+      timestamp: result.timestamp,
+      source: result.source,
+      inventoryLastSyncedAt: result.inventoryLastSyncedAt,
+      count: result.count
+    };
     cacheTimestamp = now;
 
     console.log(`[InventoryStore] ✅ Cached ${result.items.length} items from ${result.source} at ${result.timestamp}`);
@@ -54,6 +64,22 @@ export async function getInventory(source) {
     console.error('[InventoryStore] ❌ FATAL: Cannot load inventory:', err.message);
     throw err;
   }
+}
+
+/**
+ * Get inventory with full metadata including freshness info
+ *
+ * @param {string} source - Store ID (legacy parameter, ignored)
+ * @returns {Promise<{items: Array, metadata: Object}>}
+ */
+export async function getInventoryWithMetadata(source) {
+  // Ensure cache is populated
+  await getInventory(source);
+
+  return {
+    items: cachedInventory,
+    metadata: cachedMetadata
+  };
 }
 
 /**
@@ -77,6 +103,7 @@ export function saveInventory(source, items) {
  */
 export function clearInventory(source) {
   cachedInventory = null;
+  cachedMetadata = null;
   cacheTimestamp = null;
   console.log('[InventoryStore] 🔄 Cache CLEARED - next request will fetch fresh Supabase data');
 }
