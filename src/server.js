@@ -779,6 +779,7 @@ app.post("/chat", async (req, res) => {
     let recommendations = null;
     let inventoryMetadata = null;
     let dataFreshness = null;
+    let chatContext = null;
 
     // 2️⃣ FETCH INVENTORY (when needed for inventory or recommendations)
     if (needsInventory || needsRecommendations) {
@@ -1029,7 +1030,7 @@ Current Recommendations Available:
       // Do NOT fall back to inventoryContext (catalog margin) for margin data
       const snapshotMetrics = weekly?.metrics || daily?.metrics || null;
 
-      const chatContext = {
+      chatContext = {
         // Both snapshots available
         daily,
         weekly,
