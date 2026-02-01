@@ -1186,11 +1186,17 @@ Current Recommendations Available:
       stack: err.stack,
     });
 
+    // ========== DIAGNOSTIC: Include error details in response ==========
     return res.status(500).json({
       ok: false,
       requestId,
       error: "Chat handler failed safely",
       response: "I encountered an error processing your request. Please try again.",
+      debug: {
+        errorMessage: err.message,
+        errorStack: err.stack?.split('\n').slice(0, 5).join('\n'),
+        errorName: err.name
+      }
     });
   }
 });
