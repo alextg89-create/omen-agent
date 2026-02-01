@@ -157,7 +157,8 @@ app.use(cors({
   allowedHeaders: ["Content-Type", "Authorization"],
 }));
 
-app.use(express.json());
+app.use(express.json({ limit: '5mb' }));
+app.use(express.text({ limit: '5mb', type: 'text/csv' }));
 
 /* ---------- Static File Serving ---------- */
 // Serve static files from public directory
