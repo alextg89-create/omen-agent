@@ -116,18 +116,49 @@ export async function getSalesTotals(startDate, endDate) {
 
   const orders = result.data || [];
 
+  // Track orders with valid financial data (don't fabricate from missing)
+  const ordersWithRevenue = orders.filter(o => o.total_revenue !== null && o.total_revenue !== undefined);
+  const ordersWithCost = orders.filter(o => o.total_cost !== null && o.total_cost !== undefined);
+  const ordersWithProfit = orders.filter(o => o.total_profit !== null && o.total_profit !== undefined);
+
+  // Aggregate only from orders with valid data - NULL if no valid data
+  const totalRevenue = ordersWithRevenue.length > 0
+    ? ordersWithRevenue.reduce((sum, o) => sum + o.total_revenue, 0)
+    : null;
+  const totalCost = ordersWithCost.length > 0
+    ? ordersWithCost.reduce((sum, o) => sum + o.total_cost, 0)
+    : null;
+  const totalProfit = ordersWithProfit.length > 0
+    ? ordersWithProfit.reduce((sum, o) => sum + o.total_profit, 0)
+    : null;
+
   const totals = {
     orderCount: orders.length,
     itemCount: orders.reduce((sum, o) => sum + (o.item_count || 0), 0),
-    totalRevenue: orders.reduce((sum, o) => sum + (o.total_revenue || 0), 0),
-    totalCost: orders.reduce((sum, o) => sum + (o.total_cost || 0), 0),
-    totalProfit: orders.reduce((sum, o) => sum + (o.total_profit || 0), 0),
+    totalRevenue,
+    totalCost,
+    totalProfit,
+    // DATA QUALITY: Track how many orders have valid financial data
+    dataQuality: {
+      ordersWithRevenue: ordersWithRevenue.length,
+      ordersWithCost: ordersWithCost.length,
+      ordersWithProfit: ordersWithProfit.length,
+      missingRevenue: orders.length - ordersWithRevenue.length,
+      missingCost: orders.length - ordersWithCost.length,
+      missingProfit: orders.length - ordersWithProfit.length
+    },
     startDate,
     endDate,
     orders
   };
 
-  console.log(`[Supabase] Sales totals: ${totals.orderCount} orders, $${totals.totalRevenue.toFixed(2)} revenue, $${totals.totalProfit.toFixed(2)} profit`);
+  const revenueStr = totalRevenue !== null ? `$${totalRevenue.toFixed(2)}` : 'N/A';
+  const profitStr = totalProfit !== null ? `$${totalProfit.toFixed(2)}` : 'N/A';
+  console.log(`[Supabase] Sales totals: ${totals.orderCount} orders, ${revenueStr} revenue, ${profitStr} profit`);
+
+  if (totals.dataQuality.missingCost > 0) {
+    console.warn(`[Supabase] ⚠️ ${totals.dataQuality.missingCost}/${orders.length} orders missing cost data`);
+  }
 
   return { ok: true, totals };
 }

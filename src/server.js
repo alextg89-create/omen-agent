@@ -1397,7 +1397,9 @@ function generateFallbackRecommendationResponseStrong(message, recommendations, 
       const confidence = top.confidence >= 0.7 ? 'Medium Confidence' : 'Early Signal';
       response = `Top promotion candidate: ${top.name}\n\n`;
       response += `${top.reason}\n`;
-      response += `Margin: ${top.triggeringMetrics?.margin || 0}% | Stock: ${top.triggeringMetrics?.quantity || 0}\n`;
+      const marginStr = top.triggeringMetrics?.margin != null ? `${top.triggeringMetrics.margin}%` : 'N/A';
+      const stockStr = top.triggeringMetrics?.quantity != null ? top.triggeringMetrics.quantity : 'N/A';
+      response += `Margin: ${marginStr} | Stock: ${stockStr}\n`;
       response += `[${confidence}]\n\n`;
       if (promoRecs.length > 1) {
         response += `Also watch: ${promoRecs.slice(1, 3).map(r => r.name).join(', ')}`;
@@ -1405,7 +1407,9 @@ function generateFallbackRecommendationResponseStrong(message, recommendations, 
     } else {
       // NEVER say "no recommendations" - rank by margin
       response = `Based on current inventory position (Early Signal):\n\n`;
-      response += `If you had to promote one product this week, ${metrics.highestMarginItem?.name || 'your top margin item'} has the strongest margin at ${metrics.highestMarginItem?.margin || 0}%.\n\n`;
+      const topMarginName = metrics.highestMarginItem?.name || 'your top margin item';
+      const topMarginPct = metrics.highestMarginItem?.margin != null ? `${metrics.highestMarginItem.margin}%` : 'N/A';
+      response += `If you had to promote one product this week, ${topMarginName} has the strongest margin at ${topMarginPct}.\n\n`;
       response += `This is a baseline ranking - more decisive recommendations will emerge as order velocity builds.`;
     }
   }
@@ -1415,7 +1419,8 @@ function generateFallbackRecommendationResponseStrong(message, recommendations, 
       response = `Pricing actions:\n\n`;
       recommendations.pricing.slice(0, 2).forEach((rec, i) => {
         const conf = rec.confidence >= 0.7 ? 'Medium Confidence' : 'Early Signal';
-        response += `${i + 1}. ${rec.name} - ${rec.reason} (Margin: ${rec.triggeringMetrics?.margin || 0}%) [${conf}]\n`;
+        const recMargin = rec.triggeringMetrics?.margin != null ? `${rec.triggeringMetrics.margin}%` : 'N/A';
+        response += `${i + 1}. ${rec.name} - ${rec.reason} (Margin: ${recMargin}) [${conf}]\n`;
       });
     } else {
       response = `Pricing looks balanced. No urgent adjustments needed based on current data.`;
@@ -1448,7 +1453,9 @@ function generateFallbackRecommendationResponseStrong(message, recommendations, 
     } else {
       // Absolute fallback - STILL give guidance
       response = `Based on current inventory position (Baseline - Early Signal):\n\n`;
-      response += `Best margin: ${metrics.highestMarginItem?.name || 'Top item'} at ${metrics.highestMarginItem?.margin || 0}%\n`;
+      const bestMarginName = metrics.highestMarginItem?.name || 'Top item';
+      const bestMarginPct = metrics.highestMarginItem?.margin != null ? `${metrics.highestMarginItem.margin}%` : 'N/A';
+      response += `Best margin: ${bestMarginName} at ${bestMarginPct}\n`;
       response += `If you had to focus on one product this week, start here.\n\n`;
       response += `More decisive recommendations will emerge as order velocity accumulates.`;
     }
@@ -1869,9 +1876,13 @@ function formatFallbackRecommendationsWithConfidence(recommendations, metrics) {
     // STILL provide guidance - rank by margin
     output += '\n📊 BASELINE INVENTORY RANKING (Limited Data - Early Signal):\n\n';
     output += 'Order velocity data is still building. Based on current inventory position:\n\n';
-    output += `➜ ${metrics.highestMarginItem?.name || 'Top margin item'} has the strongest margin (${metrics.highestMarginItem?.margin || 0}%)\n`;
+    const highMarginName = metrics.highestMarginItem?.name || 'Top margin item';
+    const highMarginPct = metrics.highestMarginItem?.margin != null ? `${metrics.highestMarginItem.margin}%` : 'N/A';
+    const lowMarginName = metrics.lowestMarginItem?.name || 'Low margin item';
+    const lowMarginPct = metrics.lowestMarginItem?.margin != null ? `${metrics.lowestMarginItem.margin}%` : 'N/A';
+    output += `➜ ${highMarginName} has the strongest margin (${highMarginPct})\n`;
     output += `   If you had to promote one product this week, start here.\n\n`;
-    output += `➜ Monitor ${metrics.lowestMarginItem?.name || 'Low margin item'} - margin is thin at ${metrics.lowestMarginItem?.margin || 0}%\n`;
+    output += `➜ Monitor ${lowMarginName} - margin is thin at ${lowMarginPct}\n`;
     output += `   Consider if pricing needs adjustment.\n\n`;
     output += `[Low Confidence - Insufficient Order History]\n`;
     output += `More decisive recommendations will emerge as order data accumulates.\n`;
@@ -1962,11 +1973,11 @@ Analysis Period: ${periodStart} - ${periodEnd}
 📊 BUSINESS SNAPSHOT
 ═══════════════════════════════════════
 
-Total Revenue Potential: $${(metrics.totalRevenue || 0).toLocaleString()}
-Total Profit Potential: $${(metrics.totalProfit || 0).toLocaleString()}
-Average Margin: ${(metrics.averageMargin || 0)}%
+Total Revenue Potential: ${metrics.totalRevenue != null ? '$' + metrics.totalRevenue.toLocaleString() : 'N/A'}
+Total Profit Potential: ${metrics.totalProfit != null ? '$' + metrics.totalProfit.toLocaleString() : 'N/A'}
+Average Margin: ${metrics.averageMargin != null ? metrics.averageMargin + '%' : 'N/A'}
 
-Total SKUs: ${metrics.totalItems || 0}
+Total SKUs: ${metrics.totalItems ?? 0}
 ${hasRealIntelligence ? `Orders Analyzed: ${velocity.orderCount}
 Unique SKUs Sold: ${velocity.uniqueSKUs}` : 'Live Orders: Building baseline...'}
 

@@ -163,8 +163,8 @@ function calculateVelocityMetrics(ordersBySkU, currentInventory, dateRange) {
       orderCount: orderData.orderCount,
       dailyVelocity: parseFloat(dailyVelocity.toFixed(2)),
       daysUntilStockout,
-      margin: inventoryItem.margin || 0,
-      totalRevenue: inventoryItem.price ? orderData.totalSold * inventoryItem.price : 0,
+      margin: inventoryItem.margin ?? null,  // NULL if missing - never fabricate
+      totalRevenue: inventoryItem.price ? orderData.totalSold * inventoryItem.price : null,  // NULL if no price
       isMoving: dailyVelocity > 0,
       isAccelerating: calculateAcceleration(orderData.orders, daysInPeriod)
     });
@@ -270,8 +270,8 @@ function generateActionableInsights(velocityMetrics, currentInventory) {
       });
     }
 
-    // INSIGHT 4: Low stock on profitable item
-    if (metric.margin > 40 && metric.currentStock < metric.dailyVelocity * 7 && metric.dailyVelocity > 0.2) {
+    // INSIGHT 4: Low stock on profitable item (only if margin is known)
+    if (metric.margin !== null && metric.margin > 40 && metric.currentStock < metric.dailyVelocity * 7 && metric.dailyVelocity > 0.2) {
       insights.push({
         type: 'LOW_STOCK_HIGH_MARGIN',
         priority: 'MEDIUM',
@@ -283,7 +283,7 @@ function generateActionableInsights(velocityMetrics, currentInventory) {
         action: 'Prioritize restocking - high profit opportunity',
         data: {
           currentStock: metric.currentStock,
-          margin: metric.margin,
+          margin: metric.margin,  // Known to be non-null here
           dailyVelocity: metric.dailyVelocity
         }
       });
@@ -301,12 +301,12 @@ function generateActionableInsights(velocityMetrics, currentInventory) {
         name: item.name || item.product || item.sku,
         message: `${item.name || item.sku} had zero sales this period`,
         details: `${item.quantity} units in stock, tying up capital`,
-        action: item.margin > 30
+        action: (item.margin !== null && item.margin > 30)
           ? 'Consider discount to move inventory'
           : 'Review if item should be discontinued',
         data: {
           currentStock: item.quantity,
-          margin: item.margin || 0
+          margin: item.margin ?? null  // NULL if missing - never fabricate
         }
       });
     }

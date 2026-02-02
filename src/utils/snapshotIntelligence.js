@@ -19,11 +19,11 @@ export function generateExecutiveSummary(snapshot, previousSnapshot = null) {
   const velocity = snapshot.velocity || {};
   const recommendations = snapshot.recommendations || {};
 
-  // Core metrics
-  const revenue = metrics.totalRevenue || 0;
-  const profit = metrics.totalProfit || 0;
-  const margin = metrics.averageMargin || 0;
-  const orderCount = velocity.orderCount || 0;
+  // Core metrics - NULL propagation for financial values (never fabricate)
+  const revenue = metrics.totalRevenue ?? null;
+  const profit = metrics.totalProfit ?? null;
+  const margin = metrics.averageMargin ?? null;
+  const orderCount = velocity.orderCount || 0;  // Count can be 0
 
   // Previous period metrics (if available)
   const prevMetrics = previousSnapshot?.metrics || {};
@@ -69,14 +69,16 @@ export function generateExecutiveSummary(snapshot, previousSnapshot = null) {
  * Compute delta between current and previous value
  */
 function computeDelta(current, previous) {
+  // NULL propagation: if either value is null, delta is null
   if (previous === null || previous === undefined) return null;
+  if (current === null || current === undefined) return null;
 
   const absolute = current - previous;
-  const percent = previous !== 0 ? (absolute / previous) * 100 : 0;
+  const percent = previous !== 0 ? (absolute / previous) * 100 : null;  // NULL if dividing by zero
 
   return {
     absolute: Math.round(absolute * 100) / 100,
-    percent: Math.round(percent * 10) / 10,
+    percent: percent !== null ? Math.round(percent * 10) / 10 : null,
     direction: absolute > 0 ? 'up' : absolute < 0 ? 'down' : 'flat'
   };
 }
@@ -87,10 +89,12 @@ function computeDelta(current, previous) {
 function generateHeadline(revenueDelta, profitDelta, marginDelta, orderDelta, snapshot) {
   // No comparison available
   if (!revenueDelta && !profitDelta) {
-    const revenue = snapshot.metrics?.totalRevenue || 0;
+    const revenue = snapshot.metrics?.totalRevenue;
     const orderCount = snapshot.velocity?.orderCount || 0;
-    if (orderCount > 0) {
+    if (orderCount > 0 && revenue !== null && revenue !== undefined) {
       return `${orderCount} orders generated $${revenue.toLocaleString()} in revenue this period.`;
+    } else if (orderCount > 0) {
+      return `${orderCount} orders tracked this period. Revenue data unavailable.`;
     }
     return `Snapshot generated. No order data available for this period.`;
   }
@@ -205,7 +209,7 @@ function generateKeyInsights(snapshot, previousSnapshot, deltas) {
       insights.push({
         type: 'margin_compression',
         severity: Math.abs(d.absolute) >= 5 ? 'high' : 'medium',
-        text: `Average margin compressed ${Math.abs(d.absolute).toFixed(1)} points to ${snapshot.metrics?.averageMargin?.toFixed(1) || 0}%.`,
+        text: `Average margin compressed ${Math.abs(d.absolute).toFixed(1)} points to ${snapshot.metrics?.averageMargin?.toFixed(1) ?? 'N/A'}%.`,
         action: 'Review pricing or supplier costs.'
       });
     }
@@ -322,7 +326,7 @@ export function getTopSKUsByVelocity(snapshot, limit = 5) {
       totalSold: m.totalSold,
       currentStock: m.currentStock,
       daysUntilStockout: m.daysUntilStockout,
-      margin: m.margin || 0
+      margin: m.margin ?? null  // NULL if missing - never fabricate
     }));
 }
 
@@ -349,6 +353,7 @@ export function getSlowMovers(snapshot, limit = 5) {
     const quantity = item.quantity || 0;
 
     if (quantity >= 5 && dailyVelocity < 0.2) {
+      const cost = item.pricing?.cost ?? null;
       slowMovers.push({
         sku: item.sku || item.strain,
         name: item.name || `${item.strain} (${item.unit})`,
@@ -356,8 +361,8 @@ export function getSlowMovers(snapshot, limit = 5) {
         quantity,
         dailyVelocity,
         daysToSellout: dailyVelocity > 0 ? Math.round(quantity / dailyVelocity) : null,
-        margin: item.pricing?.margin || 0,
-        capitalTiedUp: quantity * (item.pricing?.cost || 0)
+        margin: item.pricing?.margin ?? null,  // NULL if missing
+        capitalTiedUp: cost !== null ? quantity * cost : null  // NULL if cost unknown
       });
     }
   }
@@ -424,11 +429,12 @@ export function detectAnomalies(snapshot, previousSnapshot) {
     }
   }
 
-  // Revenue anomaly
-  const currentRevenue = snapshot.metrics?.totalRevenue || 0;
-  const prevRevenue = previousSnapshot?.metrics?.totalRevenue || 0;
+  // Revenue anomaly - only compare if both values exist
+  const currentRevenue = snapshot.metrics?.totalRevenue;
+  const prevRevenue = previousSnapshot?.metrics?.totalRevenue;
 
-  if (prevRevenue > 0) {
+  if (prevRevenue !== null && prevRevenue !== undefined && prevRevenue > 0 &&
+      currentRevenue !== null && currentRevenue !== undefined) {
     const revenueChange = ((currentRevenue - prevRevenue) / prevRevenue) * 100;
 
     if (Math.abs(revenueChange) >= 30) {
@@ -458,8 +464,10 @@ export function analyzeMargins(snapshot) {
   const metrics = snapshot.metrics || {};
   const inventory = snapshot.enrichedInventory || [];
 
-  // Find items by margin
-  const itemsWithMargin = inventory.filter(i => i.pricing?.margin > 0);
+  // Find items with known margin (must be non-null and positive)
+  const itemsWithMargin = inventory.filter(i =>
+    i.pricing?.margin !== null && i.pricing?.margin !== undefined && i.pricing.margin > 0
+  );
 
   if (itemsWithMargin.length === 0) {
     return {
@@ -472,9 +480,9 @@ export function analyzeMargins(snapshot) {
     };
   }
 
-  // Sort by margin
+  // Sort by margin (all items have valid margin here)
   const sorted = [...itemsWithMargin].sort((a, b) =>
-    (b.pricing?.margin || 0) - (a.pricing?.margin || 0)
+    b.pricing.margin - a.pricing.margin
   );
 
   const marginLeaders = sorted.slice(0, 3).map(i => ({
@@ -534,45 +542,58 @@ export function generateOMENVerdict(snapshot, previousSnapshot = null) {
   );
 
   for (const risk of stockoutRisks) {
-    const lostRevenuePerDay = (risk.dailyVelocity || 0) * (risk.revenue || risk.pricePerUnit || 50);
+    // Only calculate consequence if we have price data
+    const pricePerUnit = risk.revenue ?? risk.pricePerUnit ?? null;
+    const lostRevenuePerDay = pricePerUnit !== null ? risk.dailyVelocity * pricePerUnit : null;
     signals.push({
       priority: 1,
-      consequence: lostRevenuePerDay * risk.daysUntilStockout,
+      consequence: lostRevenuePerDay !== null ? lostRevenuePerDay * risk.daysUntilStockout : null,
       type: 'STOCKOUT_IMMINENT',
       action: `REORDER NOW: ${risk.name || risk.sku}`,
       reason: `Will stock out in ${risk.daysUntilStockout} days at current velocity (${risk.dailyVelocity.toFixed(1)}/day)`,
-      consequence_text: `If you don't act: You'll lose ~$${Math.round(lostRevenuePerDay * 7).toLocaleString()} in the next week from missed sales.`,
+      consequence_text: lostRevenuePerDay !== null
+        ? `If you don't act: You'll lose ~$${Math.round(lostRevenuePerDay * 7).toLocaleString()} in the next week from missed sales.`
+        : `If you don't act: You'll miss sales. Revenue impact unknown (pricing data unavailable).`,
       item: risk.name || risk.sku
     });
   }
 
   // SIGNAL 2: High-margin item with low velocity = under-promoted (HIGH)
+  // Only include items where margin is KNOWN (not null)
   const highMarginLowVelocity = inventory.filter(item => {
-    const margin = item.pricing?.margin || 0;
+    const margin = item.pricing?.margin;
+    if (margin === null || margin === undefined) return false;  // Skip unknown margins
     const vel = velocityMetrics.find(v => v.sku === item.sku || v.sku === item.strain);
     const velocity = vel?.dailyVelocity || 0;
     return margin >= 50 && velocity < 0.5 && item.quantity >= 10;
   });
 
   for (const item of highMarginLowVelocity.slice(0, 2)) {
-    const margin = item.pricing?.margin || 0;
-    const potentialProfit = item.quantity * (item.pricing?.retail || 0) * (margin / 100);
+    const margin = item.pricing.margin;  // Known to be non-null from filter
+    const retail = item.pricing?.retail;
+    const potentialProfit = retail !== null && retail !== undefined
+      ? item.quantity * retail * (margin / 100)
+      : null;
     signals.push({
       priority: 2,
       consequence: potentialProfit,
       type: 'UNDER_PROMOTED',
       action: `PROMOTE: ${item.name || item.strain}`,
       reason: `${margin.toFixed(0)}% margin but barely moving. You're sitting on profit.`,
-      consequence_text: `If you don't act: $${Math.round(potentialProfit).toLocaleString()} potential profit sits on the shelf while cash-flow tightens.`,
+      consequence_text: potentialProfit !== null
+        ? `If you don't act: $${Math.round(potentialProfit).toLocaleString()} potential profit sits on the shelf while cash-flow tightens.`
+        : `If you don't act: Significant profit potential sits on the shelf.`,
       item: item.name || item.strain
     });
   }
 
   // SIGNAL 3: Revenue decline needs diagnosis (HIGH)
+  // Only compare if BOTH revenue values are known (not null)
   if (previousSnapshot) {
-    const currentRev = metrics.totalRevenue || 0;
-    const prevRev = previousSnapshot?.metrics?.totalRevenue || 0;
-    if (prevRev > 0 && currentRev < prevRev * 0.85) {
+    const currentRev = metrics.totalRevenue;
+    const prevRev = previousSnapshot?.metrics?.totalRevenue;
+    if (prevRev !== null && prevRev !== undefined && prevRev > 0 &&
+        currentRev !== null && currentRev !== undefined && currentRev < prevRev * 0.85) {
       const decline = ((prevRev - currentRev) / prevRev) * 100;
       signals.push({
         priority: 2,
@@ -603,10 +624,12 @@ export function generateOMENVerdict(snapshot, previousSnapshot = null) {
   }
 
   // SIGNAL 5: Margin compression (MEDIUM)
+  // Only compare if BOTH margin values are known (not null)
   if (previousSnapshot) {
-    const currentMargin = metrics.averageMargin || 0;
-    const prevMargin = previousSnapshot?.metrics?.averageMargin || 0;
-    if (prevMargin > 0 && currentMargin < prevMargin - 5) {
+    const currentMargin = metrics.averageMargin;
+    const prevMargin = previousSnapshot?.metrics?.averageMargin;
+    if (prevMargin !== null && prevMargin !== undefined && prevMargin > 0 &&
+        currentMargin !== null && currentMargin !== undefined && currentMargin < prevMargin - 5) {
       signals.push({
         priority: 3,
         consequence: (prevMargin - currentMargin) * 100,
@@ -676,10 +699,11 @@ export function forecastConsequences(snapshot, previousSnapshot = null) {
     });
   }
 
-  // Forecast 2: Revenue trajectory
-  if (previousSnapshot && metrics.totalRevenue) {
-    const currentRev = metrics.totalRevenue;
-    const prevRev = previousSnapshot?.metrics?.totalRevenue || currentRev;
+  // Forecast 2: Revenue trajectory - only if both values are known
+  const currentRev = metrics.totalRevenue;
+  const prevRev = previousSnapshot?.metrics?.totalRevenue;
+  if (previousSnapshot && currentRev !== null && currentRev !== undefined &&
+      prevRev !== null && prevRev !== undefined) {
     const weeklyChange = currentRev - prevRev;
     const monthlyProjection = currentRev + (weeklyChange * 3); // 3 more weeks
 
@@ -700,9 +724,9 @@ export function forecastConsequences(snapshot, previousSnapshot = null) {
     }
   }
 
-  // Forecast 3: Margin pressure
-  const avgMargin = metrics.averageMargin || 0;
-  if (avgMargin > 0 && avgMargin < 45) {
+  // Forecast 3: Margin pressure - only if margin is known
+  const avgMargin = metrics.averageMargin;
+  if (avgMargin !== null && avgMargin !== undefined && avgMargin > 0 && avgMargin < 45) {
     forecasts.push({
       type: 'margin_forecast',
       horizon: 'ongoing',

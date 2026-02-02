@@ -26,15 +26,15 @@ export function generatePromotionInsight(message, recommendations, metrics) {
   // Case 1: Have promotion recommendations with velocity data
   if (promoRecs.length > 0) {
     const top = promoRecs[0];
-    const margin = top.triggeringMetrics?.margin || 0;
-    const stock = top.triggeringMetrics?.quantity || 0;
-    const velocity = top.triggeringMetrics?.velocity || null;
+    const margin = top.triggeringMetrics?.margin ?? null;
+    const stock = top.triggeringMetrics?.quantity ?? 0;  // quantity can be 0
+    const velocity = top.triggeringMetrics?.velocity ?? null;
 
     // Build headline based on signal strength - MORE EXCITING
     let headline;
     if (velocity && velocity > 10) {
       headline = `${top.name} — this one's HOT. Already moving fast and primed for promotion.`;
-    } else if (margin > 65) {
+    } else if (margin !== null && margin > 65) {
       headline = `${top.name} — fat ${margin.toFixed(1)}% margin means you can push hard and still win.`;
     } else {
       headline = `${top.name} is your strongest play right now.`;
@@ -65,7 +65,8 @@ export function generatePromotionInsight(message, recommendations, metrics) {
       : top.confidence >= 0.6 ? 'Medium confidence'
       : 'Early signal';
 
-    return `${headline} ${why} ${action} (${confidence} — ${margin.toFixed(1)}% margin, stock level ${stock}${velocity ? `, velocity tracked` : ''})`;
+    const marginStr = margin !== null ? `${margin.toFixed(1)}% margin` : 'margin unknown';
+    return `${headline} ${why} ${action} (${confidence} — ${marginStr}, stock level ${stock}${velocity ? `, velocity tracked` : ''})`;
   }
 
   // Case 2: No promo recs, but have high-margin + low-stock items (OPPORTUNITY)
@@ -89,7 +90,8 @@ export function generatePromotionInsight(message, recommendations, metrics) {
 
     // Use velocity context if available
     if (metrics.hasVelocity) {
-      return `${item.name} has your highest realized margin at ${margin.toFixed(1)}%. Based on ${metrics.velocity?.orderCount || 0} orders from the past week, this is backed by real sales data. Promote it this week. (Medium confidence — realized order profit + velocity)`;
+      const orderCount = metrics.velocity?.orderCount ?? 0;
+      return `${item.name} has your highest realized margin at ${margin.toFixed(1)}%. Based on ${orderCount} orders from the past week, this is backed by real sales data. Promote it this week. (Medium confidence — realized order profit + velocity)`;
     }
 
     return `${item.name} has your highest realized margin at ${margin.toFixed(1)}% based on actual order profit. Promote it this week and track how fast it moves. (Medium confidence — realized order profit)`;
@@ -208,15 +210,15 @@ export function generateWhatToPromoteInsight(recommendations, metrics) {
     const top = promoRecs[0];
     const second = promoRecs[1];
 
-    const margin = top.triggeringMetrics?.margin || 0;
-    const stock = top.triggeringMetrics?.quantity || 0;
+    const margin = top.triggeringMetrics?.margin ?? null;
+    const stock = top.triggeringMetrics?.quantity ?? 0;
 
     let response = `${top.name}. `;
 
     // Why this one
     if (top.reason.toLowerCase().includes('velocity') || top.reason.toLowerCase().includes('moving')) {
       response += `It's already moving and has the momentum. `;
-    } else if (margin > 65) {
+    } else if (margin !== null && margin > 65) {
       response += `You have the most margin cushion here. `;
     } else {
       response += `${top.reason} `;
@@ -236,7 +238,8 @@ export function generateWhatToPromoteInsight(recommendations, metrics) {
 
     // Confidence
     const conf = top.confidence >= 0.7 ? 'Medium confidence' : 'Early signal';
-    response += `(${conf} — ${margin.toFixed(1)}% margin, stock level ${stock})`;
+    const marginStr = margin !== null ? `${margin.toFixed(1)}% margin` : 'margin unknown';
+    response += `(${conf} — ${marginStr}, stock level ${stock})`;
 
     return response;
   }
@@ -250,13 +253,14 @@ export function generateWhatToPromoteInsight(recommendations, metrics) {
     const isLowStock = invRecs.find(r => r.name === item.name);
 
     if (isLowStock) {
-      const stock = isLowStock.triggeringMetrics?.quantity || 0;
+      const stock = isLowStock.triggeringMetrics?.quantity ?? 0;
       return `${item.name} — highest realized margin (${margin.toFixed(1)}%) AND low stock (${stock} units). Based on actual order profit. Create urgency now. (High confidence — realized profit + scarcity)`;
     }
 
     // Use velocity context if available
     if (metrics.hasVelocity) {
-      return `${item.name} — highest realized margin at ${margin.toFixed(1)}% from actual orders. With ${metrics.velocity?.orderCount || 0} orders tracked, this is your best pick. Promote it this week. (Medium confidence — realized order profit + velocity)`;
+      const orderCount = metrics.velocity?.orderCount ?? 0;
+      return `${item.name} — highest realized margin at ${margin.toFixed(1)}% from actual orders. With ${orderCount} orders tracked, this is your best pick. Promote it this week. (Medium confidence — realized order profit + velocity)`;
     }
 
     return `${item.name} — it has your highest realized margin at ${margin.toFixed(1)}% from actual order profit. Promote it and track depletion rate over 3 days — if it moves fast, you've found your winner. (Medium confidence — realized order profit)`;
@@ -307,7 +311,10 @@ export function generateWhyInsight(message, metrics, context) {
       return `I don't have comparison data to explain revenue changes. Generate snapshots for at least two periods to enable trend analysis.`;
     }
 
-    return `Revenue appears stable. I don't see a significant decline in the current data. Current revenue: $${(metrics?.totalRevenue || 0).toLocaleString()}.`;
+    const revenueStr = metrics?.totalRevenue !== null && metrics?.totalRevenue !== undefined
+      ? `$${metrics.totalRevenue.toLocaleString()}`
+      : 'unavailable';
+    return `Revenue appears stable. I don't see a significant decline in the current data. Current revenue: ${revenueStr}.`;
   }
 
   // Margin decline questions
@@ -577,7 +584,8 @@ export function generateInsightResponse(message, recommendations, metrics, conte
 
       // Use velocity context if available
       if (metrics.hasVelocity) {
-        return `${item.name} at ${margin.toFixed(1)}% realized margin — your #1 profit maker based on ${metrics.velocity?.orderCount || 0} orders tracked. Sales data backs this pick. Promote it this week. (Medium confidence — realized order profit + velocity)`;
+        const orderCount = metrics.velocity?.orderCount ?? 0;
+        return `${item.name} at ${margin.toFixed(1)}% realized margin — your #1 profit maker based on ${orderCount} orders tracked. Sales data backs this pick. Promote it this week. (Medium confidence — realized order profit + velocity)`;
       }
 
       return `${item.name} at ${margin.toFixed(1)}% realized margin — your #1 profit maker based on actual order profit. Promote this and track how fast it moves — that tells you if it's a keeper or shelf warmer. (Medium confidence — realized order profit)`;

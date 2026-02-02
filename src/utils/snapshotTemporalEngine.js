@@ -130,7 +130,7 @@ export function computeInventoryDeltas(timeframe = 'weekly', lookback = 2) {
       depletionRate: parseFloat(depletionRate.toFixed(2)),
       acceleration,
       pricing: current.pricing,
-      margin: current.pricing?.margin || 0
+      margin: current.pricing?.margin ?? null  // NULL if missing - never fabricate
     });
   }
 
@@ -170,9 +170,9 @@ function extractInventoryItems(snapshot) {
         unit: rec.unit,
         quantity: rec.triggeringMetrics?.quantity || 0,
         pricing: {
-          margin: rec.triggeringMetrics?.margin || 0,
-          cost: rec.triggeringMetrics?.cost,
-          retail: rec.triggeringMetrics?.retail
+          margin: rec.triggeringMetrics?.margin ?? null,  // NULL if missing
+          cost: rec.triggeringMetrics?.cost ?? null,
+          retail: rec.triggeringMetrics?.retail ?? null
         }
       });
     }
@@ -187,9 +187,9 @@ function extractInventoryItems(snapshot) {
         unit: rec.unit,
         quantity: rec.triggeringMetrics?.quantity || 0,
         pricing: {
-          margin: rec.triggeringMetrics?.margin || 0,
-          cost: rec.triggeringMetrics?.cost,
-          retail: rec.triggeringMetrics?.retail
+          margin: rec.triggeringMetrics?.margin ?? null,  // NULL if missing
+          cost: rec.triggeringMetrics?.cost ?? null,
+          retail: rec.triggeringMetrics?.retail ?? null
         }
       });
     }
@@ -411,9 +411,11 @@ function calculatePriorityScore(delta, signal) {
     score += risk;
   }
 
-  // Factor 4: Margin (0-10 points) - tie-breaker only
-  const margin = delta.margin || 0;
-  score += Math.min(margin / 10, 10);
+  // Factor 4: Margin (0-10 points) - tie-breaker only (skip if unknown)
+  const margin = delta.margin;
+  if (margin !== null && margin !== undefined) {
+    score += Math.min(margin / 10, 10);
+  }
 
   return Math.round(score);
 }
