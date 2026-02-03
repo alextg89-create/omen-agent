@@ -148,30 +148,39 @@
   <script src="/auth-config.js"></script>
 
   <script>
-    // Create Supabase client immediately at script load - NOT lazily
-    const supabaseClient = window.supabase.createClient(
-      window.SUPABASE_CONFIG?.url || '',
-      window.SUPABASE_CONFIG?.anonKey || ''
-    );
+    // Supabase client - created once config is verified
+    var sbClient = null;
+
+    function getClient() {
+      if (sbClient) return sbClient;
+      if (!window.SUPABASE_CONFIG?.url || !window.SUPABASE_CONFIG?.anonKey) {
+        throw new Error('Auth not configured');
+      }
+      sbClient = window.supabase.createClient(
+        window.SUPABASE_CONFIG.url,
+        window.SUPABASE_CONFIG.anonKey
+      );
+      return sbClient;
+    }
 
     // Check if already logged in (runs after DOM ready)
     document.addEventListener('DOMContentLoaded', async () => {
-      if (!window.SUPABASE_CONFIG?.url || !window.SUPABASE_CONFIG?.anonKey) {
-        showError('Authentication not configured. Contact administrator.');
-        return;
-      }
-
-      document.getElementById('loginForm').style.display = 'none';
-      document.getElementById('loadingState').style.display = 'block';
-
       try {
-        const { data: { session } } = await supabaseClient.auth.getSession();
+        const client = getClient();
+        document.getElementById('loginForm').style.display = 'none';
+        document.getElementById('loadingState').style.display = 'block';
+
+        const { data: { session } } = await client.auth.getSession();
         if (session) {
           window.location.href = '/';
           return;
         }
       } catch (err) {
         console.error('Session check error:', err);
+        if (err.message === 'Auth not configured') {
+          showError('Authentication not configured. Contact administrator.');
+          return;
+        }
       }
 
       document.getElementById('loginForm').style.display = 'block';
@@ -191,7 +200,8 @@
       submitBtn.textContent = 'Signing in...';
 
       try {
-        const { data, error } = await supabaseClient.auth.signInWithPassword({
+        const client = getClient();
+        const { data, error } = await client.auth.signInWithPassword({
           email,
           password
         });
