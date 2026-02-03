@@ -745,6 +745,411 @@ app.post("/sync/wix-inventory", async (req, res) => {
   }
 });
 
+/* ---------- SKU Cost Management Endpoints ---------- */
+/**
+ * COST AUTHORITY: sku_costs table is the single source of truth for unit costs
+ *
+ * ENDPOINTS:
+ * - POST /sync/sku-costs - Bulk import costs from JSON
+ * - GET /costs/missing - List SKUs needing cost data
+ * - POST /costs/update - Update single SKU cost
+ * - GET /costs/coverage - Get cost coverage statistics
+ */
+
+/**
+ * Bulk import SKU costs
+ *
+ * ACCEPTS:
+ * - JSON array: [{ sku: "ABC-123", unit_cost: 10.50, source: "invoice" }, ...]
+ * - Or object with costs field: { costs: [...] }
+ *
+ * BEHAVIOR:
+ * - UPSERTS costs (updates existing, inserts new)
+ * - Validates unit_cost >= 0
+ * - Requires SKU to exist (logs warning if not)
+ */
+app.post("/sync/sku-costs", async (req, res) => {
+  const requestId = crypto.randomUUID();
+  const startTime = Date.now();
+
+  console.log("💰 [OMEN] SKU COSTS SYNC REQUESTED", { requestId });
+
+  try {
+    // 1️⃣ CHECK SUPABASE
+    if (!isSupabaseAvailable()) {
+      return res.status(503).json({
+        ok: false,
+        error: "Supabase not configured",
+        message: "Cannot sync costs: Supabase connection required",
+        requestId
+      });
+    }
+
+    // 2️⃣ EXTRACT COSTS DATA
+    let costs;
+    if (Array.isArray(req.body)) {
+      costs = req.body;
+    } else if (Array.isArray(req.body?.costs)) {
+      costs = req.body.costs;
+    } else {
+      return res.status(400).json({
+        ok: false,
+        error: "Invalid payload",
+        message: "Expected JSON array of costs or { costs: [...] }",
+        example: [{ sku: "SKU-123", unit_cost: 10.50, source: "invoice" }],
+        requestId
+      });
+    }
+
+    if (costs.length === 0) {
+      return res.status(400).json({
+        ok: false,
+        error: "Empty costs array",
+        message: "No costs provided to import",
+        requestId
+      });
+    }
+
+    console.log(`💰 [OMEN] Processing ${costs.length} cost entries`, { requestId });
+
+    // 3️⃣ VALIDATE AND PREPARE
+    const valid = [];
+    const invalid = [];
+
+    for (const entry of costs) {
+      const sku = entry.sku?.trim();
+      const unitCost = parseFloat(entry.unit_cost);
+      const source = entry.source || 'manual';
+
+      if (!sku) {
+        invalid.push({ entry, reason: "Missing SKU" });
+        continue;
+      }
+
+      if (isNaN(unitCost) || unitCost < 0) {
+        invalid.push({ entry, reason: `Invalid unit_cost: ${entry.unit_cost}` });
+        continue;
+      }
+
+      valid.push({
+        sku,
+        unit_cost: unitCost,
+        source,
+        effective_date: entry.effective_date || new Date().toISOString(),
+        notes: entry.notes || null
+      });
+    }
+
+    if (valid.length === 0) {
+      return res.status(400).json({
+        ok: false,
+        error: "No valid cost entries",
+        message: "All entries failed validation",
+        invalid: invalid.slice(0, 10),
+        requestId
+      });
+    }
+
+    // 4️⃣ UPSERT TO SUPABASE
+    const client = getSupabaseClient();
+
+    const { data: upserted, error: upsertError } = await client
+      .from('sku_costs')
+      .upsert(valid, { onConflict: 'sku' })
+      .select();
+
+    if (upsertError) {
+      console.error(`💰 [OMEN] UPSERT failed:`, upsertError, { requestId });
+
+      // Check if table doesn't exist
+      if (upsertError.code === 'PGRST205' || upsertError.code === '42P01') {
+        return res.status(500).json({
+          ok: false,
+          error: "sku_costs table not found",
+          message: "Run migration 004_sku_costs.sql in Supabase SQL Editor",
+          requestId
+        });
+      }
+
+      return res.status(500).json({
+        ok: false,
+        error: "Upsert failed",
+        message: upsertError.message,
+        requestId
+      });
+    }
+
+    const duration = Date.now() - startTime;
+
+    console.log(`✅ [OMEN] SKU COSTS SYNC COMPLETE`, {
+      requestId,
+      upserted: upserted?.length || valid.length,
+      duration: `${duration}ms`
+    });
+
+    // 5️⃣ CLEAR INVENTORY CACHE (margins need recalculation)
+    clearInventory(STORE_ID);
+
+    return res.json({
+      ok: true,
+      message: `Successfully imported ${upserted?.length || valid.length} SKU costs`,
+      stats: {
+        submitted: costs.length,
+        valid: valid.length,
+        invalid: invalid.length,
+        upserted: upserted?.length || valid.length,
+        durationMs: duration
+      },
+      invalid: invalid.length > 0 ? invalid.slice(0, 10) : [],
+      requestId,
+      syncedAt: new Date().toISOString()
+    });
+
+  } catch (err) {
+    console.error(`❌ [OMEN] SKU COSTS SYNC FAILED`, {
+      requestId,
+      error: err.message
+    });
+
+    return res.status(500).json({
+      ok: false,
+      error: "Sync failed",
+      message: err.message,
+      requestId
+    });
+  }
+});
+
+/**
+ * Get SKUs missing cost data
+ *
+ * Joins wix_inventory_live with sku_costs to find gaps
+ */
+app.get("/costs/missing", async (req, res) => {
+  const requestId = crypto.randomUUID();
+
+  try {
+    if (!isSupabaseAvailable()) {
+      return res.status(503).json({
+        ok: false,
+        error: "Supabase not configured",
+        requestId
+      });
+    }
+
+    const client = getSupabaseClient();
+
+    // Get all inventory SKUs
+    const { data: inventory, error: invError } = await client
+      .from('wix_inventory_live')
+      .select('sku, product_name, variant_name, retail');
+
+    if (invError) {
+      return res.status(500).json({
+        ok: false,
+        error: "Failed to query inventory",
+        message: invError.message,
+        requestId
+      });
+    }
+
+    // Get all SKUs with costs
+    const { data: costs, error: costError } = await client
+      .from('sku_costs')
+      .select('sku');
+
+    // Handle missing table gracefully
+    const costSkus = new Set();
+    if (!costError && costs) {
+      costs.forEach(c => costSkus.add(c.sku));
+    }
+
+    // Find missing
+    const missing = inventory
+      .filter(item => !costSkus.has(item.sku))
+      .map(item => ({
+        sku: item.sku,
+        product_name: item.product_name,
+        variant_name: item.variant_name,
+        retail: item.retail
+      }));
+
+    return res.json({
+      ok: true,
+      totalInventory: inventory.length,
+      totalWithCost: costSkus.size,
+      totalMissing: missing.length,
+      coveragePercent: inventory.length > 0
+        ? parseFloat(((costSkus.size / inventory.length) * 100).toFixed(1))
+        : 0,
+      missing,
+      requestId
+    });
+
+  } catch (err) {
+    return res.status(500).json({
+      ok: false,
+      error: err.message,
+      requestId
+    });
+  }
+});
+
+/**
+ * Update single SKU cost
+ */
+app.post("/costs/update", async (req, res) => {
+  const requestId = crypto.randomUUID();
+
+  try {
+    if (!isSupabaseAvailable()) {
+      return res.status(503).json({
+        ok: false,
+        error: "Supabase not configured",
+        requestId
+      });
+    }
+
+    const { sku, unit_cost, source, notes } = req.body;
+
+    if (!sku || typeof sku !== 'string') {
+      return res.status(400).json({
+        ok: false,
+        error: "Missing or invalid SKU",
+        requestId
+      });
+    }
+
+    const costValue = parseFloat(unit_cost);
+    if (isNaN(costValue) || costValue < 0) {
+      return res.status(400).json({
+        ok: false,
+        error: "Invalid unit_cost",
+        message: "unit_cost must be a number >= 0",
+        requestId
+      });
+    }
+
+    const client = getSupabaseClient();
+
+    const { data, error } = await client
+      .from('sku_costs')
+      .upsert({
+        sku: sku.trim(),
+        unit_cost: costValue,
+        source: source || 'manual',
+        notes: notes || null,
+        effective_date: new Date().toISOString()
+      }, { onConflict: 'sku' })
+      .select()
+      .single();
+
+    if (error) {
+      return res.status(500).json({
+        ok: false,
+        error: "Update failed",
+        message: error.message,
+        requestId
+      });
+    }
+
+    // Clear cache
+    clearInventory(STORE_ID);
+
+    return res.json({
+      ok: true,
+      message: `Cost updated for SKU ${sku}`,
+      data,
+      requestId
+    });
+
+  } catch (err) {
+    return res.status(500).json({
+      ok: false,
+      error: err.message,
+      requestId
+    });
+  }
+});
+
+/**
+ * Get cost coverage statistics
+ */
+app.get("/costs/coverage", async (req, res) => {
+  const requestId = crypto.randomUUID();
+
+  try {
+    if (!isSupabaseAvailable()) {
+      return res.status(503).json({
+        ok: false,
+        error: "Supabase not configured",
+        requestId
+      });
+    }
+
+    const client = getSupabaseClient();
+
+    // Get inventory count
+    const { count: inventoryCount, error: invCountError } = await client
+      .from('wix_inventory_live')
+      .select('*', { count: 'exact', head: true });
+
+    // Get costs count
+    const { count: costCount, error: costCountError } = await client
+      .from('sku_costs')
+      .select('*', { count: 'exact', head: true });
+
+    // Handle sku_costs table not existing
+    const actualCostCount = costCountError ? 0 : (costCount || 0);
+    const actualInventoryCount = invCountError ? 0 : (inventoryCount || 0);
+
+    // Get inventory items with both cost AND retail (for margin calculation)
+    const { data: inventory } = await client
+      .from('wix_inventory_live')
+      .select('sku, retail');
+
+    const { data: costs } = await client
+      .from('sku_costs')
+      .select('sku, unit_cost');
+
+    let marginsComputable = 0;
+    if (inventory && costs) {
+      const costMap = new Map(costs.map(c => [c.sku, c.unit_cost]));
+      marginsComputable = inventory.filter(item =>
+        item.retail && item.retail > 0 && costMap.has(item.sku)
+      ).length;
+    }
+
+    return res.json({
+      ok: true,
+      stats: {
+        totalInventorySKUs: actualInventoryCount,
+        totalCostEntries: actualCostCount,
+        skusMissingCost: actualInventoryCount - actualCostCount,
+        marginsComputable,
+        costCoveragePercent: actualInventoryCount > 0
+          ? parseFloat(((actualCostCount / actualInventoryCount) * 100).toFixed(1))
+          : 0,
+        marginCoveragePercent: actualInventoryCount > 0
+          ? parseFloat(((marginsComputable / actualInventoryCount) * 100).toFixed(1))
+          : 0
+      },
+      tables: {
+        inventory: invCountError ? { error: invCountError.message } : { count: actualInventoryCount },
+        costs: costCountError ? { error: "Table may not exist - run migration 004_sku_costs.sql" } : { count: actualCostCount }
+      },
+      requestId
+    });
+
+  } catch (err) {
+    return res.status(500).json({
+      ok: false,
+      error: err.message,
+      requestId
+    });
+  }
+});
+
 /* ---------- Chat Endpoint ---------- */
 /**
  * GUARDRAIL: Chat uses recommendations from generateRecommendations() ONLY.

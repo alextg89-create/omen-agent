@@ -1,16 +1,18 @@
 /**
- * SINGLE SOURCE OF TRUTH: Supabase → wix_inventory_live
+ * SINGLE SOURCE OF TRUTH: Supabase
+ *
+ * AUTHORITY MODEL:
+ * - Inventory: wix_inventory_live (SKU, quantity, visibility)
+ * - Pricing: wix_inventory_live.retail (sell price from Wix)
+ * - Cost: sku_costs table (unit_cost - MUST be explicitly set)
+ *
+ * MARGIN COMPUTATION:
+ * - margin = (retail - unit_cost) / retail * 100
+ * - ONLY computed when BOTH retail AND unit_cost exist
+ * - If cost missing: margin = NULL (never 0, never estimated)
  *
  * NO fallbacks, NO caching at this level, NO silent failures
  * Either data is fresh from Supabase or system refuses operation
- *
- * DATA SOURCE: wix_inventory_live table
- * POPULATED BY: POST /sync/wix-inventory endpoint (Make.com → Wix CSV)
- *
- * AUTHORITY ERRORS:
- * - Table does not exist → AUTHORITY_TABLE_MISSING
- * - Table empty → AUTHORITY_EMPTY
- * - Supabase unavailable → AUTHORITY_UNAVAILABLE
  *
  * STRICT TRUTH MODE: Enabled
  */
@@ -19,8 +21,12 @@ import { getSupabaseClient, isSupabaseAvailable } from '../db/supabaseClient.js'
 
 const STRICT_MODE = process.env.OMEN_STRICT_TRUTH_MODE !== 'false';
 
-// AUTHORITATIVE TABLE - NO FALLBACK
-const AUTHORITY_TABLE = 'wix_inventory_live';
+// AUTHORITATIVE TABLES - NO FALLBACK
+const INVENTORY_TABLE = 'wix_inventory_live';  // Inventory + Pricing authority
+const COST_TABLE = 'sku_costs';                 // Cost authority
+
+// Legacy alias for compatibility
+const AUTHORITY_TABLE = INVENTORY_TABLE;
 
 /**
  * Authority error types for clean handling
@@ -61,7 +67,8 @@ export async function getAuthoritativeInventory() {
   console.log('[Authority] Function: getAuthoritativeInventory');
   console.log('[Authority] Timestamp:', new Date().toISOString());
   console.log('[Authority] STRICT_MODE:', STRICT_MODE);
-  console.log('[Authority] AUTHORITY_TABLE:', AUTHORITY_TABLE);
+  console.log('[Authority] INVENTORY_TABLE:', INVENTORY_TABLE);
+  console.log('[Authority] COST_TABLE:', COST_TABLE);
   console.log('[Authority] Process ID:', process.pid);
   console.log('[Authority] ===========================================');
 
@@ -79,63 +86,111 @@ export async function getAuthoritativeInventory() {
 
   const client = getSupabaseClient();
 
-  console.log(`[Authority] 📡 QUERY: ${AUTHORITY_TABLE} (SELECT *)`);
+  // ========================================================================
+  // QUERY 1: Inventory Authority (wix_inventory_live)
+  // ========================================================================
+  console.log(`[Authority] 📡 QUERY 1: ${INVENTORY_TABLE} (SELECT *)`);
 
-  const { data: inventory, error: queryError } = await client
-    .from(AUTHORITY_TABLE)
+  const { data: inventory, error: inventoryError } = await client
+    .from(INVENTORY_TABLE)
     .select('*');
 
-  // GATE 2: Table must exist (NO FALLBACK)
-  if (queryError) {
+  if (inventoryError) {
     const isTableMissing =
-      queryError.code === 'PGRST205' ||
-      queryError.code === '42P01' ||
-      queryError.message?.includes('does not exist') ||
-      queryError.message?.includes('Could not find');
+      inventoryError.code === 'PGRST205' ||
+      inventoryError.code === '42P01' ||
+      inventoryError.message?.includes('does not exist') ||
+      inventoryError.message?.includes('Could not find');
 
     if (isTableMissing) {
-      console.error(`[Authority] ❌ AUTHORITY_TABLE_MISSING: ${AUTHORITY_TABLE} does not exist`);
+      console.error(`[Authority] ❌ AUTHORITY_TABLE_MISSING: ${INVENTORY_TABLE} does not exist`);
       throw createAuthorityError(
         AUTHORITY_ERROR.TABLE_MISSING,
-        `Authority table "${AUTHORITY_TABLE}" does not exist. Run migration 003_wix_inventory_live.sql in Supabase SQL Editor.`,
+        `Authority table "${INVENTORY_TABLE}" does not exist. Run migration 003_wix_inventory_live.sql in Supabase SQL Editor.`,
         {
-          table: AUTHORITY_TABLE,
+          table: INVENTORY_TABLE,
           hint: 'Create table via Supabase SQL Editor, then sync via POST /sync/wix-inventory',
           migration: '003_wix_inventory_live.sql'
         }
       );
     }
 
-    // Other query errors
-    console.error('[Authority] ❌ AUTHORITY_QUERY_FAILED:', queryError);
+    console.error('[Authority] ❌ AUTHORITY_QUERY_FAILED:', inventoryError);
     throw createAuthorityError(
       AUTHORITY_ERROR.QUERY_FAILED,
-      `Authority query failed: ${queryError.message}`,
-      { code: queryError.code, details: queryError.details }
+      `Authority query failed: ${inventoryError.message}`,
+      { code: inventoryError.code, details: inventoryError.details }
     );
   }
 
-  console.log('[Authority] 📡 QUERY COMPLETE:', {
-    table: AUTHORITY_TABLE,
+  console.log('[Authority] 📡 QUERY 1 COMPLETE:', {
+    table: INVENTORY_TABLE,
     rowCount: inventory?.length || 0
   });
 
-  // GATE 3: Table must have data
   if (!inventory || inventory.length === 0) {
-    console.warn(`[Authority] ⚠️ AUTHORITY_EMPTY: ${AUTHORITY_TABLE} table exists but is empty`);
+    console.warn(`[Authority] ⚠️ AUTHORITY_EMPTY: ${INVENTORY_TABLE} table exists but is empty`);
     throw createAuthorityError(
       AUTHORITY_ERROR.EMPTY,
-      `Authority table "${AUTHORITY_TABLE}" is empty. Sync inventory via POST /sync/wix-inventory.`,
+      `Authority table "${INVENTORY_TABLE}" is empty. Sync inventory via POST /sync/wix-inventory.`,
       {
-        table: AUTHORITY_TABLE,
+        table: INVENTORY_TABLE,
         hint: 'Upload Wix inventory CSV to populate the table'
       }
     );
   }
 
-  console.log(`[Authority] Loaded ${inventory.length} inventory items from ${AUTHORITY_TABLE}`);
+  console.log(`[Authority] Loaded ${inventory.length} inventory items from ${INVENTORY_TABLE}`);
 
-  // Enrich items from wix_inventory_live schema
+  // ========================================================================
+  // QUERY 2: Cost Authority (sku_costs) - OPTIONAL, continues if missing
+  // ========================================================================
+  console.log(`[Authority] 📡 QUERY 2: ${COST_TABLE} (SELECT sku, unit_cost, source)`);
+
+  let costMap = new Map();  // SKU -> { unit_cost, source }
+  let costTableExists = true;
+  let costTableCount = 0;
+
+  const { data: costs, error: costError } = await client
+    .from(COST_TABLE)
+    .select('sku, unit_cost, source');
+
+  if (costError) {
+    const isTableMissing =
+      costError.code === 'PGRST205' ||
+      costError.code === '42P01' ||
+      costError.message?.includes('does not exist') ||
+      costError.message?.includes('Could not find');
+
+    if (isTableMissing) {
+      console.warn(`[Authority] ⚠️ Cost table "${COST_TABLE}" does not exist. Run migration 004_sku_costs.sql`);
+      console.warn(`[Authority] ⚠️ All margins will be NULL until costs are added`);
+      costTableExists = false;
+    } else {
+      console.warn(`[Authority] ⚠️ Cost query failed: ${costError.message}`);
+    }
+  } else if (costs && costs.length > 0) {
+    costTableCount = costs.length;
+    for (const row of costs) {
+      if (row.sku && row.unit_cost !== null) {
+        costMap.set(row.sku, {
+          unit_cost: parseFloat(row.unit_cost),
+          source: row.source || 'unknown'
+        });
+      }
+    }
+    console.log(`[Authority] 📡 QUERY 2 COMPLETE: Loaded ${costMap.size} SKU costs from ${COST_TABLE}`);
+  } else {
+    console.warn(`[Authority] ⚠️ Cost table "${COST_TABLE}" is empty. No margins can be computed.`);
+  }
+
+  // ========================================================================
+  // ENRICH: Join inventory with cost authority
+  // ========================================================================
+  let skusWithCost = 0;
+  let skusWithoutCost = 0;
+  let skusWithMargin = 0;
+
   const enriched = inventory.map(item => {
     // Get quantity - handle IN_STOCK status
     let quantity = item.quantity_on_hand || 0;
@@ -153,22 +208,30 @@ export async function getAuthoritativeInventory() {
       }
     }
 
-    // Extract pricing - handle both table schemas
-    const cost = item.cost || item.wholesale_cost || item.product_cost || null;
+    // PRICING: retail from inventory, cost from sku_costs table
     const retail = item.retail || item.price || item.retail_price || null;
     const sale = item.sale || item.sale_price || item.compare_at || null;
 
-    // Calculate margin
-    const margin = (cost && retail)
-      ? ((retail - cost) / retail * 100).toFixed(2)
-      : null;
+    // COST AUTHORITY: Only use cost from sku_costs table
+    const costData = costMap.get(item.sku);
+    const cost = costData?.unit_cost ?? null;
+    const costSource = costData?.source ?? null;
 
-    // STRICT MODE: Cannot calculate margin is warning (not fatal)
-    if (!margin && STRICT_MODE && retail) {
-      console.warn(`[Authority] ⚠️ Cannot calculate margin for SKU "${item.sku}" - missing cost`);
+    // Track cost coverage
+    if (cost !== null) {
+      skusWithCost++;
+    } else {
+      skusWithoutCost++;
     }
 
-    // Extract product info - handle both schemas
+    // MARGIN: Only compute when BOTH retail AND cost exist
+    let margin = null;
+    if (retail !== null && retail > 0 && cost !== null) {
+      margin = parseFloat(((retail - cost) / retail * 100).toFixed(2));
+      skusWithMargin++;
+    }
+
+    // Extract product info
     const productName = item.product_name || item.strain || item.name || 'Unknown';
     const variantName = item.variant_name || item.unit || 'Unknown';
     const category = item.category || item.quality || item.tier || 'STANDARD';
@@ -182,16 +245,18 @@ export async function getAuthoritativeInventory() {
       quantity: quantity,
       grams: getGramsForUnit(variantName),
       pricing: {
-        cost,
-        retail,
-        sale,
-        margin: margin ? parseFloat(margin) : null
+        cost,          // From sku_costs table ONLY
+        retail,        // From inventory
+        sale,          // Compare-at price
+        margin,        // Computed only if both exist
+        costSource     // Audit trail for cost
       },
       inventoryStatus,
       visible: item.visible !== false,
       product_id: item.product_id || null,
       updated_at: item.synced_at || item.updated_at || item.last_updated,
-      pricingMatch: !!(cost && retail)
+      hasCost: cost !== null,
+      hasMargin: margin !== null
     };
   });
 
@@ -211,16 +276,30 @@ export async function getAuthoritativeInventory() {
 
   const inventoryLastSyncedAt = syncTimestamps[0] || null;
 
-  console.log(`[Authority] ✅ Enriched ${enriched.length} items from ${AUTHORITY_TABLE} at ${timestamp}`);
-  console.log(`[Authority] Stats: ${countedItems} counted, ${inStockItems} IN_STOCK, ${outOfStockItems} out of stock`);
-  console.log(`[Authority] Inventory last synced: ${inventoryLastSyncedAt || 'UNKNOWN'}`);
-  console.log(`[Authority] STRICT_MODE: ${STRICT_MODE ? 'ENABLED' : 'DISABLED'}`);
+  // Log cost coverage summary
+  console.log(`[Authority] ========================================`);
+  console.log(`[Authority] ✅ ENRICHMENT COMPLETE at ${timestamp}`);
+  console.log(`[Authority] Inventory: ${totalItems} SKUs from ${INVENTORY_TABLE}`);
+  console.log(`[Authority] Costs: ${costTableCount} SKUs in ${COST_TABLE}`);
+  console.log(`[Authority] ----------------------------------------`);
+  console.log(`[Authority] SKUs with cost: ${skusWithCost}`);
+  console.log(`[Authority] SKUs without cost: ${skusWithoutCost}`);
+  console.log(`[Authority] SKUs with margin: ${skusWithMargin}`);
+  console.log(`[Authority] ----------------------------------------`);
+  console.log(`[Authority] Cost coverage: ${((skusWithCost / totalItems) * 100).toFixed(1)}%`);
+  console.log(`[Authority] Margin coverage: ${((skusWithMargin / totalItems) * 100).toFixed(1)}%`);
+  console.log(`[Authority] ========================================`);
+
+  if (skusWithoutCost > 0 && STRICT_MODE) {
+    console.warn(`[Authority] ⚠️ ${skusWithoutCost} SKUs missing cost data - margins will be NULL`);
+  }
 
   return {
     items: enriched,
     timestamp,
     source: 'supabase',
-    table: AUTHORITY_TABLE,
+    table: INVENTORY_TABLE,
+    costTable: COST_TABLE,
     count: enriched.length,
     inventoryLastSyncedAt,
     stats: {
@@ -228,6 +307,15 @@ export async function getAuthoritativeInventory() {
       counted: countedItems,
       inStock: inStockItems,
       outOfStock: outOfStockItems
+    },
+    costStats: {
+      costTableExists,
+      totalCostsLoaded: costTableCount,
+      skusWithCost,
+      skusWithoutCost,
+      skusWithMargin,
+      costCoverage: totalItems > 0 ? parseFloat(((skusWithCost / totalItems) * 100).toFixed(1)) : 0,
+      marginCoverage: totalItems > 0 ? parseFloat(((skusWithMargin / totalItems) * 100).toFixed(1)) : 0
     }
   };
 }
