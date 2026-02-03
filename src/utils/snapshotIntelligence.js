@@ -25,12 +25,12 @@ export function generateExecutiveSummary(snapshot, previousSnapshot = null) {
   const margin = metrics.averageMargin ?? null;
   const orderCount = velocity.orderCount || 0;  // Count can be 0
 
-  // Previous period metrics (if available)
+  // Previous period metrics (if available) - use ?? to preserve 0 values
   const prevMetrics = previousSnapshot?.metrics || {};
-  const prevRevenue = prevMetrics.totalRevenue || null;
-  const prevProfit = prevMetrics.totalProfit || null;
-  const prevMargin = prevMetrics.averageMargin || null;
-  const prevOrderCount = previousSnapshot?.velocity?.orderCount || null;
+  const prevRevenue = prevMetrics.totalRevenue ?? null;
+  const prevProfit = prevMetrics.totalProfit ?? null;
+  const prevMargin = prevMetrics.averageMargin ?? null;
+  const prevOrderCount = previousSnapshot?.velocity?.orderCount ?? null;
 
   // Compute deltas
   const revenueDelta = prevRevenue !== null ? computeDelta(revenue, prevRevenue) : null;

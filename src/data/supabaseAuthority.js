@@ -189,6 +189,8 @@ export async function getAuthoritativeInventory() {
   // ========================================================================
   let skusWithCost = 0;
   let skusWithoutCost = 0;
+  let skusWithRetail = 0;
+  let skusWithoutRetail = 0;
   let skusWithMargin = 0;
 
   const enriched = inventory.map(item => {
@@ -208,14 +210,24 @@ export async function getAuthoritativeInventory() {
       }
     }
 
-    // PRICING: retail from inventory, cost from sku_costs table
-    const retail = item.retail || item.price || item.retail_price || null;
-    const sale = item.sale || item.sale_price || item.compare_at || null;
+    // PRICING AUTHORITY: retail ONLY from wix_inventory_live.retail - NO FALLBACKS
+    const retail = item.retail ?? null;  // Exactly as stored in Wix
+    const sale = item.compare_at ?? null;  // Compare-at price from Wix
 
     // COST AUTHORITY: Only use cost from sku_costs table
     const costData = costMap.get(item.sku);
     const cost = costData?.unit_cost ?? null;
     const costSource = costData?.source ?? null;
+
+    // Track retail coverage (price authority)
+    if (retail !== null && retail > 0) {
+      skusWithRetail++;
+    } else {
+      skusWithoutRetail++;
+      if (STRICT_MODE) {
+        console.warn(`[Authority] ⚠️ SKU "${item.sku}" missing retail price - pricing unavailable`);
+      }
+    }
 
     // Track cost coverage
     if (cost !== null) {
@@ -255,6 +267,7 @@ export async function getAuthoritativeInventory() {
       visible: item.visible !== false,
       product_id: item.product_id || null,
       updated_at: item.synced_at || item.updated_at || item.last_updated,
+      hasRetail: retail !== null && retail > 0,
       hasCost: cost !== null,
       hasMargin: margin !== null
     };
@@ -276,20 +289,26 @@ export async function getAuthoritativeInventory() {
 
   const inventoryLastSyncedAt = syncTimestamps[0] || null;
 
-  // Log cost coverage summary
+  // Log coverage summary
   console.log(`[Authority] ========================================`);
   console.log(`[Authority] ✅ ENRICHMENT COMPLETE at ${timestamp}`);
   console.log(`[Authority] Inventory: ${totalItems} SKUs from ${INVENTORY_TABLE}`);
   console.log(`[Authority] Costs: ${costTableCount} SKUs in ${COST_TABLE}`);
   console.log(`[Authority] ----------------------------------------`);
+  console.log(`[Authority] SKUs with retail price: ${skusWithRetail}`);
+  console.log(`[Authority] SKUs without retail price: ${skusWithoutRetail}`);
   console.log(`[Authority] SKUs with cost: ${skusWithCost}`);
   console.log(`[Authority] SKUs without cost: ${skusWithoutCost}`);
   console.log(`[Authority] SKUs with margin: ${skusWithMargin}`);
   console.log(`[Authority] ----------------------------------------`);
+  console.log(`[Authority] Retail coverage: ${((skusWithRetail / totalItems) * 100).toFixed(1)}%`);
   console.log(`[Authority] Cost coverage: ${((skusWithCost / totalItems) * 100).toFixed(1)}%`);
   console.log(`[Authority] Margin coverage: ${((skusWithMargin / totalItems) * 100).toFixed(1)}%`);
   console.log(`[Authority] ========================================`);
 
+  if (skusWithoutRetail > 0 && STRICT_MODE) {
+    console.warn(`[Authority] ⚠️ ${skusWithoutRetail} SKUs missing retail price - pricing unavailable`);
+  }
   if (skusWithoutCost > 0 && STRICT_MODE) {
     console.warn(`[Authority] ⚠️ ${skusWithoutCost} SKUs missing cost data - margins will be NULL`);
   }
@@ -307,6 +326,11 @@ export async function getAuthoritativeInventory() {
       counted: countedItems,
       inStock: inStockItems,
       outOfStock: outOfStockItems
+    },
+    pricingStats: {
+      skusWithRetail,
+      skusWithoutRetail,
+      retailCoverage: totalItems > 0 ? parseFloat(((skusWithRetail / totalItems) * 100).toFixed(1)) : 0
     },
     costStats: {
       costTableExists,

@@ -4,10 +4,10 @@
  * This module loaded pricing from static JSON file (src/data/pricing.json)
  * which caused stale data issues.
  *
- * NEW AUTHORITY: src/data/supabaseAuthority.js
- * - Pricing now comes from Supabase pricing table
- * - Joined with inventory at query time
- * - NO static files, NO boot-time loading
+ * CURRENT AUTHORITY: wix_inventory_live.retail
+ * - Sell prices come ONLY from wix_inventory_live.retail
+ * - Costs come ONLY from sku_costs.unit_cost
+ * - NO fallbacks, NO static files
  *
  * This file is disabled to prevent accidental usage.
  */

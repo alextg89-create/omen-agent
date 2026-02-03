@@ -163,8 +163,8 @@ function calculateVelocityMetrics(ordersBySkU, currentInventory, dateRange) {
       orderCount: orderData.orderCount,
       dailyVelocity: parseFloat(dailyVelocity.toFixed(2)),
       daysUntilStockout,
-      margin: inventoryItem.margin ?? null,  // NULL if missing - never fabricate
-      totalRevenue: inventoryItem.price ? orderData.totalSold * inventoryItem.price : null,  // NULL if no price
+      margin: inventoryItem.pricing?.margin ?? null,  // NULL if missing - never fabricate
+      totalRevenue: inventoryItem.pricing?.retail ? orderData.totalSold * inventoryItem.pricing.retail : null,  // NULL if no retail price
       isMoving: dailyVelocity > 0,
       isAccelerating: calculateAcceleration(orderData.orders, daysInPeriod)
     });
@@ -301,12 +301,12 @@ function generateActionableInsights(velocityMetrics, currentInventory) {
         name: item.name || item.product || item.sku,
         message: `${item.name || item.sku} had zero sales this period`,
         details: `${item.quantity} units in stock, tying up capital`,
-        action: (item.margin !== null && item.margin > 30)
+        action: (item.pricing?.margin !== null && item.pricing?.margin > 30)
           ? 'Consider discount to move inventory'
           : 'Review if item should be discontinued',
         data: {
           currentStock: item.quantity,
-          margin: item.margin ?? null  // NULL if missing - never fabricate
+          margin: item.pricing?.margin ?? null  // NULL if missing - never fabricate
         }
       });
     }
