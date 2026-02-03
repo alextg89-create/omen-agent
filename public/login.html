@@ -148,98 +148,81 @@
   <script src="/auth-config.js"></script>
 
   <script>
-    (function() {
-      // Grab createClient from CDN global - no local 'supabase' variable
-      const { createClient } = window.supabase;
-      let client = null;
+    // Create Supabase client immediately at script load - NOT lazily
+    const supabaseClient = window.supabase.createClient(
+      window.SUPABASE_CONFIG?.url || '',
+      window.SUPABASE_CONFIG?.anonKey || ''
+    );
 
-      // Initialize Supabase client
-      function initSupabase() {
-        if (!window.SUPABASE_CONFIG || !window.SUPABASE_CONFIG.url || !window.SUPABASE_CONFIG.anonKey) {
-          showError('Authentication not configured. Contact administrator.');
-          return false;
-        }
-
-        client = createClient(
-          window.SUPABASE_CONFIG.url,
-          window.SUPABASE_CONFIG.anonKey
-        );
-        return true;
+    // Check if already logged in (runs after DOM ready)
+    document.addEventListener('DOMContentLoaded', async () => {
+      if (!window.SUPABASE_CONFIG?.url || !window.SUPABASE_CONFIG?.anonKey) {
+        showError('Authentication not configured. Contact administrator.');
+        return;
       }
 
-      // Check if already logged in
-      async function checkExistingSession() {
-        document.getElementById('loginForm').style.display = 'none';
-        document.getElementById('loadingState').style.display = 'block';
+      document.getElementById('loginForm').style.display = 'none';
+      document.getElementById('loadingState').style.display = 'block';
 
-        try {
-          const { data: { session } } = await client.auth.getSession();
-
-          if (session) {
-            window.location.href = '/';
-            return;
-          }
-        } catch (err) {
-          console.error('Session check error:', err);
+      try {
+        const { data: { session } } = await supabaseClient.auth.getSession();
+        if (session) {
+          window.location.href = '/';
+          return;
         }
-
-        document.getElementById('loginForm').style.display = 'block';
-        document.getElementById('loadingState').style.display = 'none';
+      } catch (err) {
+        console.error('Session check error:', err);
       }
 
-      // Handle login form submission
-      window.handleLogin = async function(event) {
-        event.preventDefault();
+      document.getElementById('loginForm').style.display = 'block';
+      document.getElementById('loadingState').style.display = 'none';
+    });
 
-        const email = document.getElementById('email').value.trim();
-        const password = document.getElementById('password').value;
-        const submitBtn = document.getElementById('submitBtn');
+    // Handle login form submission
+    async function handleLogin(event) {
+      event.preventDefault();
 
-        hideError();
-        submitBtn.disabled = true;
-        submitBtn.textContent = 'Signing in...';
+      const email = document.getElementById('email').value.trim();
+      const password = document.getElementById('password').value;
+      const submitBtn = document.getElementById('submitBtn');
 
-        try {
-          const { data, error } = await client.auth.signInWithPassword({
-            email,
-            password
-          });
+      hideError();
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Signing in...';
 
-          if (error) {
-            throw error;
-          }
+      try {
+        const { data, error } = await supabaseClient.auth.signInWithPassword({
+          email,
+          password
+        });
 
-          if (data.session) {
-            window.location.href = '/';
-          } else {
-            showError('Login failed. Please try again.');
-          }
-        } catch (err) {
-          console.error('Login error:', err);
-          showError(err.message || 'Login failed. Please check your credentials.');
-        } finally {
-          submitBtn.disabled = false;
-          submitBtn.textContent = 'Sign In';
+        if (error) {
+          throw error;
         }
-      };
 
-      function showError(message) {
-        const el = document.getElementById('errorMessage');
-        el.textContent = message;
-        el.classList.add('show');
-      }
-
-      function hideError() {
-        document.getElementById('errorMessage').classList.remove('show');
-      }
-
-      // Initialize on page load
-      document.addEventListener('DOMContentLoaded', () => {
-        if (initSupabase()) {
-          checkExistingSession();
+        if (data.session) {
+          window.location.href = '/';
+        } else {
+          showError('Login failed. Please try again.');
         }
-      });
-    })();
+      } catch (err) {
+        console.error('Login error:', err);
+        showError(err.message || 'Login failed. Please check your credentials.');
+      } finally {
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Sign In';
+      }
+    }
+
+    function showError(message) {
+      const el = document.getElementById('errorMessage');
+      el.textContent = message;
+      el.classList.add('show');
+    }
+
+    function hideError() {
+      document.getElementById('errorMessage').classList.remove('show');
+    }
   </script>
 </body>
 </html>
