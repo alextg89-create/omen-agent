@@ -148,7 +148,7 @@
   <script src="/auth-config.js"></script>
 
   <script>
-    let supabase = null;
+    let supabaseClient = null;
 
     // Initialize Supabase client
     function initSupabase() {
@@ -157,7 +157,7 @@
         return false;
       }
 
-      supabase = window.supabase.createClient(
+      supabaseClient = window.supabase.createClient(
         window.SUPABASE_CONFIG.url,
         window.SUPABASE_CONFIG.anonKey
       );
@@ -170,7 +170,7 @@
       document.getElementById('loadingState').style.display = 'block';
 
       try {
-        const { data: { session } } = await supabase.auth.getSession();
+        const { data: { session } } = await supabaseClient.auth.getSession();
 
         if (session) {
           // Already logged in, redirect to app
@@ -199,7 +199,7 @@
       submitBtn.textContent = 'Signing in...';
 
       try {
-        const { data, error } = await supabase.auth.signInWithPassword({
+        const { data, error } = await supabaseClient.auth.signInWithPassword({
           email,
           password
         });
