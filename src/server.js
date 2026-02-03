@@ -165,6 +165,22 @@ app.use(express.text({ limit: '5mb', type: 'text/csv' }));
 const publicPath = path.join(__dirname, "..", "public");
 app.use(express.static(publicPath));
 
+/* ---------- Auth Config (injected from env vars) ---------- */
+// Serves Supabase public config as JavaScript - NO secrets exposed
+app.get("/auth-config.js", (_req, res) => {
+  const supabaseUrl = process.env.SUPABASE_URL || '';
+  const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || '';
+
+  res.type('application/javascript');
+  res.send(`
+// Auto-generated Supabase config from environment variables
+window.SUPABASE_CONFIG = {
+  url: "${supabaseUrl}",
+  anonKey: "${supabaseAnonKey}"
+};
+`);
+});
+
 function createRequestId() {
   return crypto.randomUUID();
 }

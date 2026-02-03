@@ -4,6 +4,10 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>OMEN Vault</title>
+  <!-- Supabase JS Client -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <!-- Auth config from env vars -->
+  <script src="/auth-config.js"></script>
   <style>
     * {
       margin: 0;
@@ -424,9 +428,12 @@
     <h1>OMEN Vault</h1>
     <p class="description">Operations Intelligence. Truth only.</p>
 
-    <div class="nav">
-      <a href="#" onclick="showSection('chat'); return false;" id="navChat">Chat</a>
-      <a href="#" onclick="showSection('snapshot'); return false;" id="navSnapshot" class="active">Snapshot</a>
+    <div class="nav" style="display: flex; justify-content: space-between; align-items: center;">
+      <div>
+        <a href="#" onclick="showSection('chat'); return false;" id="navChat">Chat</a>
+        <a href="#" onclick="showSection('snapshot'); return false;" id="navSnapshot" class="active">Snapshot</a>
+      </div>
+      <button onclick="handleLogout()" style="background: transparent; border: 1px solid #444; color: #888; padding: 6px 12px; font-size: 12px;">Logout</button>
     </div>
 
     <!-- CHAT SECTION -->
@@ -505,6 +512,53 @@
   </div>
 
   <script>
+    // ============================================================================
+    // AUTH GUARD - Redirect to login if not authenticated
+    // ============================================================================
+    let supabaseAuth = null;
+
+    (async function authGuard() {
+      // Hide app until auth is verified
+      document.body.style.visibility = 'hidden';
+
+      // Check if Supabase config is available
+      if (!window.SUPABASE_CONFIG || !window.SUPABASE_CONFIG.url || !window.SUPABASE_CONFIG.anonKey) {
+        console.error('Supabase config not available');
+        window.location.href = '/login.html';
+        return;
+      }
+
+      // Initialize Supabase client
+      supabaseAuth = window.supabase.createClient(
+        window.SUPABASE_CONFIG.url,
+        window.SUPABASE_CONFIG.anonKey
+      );
+
+      try {
+        const { data: { session } } = await supabaseAuth.auth.getSession();
+
+        if (!session) {
+          // Not logged in, redirect to login
+          window.location.href = '/login.html';
+          return;
+        }
+
+        // Logged in, show app
+        document.body.style.visibility = 'visible';
+      } catch (err) {
+        console.error('Auth check failed:', err);
+        window.location.href = '/login.html';
+      }
+    })();
+
+    // Logout handler
+    async function handleLogout() {
+      if (supabaseAuth) {
+        await supabaseAuth.auth.signOut();
+      }
+      window.location.href = '/login.html';
+    }
+
     // ============================================================================
     // CONFIGURATION
     // ============================================================================

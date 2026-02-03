@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Login - OMEN Vault</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #1a1a1a;
+      color: #e0e0e0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .login-container {
+      width: 100%;
+      max-width: 400px;
+      padding: 40px;
+      background: #242424;
+      border-radius: 8px;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+    }
+
+    h1 {
+      color: #fff;
+      margin-bottom: 8px;
+      font-size: 28px;
+    }
+
+    .subtitle {
+      color: #888;
+      margin-bottom: 30px;
+      font-size: 14px;
+    }
+
+    .form-group {
+      margin-bottom: 20px;
+    }
+
+    label {
+      display: block;
+      margin-bottom: 6px;
+      font-weight: 500;
+      color: #ccc;
+      font-size: 14px;
+    }
+
+    input[type="email"],
+    input[type="password"] {
+      width: 100%;
+      padding: 12px;
+      border: 1px solid #444;
+      border-radius: 4px;
+      font-size: 14px;
+      background: #1a1a1a;
+      color: #e0e0e0;
+      transition: border-color 0.2s;
+    }
+
+    input:focus {
+      outline: none;
+      border-color: #0066cc;
+    }
+
+    button {
+      width: 100%;
+      padding: 12px;
+      border: none;
+      border-radius: 4px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      background: #0066cc;
+      color: white;
+      transition: background 0.2s;
+    }
+
+    button:hover:not(:disabled) {
+      background: #0052a3;
+    }
+
+    button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .error-message {
+      background: rgba(220, 53, 69, 0.15);
+      border: 1px solid #dc3545;
+      color: #dc3545;
+      padding: 12px;
+      border-radius: 4px;
+      margin-bottom: 20px;
+      font-size: 14px;
+      display: none;
+    }
+
+    .error-message.show {
+      display: block;
+    }
+
+    .loading {
+      text-align: center;
+      color: #888;
+      padding: 20px;
+    }
+  </style>
+</head>
+<body>
+  <div class="login-container">
+    <h1>OMEN Vault</h1>
+    <p class="subtitle">Sign in to continue</p>
+
+    <div id="errorMessage" class="error-message"></div>
+
+    <form id="loginForm" onsubmit="handleLogin(event)">
+      <div class="form-group">
+        <label for="email">Email</label>
+        <input type="email" id="email" name="email" required autocomplete="email">
+      </div>
+
+      <div class="form-group">
+        <label for="password">Password</label>
+        <input type="password" id="password" name="password" required autocomplete="current-password">
+      </div>
+
+      <button type="submit" id="submitBtn">Sign In</button>
+    </form>
+
+    <div id="loadingState" class="loading" style="display: none;">
+      Checking authentication...
+    </div>
+  </div>
+
+  <!-- Supabase JS Client -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
+  <!-- Auth config from env vars -->
+  <script src="/auth-config.js"></script>
+
+  <script>
+    let supabase = null;
+
+    // Initialize Supabase client
+    function initSupabase() {
+      if (!window.SUPABASE_CONFIG || !window.SUPABASE_CONFIG.url || !window.SUPABASE_CONFIG.anonKey) {
+        showError('Authentication not configured. Contact administrator.');
+        return false;
+      }
+
+      supabase = window.supabase.createClient(
+        window.SUPABASE_CONFIG.url,
+        window.SUPABASE_CONFIG.anonKey
+      );
+      return true;
+    }
+
+    // Check if already logged in
+    async function checkExistingSession() {
+      document.getElementById('loginForm').style.display = 'none';
+      document.getElementById('loadingState').style.display = 'block';
+
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+
+        if (session) {
+          // Already logged in, redirect to app
+          window.location.href = '/';
+          return;
+        }
+      } catch (err) {
+        console.error('Session check error:', err);
+      }
+
+      // Not logged in, show form
+      document.getElementById('loginForm').style.display = 'block';
+      document.getElementById('loadingState').style.display = 'none';
+    }
+
+    // Handle login form submission
+    async function handleLogin(event) {
+      event.preventDefault();
+
+      const email = document.getElementById('email').value.trim();
+      const password = document.getElementById('password').value;
+      const submitBtn = document.getElementById('submitBtn');
+
+      hideError();
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Signing in...';
+
+      try {
+        const { data, error } = await supabase.auth.signInWithPassword({
+          email,
+          password
+        });
+
+        if (error) {
+          throw error;
+        }
+
+        if (data.session) {
+          // Success - redirect to app
+          window.location.href = '/';
+        } else {
+          showError('Login failed. Please try again.');
+        }
+      } catch (err) {
+        console.error('Login error:', err);
+        showError(err.message || 'Login failed. Please check your credentials.');
+      } finally {
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Sign In';
+      }
+    }
+
+    function showError(message) {
+      const el = document.getElementById('errorMessage');
+      el.textContent = message;
+      el.classList.add('show');
+    }
+
+    function hideError() {
+      document.getElementById('errorMessage').classList.remove('show');
+    }
+
+    // Initialize on page load
+    document.addEventListener('DOMContentLoaded', () => {
+      if (initSupabase()) {
+        checkExistingSession();
+      }
+    });
+  </script>
+</body>
+</html>
