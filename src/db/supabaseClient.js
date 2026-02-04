@@ -36,31 +36,32 @@ let _clientCreationCount = 0;
 let _clientCreationStack = null;
 
 // ============================================================================
-// [BOOT][SUPABASE KEY MODE] - DIAGNOSTIC ENFORCEMENT (EXECUTES FIRST)
+// [BOOT][SUPABASE KEY MODE] - KEY RESOLUTION WITH FALLBACK
 // ============================================================================
 const hasSecret = !!process.env.SUPABASE_SECRET_API_KEY;
 const hasServiceRole = !!process.env.SUPABASE_SERVICE_ROLE_KEY;
 
+// Determine which key to use: prefer SECRET_API_KEY, fallback to SERVICE_ROLE_KEY
+const RESOLVED_KEY_MODE = hasSecret ? "SECRET_API_KEY" : (hasServiceRole ? "SERVICE_ROLE_KEY" : "NONE");
+
 console.error("[BOOT][SUPABASE KEY MODE]", {
   hasSecret,
   hasServiceRole,
-  using: hasSecret ? "SECRET_API_KEY" : "SERVICE_ROLE_KEY",
+  using: RESOLVED_KEY_MODE,
 });
 
-if (!hasSecret) {
-  console.error("[FATAL] SUPABASE_SECRET_API_KEY is NOT being used. Aborting startup.");
+if (!hasSecret && !hasServiceRole) {
+  console.error("[FATAL] No Supabase key found. Set SUPABASE_SECRET_API_KEY or SUPABASE_SERVICE_ROLE_KEY.");
   process.exit(1);
 }
 
 // ============================================================================
-// [BOOT] LEGACY KEY ACCESS GUARD
+// [BOOT] KEY SOURCE LOGGING
 // ============================================================================
-// If ANY code tries to READ SUPABASE_SERVICE_ROLE_KEY for client creation, crash
-// We keep the reference for logging only, never for authentication
-if (hasServiceRole) {
-  console.warn("[BOOT][WARNING] SUPABASE_SERVICE_ROLE_KEY is present in environment");
-  console.warn("[BOOT][WARNING] This key is DEPRECATED and will NOT be used for authentication");
-  console.warn("[BOOT][WARNING] Only SUPABASE_SECRET_API_KEY is authorized for Supabase access");
+if (hasSecret) {
+  console.log("[BOOT] Using SUPABASE_SECRET_API_KEY for authentication");
+} else if (hasServiceRole) {
+  console.log("[BOOT] Using SUPABASE_SERVICE_ROLE_KEY as fallback for authentication");
 }
 // ============================================================================
 
@@ -70,30 +71,25 @@ if (hasServiceRole) {
 
 const SUPABASE_ENABLED = process.env.OMEN_USE_SUPABASE === 'true';
 const SUPABASE_URL = (process.env.SUPABASE_URL || '').trim();
-const SUPABASE_SECRET_KEY = (process.env.SUPABASE_SECRET_API_KEY || '').trim();
 
-// Legacy key reference (kept for compatibility, not used)
-const LEGACY_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+// Resolve key: prefer SECRET_API_KEY, fallback to SERVICE_ROLE_KEY
+const SUPABASE_SECRET_KEY = (
+  process.env.SUPABASE_SECRET_API_KEY ||
+  process.env.SUPABASE_SERVICE_ROLE_KEY ||
+  ''
+).trim();
 
 // ============================================================================
-// FAIL FAST: Missing Secret API Key
+// FAIL FAST: Missing ALL Supabase Keys
 // ============================================================================
 
 if (SUPABASE_ENABLED && !SUPABASE_SECRET_KEY) {
   console.error('='.repeat(80));
-  console.error('[Supabase] ❌ FATAL: SUPABASE_SECRET_API_KEY is not set');
+  console.error('[Supabase] ❌ FATAL: No Supabase key configured');
   console.error('[Supabase]');
-  console.error('[Supabase] The application requires a Supabase Secret API Key to function.');
-  console.error('[Supabase] This key is available in your Supabase dashboard under:');
-  console.error('[Supabase]   Project Settings → API → Secret API Key');
-  console.error('[Supabase]');
-  console.error('[Supabase] Set the environment variable:');
-  console.error('[Supabase]   SUPABASE_SECRET_API_KEY=<your-secret-key>');
-  console.error('[Supabase]');
-  if (LEGACY_SERVICE_ROLE_KEY) {
-    console.error('[Supabase] NOTE: SUPABASE_SERVICE_ROLE_KEY is present but no longer used.');
-    console.error('[Supabase] Please migrate to SUPABASE_SECRET_API_KEY.');
-  }
+  console.error('[Supabase] Set one of these environment variables:');
+  console.error('[Supabase]   SUPABASE_SECRET_API_KEY (preferred)');
+  console.error('[Supabase]   SUPABASE_SERVICE_ROLE_KEY (fallback)');
   console.error('='.repeat(80));
   process.exit(1);
 }
@@ -142,11 +138,7 @@ function initializeSupabase() {
 
   console.log(`[Supabase] URL: ${SUPABASE_URL}`);
   console.log(`[Supabase] Key fingerprint: ${KEY_FINGERPRINT}`);
-  console.log(`[Supabase] Auth method: Secret API Key`);
-
-  if (LEGACY_SERVICE_ROLE_KEY) {
-    console.log('[Supabase] NOTE: Legacy SUPABASE_SERVICE_ROLE_KEY detected but not used');
-  }
+  console.log(`[Supabase] Auth method: ${RESOLVED_KEY_MODE}`);
 
   try {
     // ========================================================================
