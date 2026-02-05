@@ -1,23 +1,28 @@
 /**
- * Chat Intelligence Layer
+ * OMEN Executive Decision Orchestrator - Chat Intelligence Layer
  *
- * Transforms flat data responses into insight-driven, actionable operator guidance
- * WITHOUT changing data sources or queries
+ * OMEN is NOT a chatbot. OMEN is the brain that decides what the owner should do next.
  *
- * Design Philosophy:
- * - Headline insight (1 sentence)
- * - Why it matters (1-2 sentences)
- * - Concrete action (what to do)
- * - Confidence signal (based on real data)
+ * CORE PRINCIPLE: DECIDE → JUSTIFY → QUANTIFY → RECOMMEND → OFFER DRILL-DOWNS
  *
- * VELOCITY TRUTH:
- * - metrics.hasVelocity = true when snapshot has real order data
- * - When hasVelocity is true, NEVER say "without velocity data" or similar
- * - Rank by velocity + margin when hasVelocity, margin-only when not
+ * Every response must contain:
+ * 1. DECISION: What should be done
+ * 2. JUSTIFICATION: Why it matters (plain language, not metrics dump)
+ * 3. QUANTIFICATION: Dollar impact (profit gained, cash freed, risk avoided)
+ * 4. RECOMMENDATION: Specific action to take
+ * 5. DRILL-DOWNS: 2-3 explicit next decisions (not explorations)
  *
- * TIMEFRAME TRANSPARENCY:
- * - Every response MUST state what timeframe the data covers
- * - Never mix metrics across scopes without explicit labels
+ * BEHAVIORAL RULES:
+ * - Never ask "How can I help?" or open-ended questions
+ * - Never show data without consequence
+ * - Always lead with what matters most
+ * - Follow-ups are drill-downs, not new conversations
+ * - When data is missing: state what IS reliable, reframe positively
+ *
+ * CONFIDENCE SIGNALS:
+ * - High: Strong data backing, act now
+ * - Medium: Reasonable signal, monitor after action
+ * - Low: Early signal, hedge recommendation
  */
 
 /**
@@ -60,48 +65,49 @@ export function getTimeframeContext(context) {
 }
 
 /**
- * Generate strategic follow-up suggestions based on the topic discussed
- * OMEN should always offer 2-3 next steps to guide the operator
+ * Generate controlled drill-down options (max 3)
+ * These are DECISIONS, not explorations. Phrased as actions the owner can take.
  *
  * @param {string} topic - The topic that was just discussed
  * @param {object} context - Chat context for additional insights
- * @returns {string} Follow-up suggestions block
+ * @returns {string} Drill-down options block
  */
 export function generateFollowUpSuggestions(topic, context = null) {
-  const suggestions = {
+  // DRILL-DOWNS are decisions, not questions
+  const drillDowns = {
     promotion: [
-      "Want me to compare discount vs. bundle strategies for this SKU?",
-      "Should I show which products pair well for a bundle deal?",
-      "Want to see how a 10-15% discount would impact your margin?"
+      "Compare discount vs bundle profit impact",
+      "Show bundle pairing opportunities",
+      "Simulate 15% discount on margin"
     ],
     margin: [
-      "Want to see which high-margin items need more promotion?",
-      "Should I identify margin opportunities you're missing?",
-      "Want me to flag items where you could increase prices?"
+      "Surface under-promoted high-margin items",
+      "Identify pricing increase opportunities",
+      "Show margin leakage by category"
     ],
     stock: [
-      "Want me to prioritize which items to reorder first?",
-      "Should I calculate optimal reorder quantities based on velocity?",
-      "Want to see which stockouts would hurt your revenue most?"
+      "Prioritize reorder by revenue risk",
+      "Calculate velocity-based reorder quantities",
+      "Show stockout impact on weekly profit"
     ],
     velocity: [
-      "Want to see what's driving the acceleration?",
-      "Should I compare this to your other top movers?",
-      "Want me to project when you'll need to reorder?"
+      "Analyze acceleration drivers",
+      "Compare against top movers",
+      "Project reorder timeline"
     ],
     general: [
-      "What should I promote this week?",
-      "Which items have the highest profit opportunity?",
-      "Where is my capital sitting idle?"
+      "Show top promotion decision for this week",
+      "Surface highest profit opportunity now",
+      "Identify where capital is trapped"
     ]
   };
 
-  const topicSuggestions = suggestions[topic] || suggestions.general;
+  const topicOptions = drillDowns[topic] || drillDowns.general;
 
-  // Pick 2-3 relevant suggestions
-  const selected = topicSuggestions.slice(0, 3);
+  // Max 3 drill-downs, phrased as decisions
+  const selected = topicOptions.slice(0, 3);
 
-  return `\n\n---\n**What would you like to explore next?**\n${selected.map((s, i) => `${i + 1}. ${s}`).join('\n')}`;
+  return `\n\n---\n**Next decisions:**\n${selected.map((s, i) => `→ ${s}`).join('\n')}`;
 }
 
 /**

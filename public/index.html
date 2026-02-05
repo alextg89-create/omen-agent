@@ -906,12 +906,60 @@
       const dateRangeStr = snapshot.dateRange ?
         `${new Date(snapshot.dateRange.startDate).toLocaleDateString('en-US', {month: 'short', day: 'numeric'})} - ${new Date(snapshot.dateRange.endDate).toLocaleDateString('en-US', {month: 'short', day: 'numeric'})}` : '';
 
+      // Extract executive intelligence
+      const intelligence = snapshot.intelligence || {};
+      const executiveSummary = intelligence.executiveSummary || {};
+      const wowInsights = intelligence.wowInsights || [];
+      const topDecision = wowInsights[0];
+
       let html = `
-        <h3 style="color: #fff; margin-bottom: 10px;">${timeframeLabel} Snapshot</h3>
-        ${dateRangeStr ? `<div style="color: #888; margin-bottom: 20px; font-size: 0.9em;">${dateRangeStr}</div>` : ''}
+        <h3 style="color: #fff; margin-bottom: 5px;">${timeframeLabel} Intelligence Brief</h3>
+        ${dateRangeStr ? `<div style="color: #666; margin-bottom: 15px; font-size: 0.85em;">${dateRangeStr}</div>` : ''}
       `;
 
-      // METRICS GRID - Always show something useful
+      // ═══════════════════════════════════════════════════════════════════════
+      // EXECUTIVE SUMMARY - Lead with what matters, not metrics
+      // ═══════════════════════════════════════════════════════════════════════
+      html += '<div class="executive-summary" style="background: linear-gradient(135deg, #1a2a3a 0%, #0a1a2a 100%); padding: 20px; border-radius: 8px; margin-bottom: 20px; border-left: 4px solid #4CAF50;">';
+
+      if (topDecision) {
+        // Lead with the top decision
+        html += `
+          <div style="font-size: 1.1em; color: #fff; font-weight: 600; margin-bottom: 10px;">
+            ${topDecision.headline || 'Priority Decision Available'}
+          </div>
+          <div style="color: #ccc; margin-bottom: 12px; line-height: 1.5;">
+            ${topDecision.insight || executiveSummary.verdict || 'Generate insights to surface priority decisions.'}
+          </div>
+          ${topDecision.action ? `<div style="color: #4CAF50; font-weight: 500;">→ ${topDecision.action}</div>` : ''}
+          ${topDecision.dollarImpact ? `<div style="color: #FFD700; margin-top: 8px; font-size: 0.95em;">Potential impact: $${topDecision.dollarImpact.toLocaleString()}</div>` : ''}
+        `;
+      } else if (executiveSummary.verdict) {
+        // Fall back to verdict
+        html += `
+          <div style="font-size: 1.1em; color: #fff; font-weight: 600; margin-bottom: 10px;">Current State</div>
+          <div style="color: #ccc; line-height: 1.5;">${executiveSummary.verdict}</div>
+          ${executiveSummary.topAction ? `<div style="color: #4CAF50; margin-top: 10px; font-weight: 500;">→ ${executiveSummary.topAction}</div>` : ''}
+        `;
+      } else {
+        // Minimum useful state
+        const avgMargin = metrics.averageMargin;
+        const profitPotential = metrics.totalProfit;
+        html += `
+          <div style="font-size: 1.1em; color: #fff; font-weight: 600; margin-bottom: 10px;">Inventory Status</div>
+          <div style="color: #ccc; line-height: 1.5;">
+            ${metrics.totalItems || 0} active SKUs tracked${avgMargin ? ` at ${avgMargin.toFixed(1)}% average margin` : ''}.
+            ${profitPotential ? ` $${profitPotential.toLocaleString()} profit potential in current inventory.` : ''}
+            ${timeframeOrders > 0 ? ` ${timeframeOrders} orders this ${snapshot.timeframe || 'period'}.` : ''}
+          </div>
+        `;
+      }
+
+      html += '</div>';
+
+      // ═══════════════════════════════════════════════════════════════════════
+      // KEY METRICS - Supporting data (not the lead)
+      // ═══════════════════════════════════════════════════════════════════════
       html += '<div class="metrics-grid">';
 
       // Order counts - show timeframe vs context
@@ -993,9 +1041,7 @@
       // DECISION INTELLIGENCE (not just recommendations)
       const promotions = recommendations.promotions || [];
       const inventoryActions = recommendations.inventory || [];
-      const intelligence = snapshot.intelligence || {};
-      const wowInsights = intelligence.wowInsights || [];
-      const executiveSummary = intelligence.executiveSummary || {};
+      // Note: intelligence, wowInsights, executiveSummary already declared above
 
       html += '<div class="recommendations" style="margin-top: 30px;">';
       html += '<h4 style="color: #fff;">Decision Intelligence</h4>';

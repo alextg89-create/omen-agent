@@ -1518,22 +1518,23 @@ Current Recommendations Available:
       usingIntelligentResponse = true;
       console.log("💬 [OMEN] Using insight-driven response with proactive layer", { requestId });
     } else if (!llmResponse) {
-      // FALLBACK FOR DEV MODE (no LLM and no intelligent response)
+      // EXECUTIVE FALLBACK - OMEN always leads with a decision, never asks what to do
       try {
-        if (isFollowUp) {
-          // Follow-up but couldn't generate specific response - acknowledge and guide
-          llmResponse = `I understand you want to explore this further. ${generateFollowUpSuggestions(followUpTopic || 'general')}`;
+        if (isFollowUp && followUpTopic) {
+          // Follow-up: treat as drill-down on the active topic
+          llmResponse = generateExecutiveDrillDown(followUpTopic, chatContext?.recommendations, chatContext);
         } else if (needsRecommendations && recommendations) {
           llmResponse = generateFallbackRecommendationResponseStrong(message, recommendations, inventoryContext);
         } else if (needsInventory && inventoryContext) {
           llmResponse = generateFallbackInventoryResponse(message, inventoryContext);
         } else {
-          // NEVER say "How can I help you today?" - always offer actionable options
-          llmResponse = `I'm ready to help with your inventory intelligence. ${generateFollowUpSuggestions('general')}`;
+          // DEFAULT: State the most important decision right now
+          llmResponse = generateExecutiveDefault(chatContext);
         }
       } catch (fallbackErr) {
         console.error("[OMEN] Fallback generation failed", { requestId, error: fallbackErr.message });
-        llmResponse = "I'm having trouble generating a response. Please try again.";
+        // Even errors should be decision-oriented
+        llmResponse = "Data pipeline interrupted. Margin and velocity insights from last sync remain valid for decision-making.";
       }
     }
 
@@ -1839,8 +1840,65 @@ function generateFallbackInventoryResponse(message, inventoryContext) {
 }
 
 /**
- * Generate fallback recommendation response when LLM is unavailable
+ * EXECUTIVE DEFAULT - When no specific intent detected
+ * OMEN states the most important decision right now, never asks what to do
  */
+function generateExecutiveDefault(context) {
+  const intelligence = context?.weekly?.intelligence || context?.daily?.intelligence;
+  const wowInsight = intelligence?.wowInsights?.[0];
+  const verdict = intelligence?.executiveSummary?.verdict;
+
+  // Lead with the most impactful insight
+  if (wowInsight) {
+    return `**Priority Decision:** ${wowInsight.headline}\n\n${wowInsight.insight}\n\n**Action:** ${wowInsight.action}${wowInsight.dollarImpact ? `\n\n**Impact:** $${wowInsight.dollarImpact.toLocaleString()} opportunity` : ''}\n\n---\n**Next decisions:**\n→ Show promotion candidates ranked by profit\n→ Surface inventory risk by dollar exposure\n→ Compare margin performance vs last week`;
+  }
+
+  // Fall back to executive summary
+  if (verdict) {
+    return `**Current State:** ${verdict}\n\n---\n**Next decisions:**\n→ Show top promotion decision for this week\n→ Surface highest profit opportunity now\n→ Identify where capital is trapped`;
+  }
+
+  // Minimum viable executive response
+  return `**Ready for decisions.** Generate a snapshot to surface:\n\n→ Which SKU to promote this week\n→ Where profit is trapped in slow inventory\n→ What's at risk of stockout\n\nSelect a timeframe above and generate.`;
+}
+
+/**
+ * EXECUTIVE DRILL-DOWN - Handle follow-up as continuation of decision context
+ * Never restart conversation, always deepen the current topic
+ */
+function generateExecutiveDrillDown(topic, recommendations, context) {
+  const promoRecs = recommendations?.promotions || [];
+  const invRecs = recommendations?.inventory || [];
+
+  if (topic === 'promotion' && promoRecs.length > 0) {
+    const top = promoRecs[0];
+    const margin = top.triggeringMetrics?.margin;
+    const stock = top.triggeringMetrics?.quantity || 0;
+
+    let response = `**Drilling down on ${top.name}:**\n\n`;
+
+    if (margin && stock) {
+      const discountHeadroom = Math.min(20, margin * 0.25);
+      response += `• **Discount play:** Cut ${discountHeadroom.toFixed(0)}% and still hold ${(margin - discountHeadroom).toFixed(1)}% margin\n`;
+      response += `• **Bundle play:** Pair with slow mover to lift both\n`;
+      response += `• **Feature play:** Full margin, create urgency with ${stock} units\n\n`;
+      response += `**My call:** ${stock < 15 ? 'Feature without discount — scarcity sells' : 'Discount to accelerate velocity'}`;
+    }
+
+    return response + `\n\n---\n**Next decisions:**\n→ Simulate discount impact on weekly profit\n→ Show best bundle pairings\n→ Compare to other promotion candidates`;
+  }
+
+  if (topic === 'margin') {
+    const highMargin = context?.metrics?.highestMarginItem;
+    if (highMargin) {
+      return `**Margin focus: ${highMargin.name}**\n\nAt ${highMargin.margin?.toFixed(1)}% realized margin, this is your profit anchor. Every unit sold here does more work than lower-margin items.\n\n**Decision:** Promote this unless stock is critically low.\n\n---\n**Next decisions:**\n→ Show other high-margin items not being promoted\n→ Calculate revenue impact of 10% volume increase\n→ Identify margin leakage in current promotions`;
+    }
+  }
+
+  // Generic drill-down
+  return `**Continuing analysis...**\n\nNeed more specific data to drill down. Generate a fresh snapshot for current intelligence.\n\n---\n**Next decisions:**\n→ Show top promotion decision for this week\n→ Surface highest profit opportunity now\n→ Identify where capital is trapped`;
+}
+
 /**
  * Stronger fallback - ALWAYS provides ranked guidance
  * GUARDRAIL: Uses ONLY data from recommendations (already computed by temporal engine)
