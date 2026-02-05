@@ -60,6 +60,242 @@ export function getTimeframeContext(context) {
 }
 
 /**
+ * Generate strategic follow-up suggestions based on the topic discussed
+ * OMEN should always offer 2-3 next steps to guide the operator
+ *
+ * @param {string} topic - The topic that was just discussed
+ * @param {object} context - Chat context for additional insights
+ * @returns {string} Follow-up suggestions block
+ */
+export function generateFollowUpSuggestions(topic, context = null) {
+  const suggestions = {
+    promotion: [
+      "Want me to compare discount vs. bundle strategies for this SKU?",
+      "Should I show which products pair well for a bundle deal?",
+      "Want to see how a 10-15% discount would impact your margin?"
+    ],
+    margin: [
+      "Want to see which high-margin items need more promotion?",
+      "Should I identify margin opportunities you're missing?",
+      "Want me to flag items where you could increase prices?"
+    ],
+    stock: [
+      "Want me to prioritize which items to reorder first?",
+      "Should I calculate optimal reorder quantities based on velocity?",
+      "Want to see which stockouts would hurt your revenue most?"
+    ],
+    velocity: [
+      "Want to see what's driving the acceleration?",
+      "Should I compare this to your other top movers?",
+      "Want me to project when you'll need to reorder?"
+    ],
+    general: [
+      "What should I promote this week?",
+      "Which items have the highest profit opportunity?",
+      "Where is my capital sitting idle?"
+    ]
+  };
+
+  const topicSuggestions = suggestions[topic] || suggestions.general;
+
+  // Pick 2-3 relevant suggestions
+  const selected = topicSuggestions.slice(0, 3);
+
+  return `\n\n---\n**What would you like to explore next?**\n${selected.map((s, i) => `${i + 1}. ${s}`).join('\n')}`;
+}
+
+/**
+ * Detect if message is a follow-up question about a previous topic
+ *
+ * @param {string} message - User's message
+ * @param {array} conversationHistory - Previous messages
+ * @returns {{ isFollowUp: boolean, topic: string|null, originalContext: object|null }}
+ */
+export function detectFollowUpIntent(message, conversationHistory = []) {
+  const lower = message.toLowerCase();
+
+  // Follow-up indicators
+  const followUpPatterns = [
+    /^(what about|how about|and|also|another|different|other|more|else)/i,
+    /^(that|this|it|those|these)\b/i,
+    /^(can you|could you|show me|tell me more|explain|elaborate)/i,
+    /\b(ways|options|alternatives|strategies|methods|approaches)\b/i,
+    /^(why|how|what if|when)\b/i
+  ];
+
+  const isFollowUp = followUpPatterns.some(pattern => pattern.test(lower));
+
+  // If follow-up detected, look at last assistant message for context
+  let topic = null;
+  let originalContext = null;
+
+  if (isFollowUp && conversationHistory.length > 0) {
+    const lastAssistant = conversationHistory
+      .filter(m => m.role === 'assistant')
+      .pop();
+
+    if (lastAssistant?.content) {
+      const lastContent = lastAssistant.content.toLowerCase();
+
+      // Detect topic from last response
+      if (lastContent.includes('promot') || lastContent.includes('feature') || lastContent.includes('highlight')) {
+        topic = 'promotion';
+      } else if (lastContent.includes('margin') || lastContent.includes('profit')) {
+        topic = 'margin';
+      } else if (lastContent.includes('stock') || lastContent.includes('reorder') || lastContent.includes('deplet')) {
+        topic = 'stock';
+      } else if (lastContent.includes('velocity') || lastContent.includes('moving') || lastContent.includes('selling')) {
+        topic = 'velocity';
+      }
+
+      originalContext = { lastResponse: lastAssistant.content };
+    }
+  }
+
+  return { isFollowUp, topic, originalContext };
+}
+
+/**
+ * Generate response for follow-up questions
+ *
+ * @param {string} message - User's follow-up question
+ * @param {string} topic - Detected topic from previous conversation
+ * @param {object} recommendations - Available recommendations
+ * @param {object} metrics - Available metrics
+ * @param {object} context - Full context
+ * @returns {string|null} Response or null if can't handle
+ */
+export function generateFollowUpResponse(message, topic, recommendations, metrics, context) {
+  const lower = message.toLowerCase();
+
+  // Handle "different ways to promote" type questions
+  if ((lower.includes('different') || lower.includes('ways') || lower.includes('how') || lower.includes('strategies')) &&
+      (lower.includes('promote') || topic === 'promotion')) {
+    return generatePromotionStrategies(recommendations, metrics, context);
+  }
+
+  // Handle "why" questions about previous topic
+  if (lower.includes('why') && topic) {
+    return generateWhyExplanation(topic, recommendations, metrics, context);
+  }
+
+  // Handle "what else" or "more" questions
+  if (lower.includes('else') || lower.includes('more') || lower.includes('other')) {
+    return generateAdditionalInsights(topic, recommendations, metrics, context);
+  }
+
+  return null;
+}
+
+/**
+ * Generate promotion strategy alternatives
+ */
+function generatePromotionStrategies(recommendations, metrics, context) {
+  const promoRecs = recommendations?.promotions || [];
+  const topItem = promoRecs[0] || metrics?.highestMarginItem;
+
+  if (!topItem) {
+    return "I need more data to suggest promotion strategies. Generate a snapshot first.";
+  }
+
+  const name = topItem.name || topItem.sku;
+  const margin = topItem.triggeringMetrics?.margin || topItem.margin || 0;
+  const stock = topItem.triggeringMetrics?.quantity || topItem.quantity || 0;
+
+  let response = `**3 Promotion Strategies for ${name}:**\n\n`;
+
+  // Strategy 1: Discount
+  const discountHeadroom = Math.min(15, margin * 0.3);
+  response += `**1. Flash Discount (${discountHeadroom.toFixed(0)}% off)**\n`;
+  response += `   → Moves inventory fast, you still keep ${(margin - discountHeadroom).toFixed(1)}% margin\n`;
+  response += `   → Best for: Quick cash flow, clearing stock before reorder\n\n`;
+
+  // Strategy 2: Bundle
+  response += `**2. Bundle Deal**\n`;
+  response += `   → Pair with a slower-moving item to lift both\n`;
+  response += `   → Best for: Moving dead stock while featuring your winner\n\n`;
+
+  // Strategy 3: Featured/Premium
+  response += `**3. Featured Product (No Discount)**\n`;
+  response += `   → Highlight quality and availability, full margin\n`;
+  response += `   → Best for: Premium positioning, limited supply situations\n\n`;
+
+  // Recommendation
+  if (stock < 10) {
+    response += `💡 **My pick:** Strategy 3 — you only have ${stock} units, so create scarcity urgency without cutting margin.`;
+  } else if (margin > 60) {
+    response += `💡 **My pick:** Strategy 1 — with ${margin.toFixed(1)}% margin, you have room to discount and still win big.`;
+  } else {
+    response += `💡 **My pick:** Strategy 2 — bundle it with a slow mover to maximize overall profit.`;
+  }
+
+  response += generateFollowUpSuggestions('promotion');
+
+  return response;
+}
+
+/**
+ * Generate "why" explanations
+ */
+function generateWhyExplanation(topic, recommendations, metrics, context) {
+  const intelligence = context?.weekly?.intelligence || context?.daily?.intelligence;
+
+  if (topic === 'promotion') {
+    const topPromo = recommendations?.promotions?.[0];
+    if (topPromo) {
+      let response = `**Why ${topPromo.name}?**\n\n`;
+      response += `${topPromo.reason}\n\n`;
+
+      if (topPromo.triggeringMetrics?.velocity) {
+        response += `📈 It's moving ${topPromo.triggeringMetrics.velocity} units/day — momentum you can accelerate.\n`;
+      }
+      if (topPromo.triggeringMetrics?.margin) {
+        response += `💰 ${topPromo.triggeringMetrics.margin.toFixed(1)}% margin gives you discount headroom.\n`;
+      }
+
+      response += generateFollowUpSuggestions('promotion');
+      return response;
+    }
+  }
+
+  if (topic === 'margin') {
+    const highMargin = metrics?.highestMarginItem;
+    if (highMargin) {
+      return `**Why ${highMargin.name} has the highest margin:**\n\nYour cost is low relative to retail price, creating ${highMargin.margin.toFixed(1)}% profit on each sale. This is where your promotion dollars work hardest.` + generateFollowUpSuggestions('margin');
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Generate additional insights for "more" questions
+ */
+function generateAdditionalInsights(topic, recommendations, metrics, context) {
+  const intelligence = context?.weekly?.intelligence || context?.daily?.intelligence;
+
+  if (topic === 'promotion' && recommendations?.promotions?.length > 1) {
+    const others = recommendations.promotions.slice(1, 4);
+    let response = `**Other promotion opportunities:**\n\n`;
+    others.forEach((item, i) => {
+      const margin = item.triggeringMetrics?.margin;
+      response += `${i + 1}. **${item.name}** — ${margin ? margin.toFixed(1) + '% margin' : 'strong mover'}\n`;
+      response += `   ${item.reason}\n\n`;
+    });
+    response += generateFollowUpSuggestions('promotion');
+    return response;
+  }
+
+  // Surface WOW insights if available
+  if (intelligence?.wowInsights?.length > 0) {
+    const wow = intelligence.wowInsights[0];
+    return `**Here's something else worth your attention:**\n\n🎯 ${wow.headline}\n${wow.insight}\n\n**Action:** ${wow.action}` + generateFollowUpSuggestions('general');
+  }
+
+  return null;
+}
+
+/**
  * Generate insight-driven response for promotion questions
  */
 export function generatePromotionInsight(message, recommendations, metrics) {

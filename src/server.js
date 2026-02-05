@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import applyPricing from "./tools/applyPricing.js";
 import { saveInventory, getInventory, clearInventory, getInventoryWithMetadata, AUTHORITY_ERROR } from "./tools/inventoryStore.js";
-import { computeDataFreshness, computeSnapshotConfidence } from "./utils/dataFreshness.js";
+import { computeDataFreshness, computeSnapshotConfidence, reconcileConfidenceAndWarnings } from "./utils/dataFreshness.js";
 
 /**
  * Build OMEN refusal response for authority errors
@@ -59,7 +59,14 @@ import { sampleInventory as mockInventory } from "./mocks/inventory.sample.js";
 import { makeDecision } from "./decisionEngine.js";
 import { callLLM } from "./llm.js";
 import { formatChatResponse } from "./utils/responseFormatter.js";
-import { generateInsightResponse, generateProactiveInsight, wrapWithProactiveInsight } from "./utils/chatIntelligence.js";
+import {
+  generateInsightResponse,
+  generateProactiveInsight,
+  wrapWithProactiveInsight,
+  detectFollowUpIntent,
+  generateFollowUpResponse,
+  generateFollowUpSuggestions
+} from "./utils/chatIntelligence.js";
 import {
   evaluateGovernanceState,
   currentExecutionMode,
@@ -1189,6 +1196,19 @@ app.post("/chat", async (req, res) => {
     const needsInventory = detectInventoryIntent(message);
     const needsRecommendations = detectRecommendationIntent(message);
 
+    // 1.5️⃣ FOLLOW-UP DETECTION - Check if this is a follow-up to previous conversation
+    const followUpDetection = detectFollowUpIntent(message, conversationHistory);
+    const isFollowUp = followUpDetection.isFollowUp;
+    const followUpTopic = followUpDetection.topic;
+
+    console.log("💬 [OMEN] Intent detection", {
+      requestId,
+      needsInventory,
+      needsRecommendations,
+      isFollowUp,
+      followUpTopic
+    });
+
     let inventoryData = null;
     let inventoryContext = null;
     let recommendations = null;
@@ -1196,8 +1216,9 @@ app.post("/chat", async (req, res) => {
     let dataFreshness = null;
     let chatContext = null;
 
-    // 2️⃣ FETCH INVENTORY (when needed for inventory or recommendations)
-    if (needsInventory || needsRecommendations) {
+    // 2️⃣ FETCH INVENTORY (when needed for inventory, recommendations, OR follow-ups)
+    // Follow-ups ALWAYS need context to maintain conversation continuity
+    if (needsInventory || needsRecommendations || isFollowUp) {
       console.log("💬 [OMEN] Inventory required for query", { requestId, needsRecommendations });
 
       try {
@@ -1455,8 +1476,22 @@ Current Recommendations Available:
       };
 
       try {
-        // Pass full context including weekly/daily snapshots for intelligence layer
-        intelligentResponse = generateInsightResponse(message, chatContext.recommendations, chatContext, chatContext);
+        // FOLLOW-UP HANDLING: Check if this is a follow-up question first
+        if (isFollowUp && followUpTopic) {
+          console.log("💬 [OMEN] Handling follow-up question", { requestId, topic: followUpTopic });
+          intelligentResponse = generateFollowUpResponse(
+            message,
+            followUpTopic,
+            chatContext.recommendations,
+            chatContext,
+            chatContext
+          );
+        }
+
+        // If not a follow-up or follow-up didn't generate response, try standard insight
+        if (!intelligentResponse) {
+          intelligentResponse = generateInsightResponse(message, chatContext.recommendations, chatContext, chatContext);
+        }
 
         // PROACTIVE LAYER: Add "what you might not be seeing" to every response
         if (intelligentResponse) {
@@ -1485,12 +1520,16 @@ Current Recommendations Available:
     } else if (!llmResponse) {
       // FALLBACK FOR DEV MODE (no LLM and no intelligent response)
       try {
-        if (needsRecommendations && recommendations) {
+        if (isFollowUp) {
+          // Follow-up but couldn't generate specific response - acknowledge and guide
+          llmResponse = `I understand you want to explore this further. ${generateFollowUpSuggestions(followUpTopic || 'general')}`;
+        } else if (needsRecommendations && recommendations) {
           llmResponse = generateFallbackRecommendationResponseStrong(message, recommendations, inventoryContext);
         } else if (needsInventory && inventoryContext) {
           llmResponse = generateFallbackInventoryResponse(message, inventoryContext);
         } else {
-          llmResponse = "How can I help you today?";
+          // NEVER say "How can I help you today?" - always offer actionable options
+          llmResponse = `I'm ready to help with your inventory intelligence. ${generateFollowUpSuggestions('general')}`;
         }
       } catch (fallbackErr) {
         console.error("[OMEN] Fallback generation failed", { requestId, error: fallbackErr.message });
@@ -1594,6 +1633,7 @@ Current Recommendations Available:
 
 /**
  * Detect if user message requires inventory data
+ * BROADENED: Catches more natural language patterns
  */
 function detectInventoryIntent(message) {
   if (!message || typeof message !== "string") return false;
@@ -1604,7 +1644,11 @@ function detectInventoryIntent(message) {
     "margin", "profit", "inventory", "stock", "sales", "revenue",
     "cost", "price", "pricing", "skus", "items", "products",
     "performance", "sell", "sold", "movement", "turnover",
-    "value", "worth", "total", "average", "highest", "lowest"
+    "value", "worth", "total", "average", "highest", "lowest",
+    // EXPANDED: Natural language patterns
+    "moving", "velocity", "fast", "slow", "dead", "sitting",
+    "money", "capital", "cash", "dollar", "idle", "opportunity",
+    "top", "best", "worst", "winner", "loser"
   ];
 
   return inventoryKeywords.some(keyword => lowerMessage.includes(keyword));
@@ -1612,6 +1656,7 @@ function detectInventoryIntent(message) {
 
 /**
  * Detect if user is asking for recommendations
+ * BROADENED: Catches more question types and natural language
  */
 function detectRecommendationIntent(message) {
   if (!message || typeof message !== "string") return false;
@@ -1621,7 +1666,12 @@ function detectRecommendationIntent(message) {
   const recommendationKeywords = [
     "recommend", "suggestion", "should i", "what to promote",
     "what should", "advice", "action", "bundle", "discount",
-    "reorder", "priority", "focus on"
+    "reorder", "priority", "focus on",
+    // EXPANDED: Natural language patterns
+    "ways to", "how to", "strategies", "options", "alternatives",
+    "improve", "boost", "increase", "optimize", "maximize",
+    "promote", "feature", "highlight", "push", "move",
+    "fix", "help", "better", "more"
   ];
 
   return recommendationKeywords.some(keyword => lowerMessage.includes(keyword));
@@ -2754,15 +2804,26 @@ app.post("/snapshot/generate", async (req, res) => {
       previousSnapshotExists: previousSnapshots.length > 1
     });
 
-    snapshot.confidence = holisticConfidence.confidence;
+    // RECONCILE confidence with warnings to prevent contradictions
+    // (e.g., HIGH CONFIDENCE + "stale data" warning is contradictory)
+    const reconciled = reconcileConfidenceAndWarnings(
+      holisticConfidence.confidence,
+      snapshot.warnings || [],
+      holisticConfidence.factors
+    );
+
+    snapshot.confidence = reconciled.confidence;
     snapshot.confidenceScore = holisticConfidence.score;
     snapshot.confidenceExplanation = holisticConfidence.explanation;
     snapshot.confidenceFactors = holisticConfidence.factors;
+    snapshot.warnings = reconciled.warnings;
+    snapshot.statusMessage = reconciled.statusMessage;
 
-    console.log("📸 [OMEN] Confidence computed", {
+    console.log("📸 [OMEN] Confidence computed and reconciled", {
       requestId,
-      confidence: holisticConfidence.confidence,
+      confidence: reconciled.confidence,
       score: holisticConfidence.score,
+      statusMessage: reconciled.statusMessage,
       factors: holisticConfidence.factors
     });
 

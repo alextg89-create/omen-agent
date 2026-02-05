@@ -486,10 +486,26 @@
 
       <div class="form-group">
         <label for="timeframeInput">Timeframe</label>
-        <select id="timeframeInput">
+        <select id="timeframeInput" onchange="handleTimeframeChange()">
           <option value="weekly">Weekly</option>
           <option value="daily">Daily</option>
+          <option value="monthly">Monthly</option>
+          <option value="custom">Custom Range</option>
         </select>
+      </div>
+
+      <!-- Custom Date Range (shown when custom is selected) -->
+      <div id="customDateRange" class="form-group" style="display: none;">
+        <div style="display: flex; gap: 10px; align-items: center;">
+          <div>
+            <label for="startDateInput">Start Date</label>
+            <input type="date" id="startDateInput" style="background: #2a2a3e; border: 1px solid #3a3a5e; color: #fff; padding: 8px; border-radius: 4px;">
+          </div>
+          <div>
+            <label for="endDateInput">End Date</label>
+            <input type="date" id="endDateInput" style="background: #2a2a3e; border: 1px solid #3a3a5e; color: #fff; padding: 8px; border-radius: 4px;">
+          </div>
+        </div>
       </div>
 
       <div class="button-group">
@@ -763,6 +779,28 @@
     }
 
     // ============================================================================
+    // TIMEFRAME HANDLING
+    // ============================================================================
+
+    function handleTimeframeChange() {
+      const timeframe = document.getElementById('timeframeInput').value;
+      const customDateRange = document.getElementById('customDateRange');
+
+      if (timeframe === 'custom') {
+        customDateRange.style.display = 'block';
+        // Set default dates (last 7 days)
+        const today = new Date();
+        const weekAgo = new Date(today);
+        weekAgo.setDate(weekAgo.getDate() - 7);
+
+        document.getElementById('endDateInput').value = today.toISOString().split('T')[0];
+        document.getElementById('startDateInput').value = weekAgo.toISOString().split('T')[0];
+      } else {
+        customDateRange.style.display = 'none';
+      }
+    }
+
+    // ============================================================================
     // SNAPSHOT GENERATION
     // ============================================================================
 
@@ -774,10 +812,27 @@
 
         const timeframe = document.getElementById('timeframeInput').value;
 
+        // Build request body
+        const requestBody = { timeframe };
+
+        // Add custom date range if selected
+        if (timeframe === 'custom') {
+          const startDate = document.getElementById('startDateInput').value;
+          const endDate = document.getElementById('endDateInput').value;
+
+          if (!startDate || !endDate) {
+            showStatus('Please select start and end dates', 'error');
+            return;
+          }
+
+          requestBody.startDate = startDate;
+          requestBody.endDate = endDate;
+        }
+
         const response = await fetch(`${BACKEND_URL}/snapshot/generate`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ timeframe })
+          body: JSON.stringify(requestBody)
         });
 
         const data = await response.json();
@@ -839,108 +894,204 @@
       const recommendations = snapshot.recommendations || { promotions: [], pricing: [], inventory: [] };
       const velocity = snapshot.velocity || {};
       const temporal = snapshot.temporal || {};
+      const orderContext = snapshot.orderContext || {};
 
       const hasRealData = temporal.hasRealData === true || velocity.orderCount > 0;
+      const timeframeOrders = orderContext.timeframe?.orderCount || velocity.orderCount || 0;
+      const last30DaysOrders = orderContext.last30Days?.orderCount || 0;
+      const allTimeOrders = orderContext.allTime?.orderCount || 0;
+
+      // Format timeframe label
+      const timeframeLabel = snapshot.timeframe?.charAt(0).toUpperCase() + (snapshot.timeframe?.slice(1) || '');
+      const dateRangeStr = snapshot.dateRange ?
+        `${new Date(snapshot.dateRange.startDate).toLocaleDateString('en-US', {month: 'short', day: 'numeric'})} - ${new Date(snapshot.dateRange.endDate).toLocaleDateString('en-US', {month: 'short', day: 'numeric'})}` : '';
 
       let html = `
-        <h3 style="color: #fff; margin-bottom: 20px;">${snapshot.timeframe?.charAt(0).toUpperCase()}${snapshot.timeframe?.slice(1) || ''} Snapshot</h3>
+        <h3 style="color: #fff; margin-bottom: 10px;">${timeframeLabel} Snapshot</h3>
+        ${dateRangeStr ? `<div style="color: #888; margin-bottom: 20px; font-size: 0.9em;">${dateRangeStr}</div>` : ''}
       `;
 
-      // METRICS GRID - with ZERO vs NULL distinction
+      // METRICS GRID - Always show something useful
       html += '<div class="metrics-grid">';
 
-      if (hasRealData) {
+      // Order counts - show timeframe vs context
+      html += `
+        <div class="metric-card">
+          <div class="metric-label">${timeframeLabel} Orders</div>
+          ${timeframeOrders > 0 ? renderValue(timeframeOrders) : '<div class="metric-value" style="color: #888;">—</div>'}
+          ${timeframeOrders === 0 && last30DaysOrders > 0 ? `<div style="font-size: 0.8em; color: #888; margin-top: 5px;">${last30DaysOrders} in last 30 days</div>` : ''}
+        </div>
+      `;
+
+      // SKUs sold or inventory count
+      if (hasRealData && velocity.uniqueSKUs > 0) {
         html += `
-          <div class="metric-card">
-            <div class="metric-label">Orders</div>
-            ${renderValue(velocity.orderCount)}
-          </div>
           <div class="metric-card">
             <div class="metric-label">SKUs Sold</div>
             ${renderValue(velocity.uniqueSKUs)}
           </div>
         `;
+      } else {
+        html += `
+          <div class="metric-card">
+            <div class="metric-label">Active SKUs</div>
+            ${renderValue(metrics.totalItems)}
+          </div>
+        `;
       }
 
+      // Margin (always useful)
       html += `
-        <div class="metric-card">
-          <div class="metric-label">Total Items</div>
-          ${renderValue(metrics.totalItems)}
-        </div>
         <div class="metric-card">
           <div class="metric-label">Avg Margin</div>
           ${renderValue(metrics.averageMargin, 'percent')}
         </div>
       `;
 
-      if (!hasRealData) {
+      // Revenue or Profit based on data availability
+      if (metrics.totalProfit && metrics.totalProfit > 0) {
         html += `
           <div class="metric-card">
-            <div class="metric-label">Est. Revenue</div>
-            ${renderValue(metrics.totalRevenue, 'currency')}
-          </div>
-          <div class="metric-card">
-            <div class="metric-label">Est. Profit</div>
+            <div class="metric-label">Est. Profit Potential</div>
             ${renderValue(metrics.totalProfit, 'currency')}
+          </div>
+        `;
+      } else if (metrics.totalRevenue && metrics.totalRevenue > 0) {
+        html += `
+          <div class="metric-card">
+            <div class="metric-label">Inventory Value</div>
+            ${renderValue(metrics.totalRevenue, 'currency')}
           </div>
         `;
       }
 
       html += '</div>';
 
-      // RECOMMENDATIONS
+      // ORDER CONTEXT BAR - Show 30-day and all-time context
+      if (last30DaysOrders > 0 || allTimeOrders > 0) {
+        html += `
+          <div style="display: flex; gap: 20px; margin: 15px 0; padding: 12px; background: #1a1a2e; border-radius: 4px; font-size: 0.9em;">
+            <div>
+              <span style="color: #888;">Last 30 days:</span>
+              <span style="color: #fff; margin-left: 5px;">${last30DaysOrders} orders</span>
+              ${orderContext.last30Days?.totalRevenue ? `<span style="color: #4CAF50; margin-left: 8px;">$${orderContext.last30Days.totalRevenue.toLocaleString()}</span>` : ''}
+            </div>
+            <div>
+              <span style="color: #888;">All time:</span>
+              <span style="color: #fff; margin-left: 5px;">${allTimeOrders} orders</span>
+              ${orderContext.allTime?.totalRevenue ? `<span style="color: #4CAF50; margin-left: 8px;">$${orderContext.allTime.totalRevenue.toLocaleString()}</span>` : ''}
+            </div>
+          </div>
+        `
+      }
+
+      // STATUS MESSAGE - Show reconciled status if available
+      if (snapshot.statusMessage) {
+        html += `<div style="color: #4CAF50; margin-bottom: 15px; font-size: 0.9em;">${snapshot.statusMessage}</div>`;
+      }
+
+      // DECISION INTELLIGENCE (not just recommendations)
       const promotions = recommendations.promotions || [];
-      const pricing = recommendations.pricing || [];
-      const inventory = recommendations.inventory || [];
-      const totalRecs = promotions.length + pricing.length + inventory.length;
+      const inventoryActions = recommendations.inventory || [];
+      const intelligence = snapshot.intelligence || {};
+      const wowInsights = intelligence.wowInsights || [];
+      const executiveSummary = intelligence.executiveSummary || {};
 
       html += '<div class="recommendations" style="margin-top: 30px;">';
-      html += '<h4 style="color: #fff;">Recommendations</h4>';
+      html += '<h4 style="color: #fff;">Decision Intelligence</h4>';
 
+      // WOW INSIGHTS - The headline insights operators need
+      if (wowInsights.length > 0) {
+        html += `
+          <div class="recommendation-section" style="background: linear-gradient(135deg, #1a2a1a 0%, #0a1a0a 100%); border-left: 3px solid #4CAF50;">
+            <h4 style="color: #4CAF50;">Key Opportunities</h4>
+            ${wowInsights.slice(0, 3).map(wow => `
+              <div class="recommendation-item" style="padding: 15px; margin-bottom: 10px;">
+                <div style="font-size: 1.1em; color: #fff; margin-bottom: 8px;">
+                  <strong>${wow.headline || 'Opportunity Identified'}</strong>
+                </div>
+                <div style="color: #ccc; margin-bottom: 8px;">${wow.insight || ''}</div>
+                <div style="color: #4CAF50; font-weight: 500;">→ ${wow.action || 'Take action'}</div>
+                ${wow.dollarImpact ? `<div style="color: #FFD700; margin-top: 5px;">Potential impact: $${wow.dollarImpact.toLocaleString()}</div>` : ''}
+              </div>
+            `).join('')}
+          </div>
+        `;
+      }
+
+      // URGENT ACTIONS - Things that need immediate attention
+      const urgentActions = inventoryActions.filter(r => r.severity === 'high' || r.action === 'REORDER_URGENT');
+      if (urgentActions.length > 0) {
+        html += `
+          <div class="recommendation-section" style="background: linear-gradient(135deg, #2a1a1a 0%, #1a0a0a 100%); border-left: 3px solid #f44336;">
+            <h4 style="color: #f44336;">Urgent Actions Required</h4>
+            ${urgentActions.slice(0, 3).map(rec => {
+              const margin = rec.triggeringMetrics?.margin;
+              const quantity = rec.triggeringMetrics?.quantity || 0;
+              const dollarAtRisk = margin && quantity ? Math.round(quantity * (rec.triggeringMetrics?.retail || 0) * (margin / 100)) : null;
+              return `
+                <div class="recommendation-item" style="padding: 12px; margin-bottom: 8px;">
+                  <strong style="color: #fff;">${rec.name || 'Unknown'}</strong>
+                  <div style="color: #ccc; margin: 5px 0;">${rec.reason || 'Action needed'}</div>
+                  ${dollarAtRisk ? `<div style="color: #f44336;">$${dollarAtRisk.toLocaleString()} at risk</div>` : ''}
+                </div>
+              `;
+            }).join('')}
+          </div>
+        `;
+      }
+
+      // PROMOTION OPPORTUNITIES - With dollar context
       if (promotions.length > 0) {
         html += `
           <div class="recommendation-section">
-            <h4>Promotion Opportunities (${promotions.length})</h4>
-            ${promotions.slice(0, 5).map(rec => `
-              <div class="recommendation-item">
-                <strong>${rec.name || 'Unknown'}</strong>: ${rec.reason || 'No reason'}
-                <small>Action: ${rec.action || '—'}</small>
-              </div>
-            `).join('')}
+            <h4>Promotion Opportunities</h4>
+            ${promotions.slice(0, 5).map(rec => {
+              const margin = rec.triggeringMetrics?.margin;
+              const velocity = rec.triggeringMetrics?.velocity;
+              return `
+                <div class="recommendation-item" style="padding: 12px; margin-bottom: 8px;">
+                  <strong style="color: #fff;">${rec.name || 'Unknown'}</strong>
+                  ${margin ? `<span style="color: #4CAF50; margin-left: 10px;">${margin.toFixed(1)}% margin</span>` : ''}
+                  <div style="color: #ccc; margin: 5px 0;">${rec.reason || 'Good promotion candidate'}</div>
+                  ${velocity ? `<div style="color: #888; font-size: 0.9em;">Moving ${velocity} units/day</div>` : ''}
+                </div>
+              `;
+            }).join('')}
           </div>
         `;
       }
 
-      if (pricing.length > 0) {
+      // INVENTORY MONITORING - Non-urgent items
+      const monitorItems = inventoryActions.filter(r => r.severity !== 'high' && r.action !== 'REORDER_URGENT');
+      if (monitorItems.length > 0) {
         html += `
           <div class="recommendation-section">
-            <h4>Pricing Actions (${pricing.length})</h4>
-            ${pricing.slice(0, 5).map(rec => `
-              <div class="recommendation-item">
-                <strong>${rec.name || 'Unknown'}</strong>: ${rec.reason || 'No reason'}
-                <small>Action: ${rec.action || '—'}</small>
+            <h4>Monitor These Items</h4>
+            ${monitorItems.slice(0, 3).map(rec => `
+              <div class="recommendation-item" style="padding: 10px; margin-bottom: 6px;">
+                <strong style="color: #fff;">${rec.name || 'Unknown'}</strong>
+                <div style="color: #888; font-size: 0.9em;">${rec.reason || 'Keep an eye on this'}</div>
               </div>
             `).join('')}
           </div>
         `;
       }
 
-      if (inventory.length > 0) {
+      // EXECUTIVE SUMMARY - If available
+      if (executiveSummary.verdict) {
         html += `
-          <div class="recommendation-section">
-            <h4>Inventory Actions (${inventory.length})</h4>
-            ${inventory.slice(0, 5).map(rec => `
-              <div class="recommendation-item">
-                <strong>${rec.name || 'Unknown'}</strong>: ${rec.reason || 'No reason'}
-                <small>Action: ${rec.action || '—'}</small>
-              </div>
-            `).join('')}
+          <div class="recommendation-section" style="margin-top: 20px; background: #1a1a2e; padding: 15px; border-radius: 4px;">
+            <h4 style="color: #fff; margin-bottom: 10px;">Bottom Line</h4>
+            <div style="color: #ccc;">${executiveSummary.verdict}</div>
+            ${executiveSummary.topAction ? `<div style="color: #4CAF50; margin-top: 10px;">→ ${executiveSummary.topAction}</div>` : ''}
           </div>
         `;
       }
 
-      if (totalRecs === 0) {
-        html += '<p style="color: #888; padding: 15px; background: #1a1a1a; border-radius: 4px;">No actions identified.</p>';
+      // Fallback if nothing to show
+      if (wowInsights.length === 0 && promotions.length === 0 && inventoryActions.length === 0) {
+        html += '<p style="color: #888; padding: 15px; background: #1a1a1a; border-radius: 4px;">Generate a snapshot to see decision intelligence.</p>';
       }
 
       html += '</div>';

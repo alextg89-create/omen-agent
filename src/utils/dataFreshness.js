@@ -289,6 +289,55 @@ export function computeSnapshotConfidence({
 }
 
 /**
+ * Reconcile confidence level with warnings
+ *
+ * RULE: HIGH confidence + critical warning = contradiction
+ * This function adjusts either confidence or warnings to be coherent
+ *
+ * @param {string} confidence - Computed confidence level
+ * @param {string[]} warnings - List of warnings
+ * @param {object} factors - Confidence factors
+ * @returns {{ confidence: string, warnings: string[], statusMessage: string }}
+ */
+export function reconcileConfidenceAndWarnings(confidence, warnings, factors = {}) {
+  const adjustedWarnings = [...warnings];
+  let statusMessage = '';
+
+  // RULE: If confidence is HIGH but we have stale warnings, soften them
+  if (confidence === 'high' && warnings.length > 0) {
+    // Replace harsh "stale" language with softer "catching up" language
+    const staleWarningIndex = adjustedWarnings.findIndex(w =>
+      w.toLowerCase().includes('stale') ||
+      w.toLowerCase().includes('unreliable') ||
+      w.toLowerCase().includes("hasn't been synced")
+    );
+
+    if (staleWarningIndex >= 0) {
+      // We have good data despite stale sync - reframe positively
+      adjustedWarnings[staleWarningIndex] = 'Inventory sync pending — profit and margin insights remain reliable.';
+      statusMessage = 'Insights reliable';
+    }
+  }
+
+  // RULE: If confidence is LOW, make sure warnings reflect severity
+  if (confidence === 'low' && warnings.length === 0) {
+    adjustedWarnings.push('Limited data available for analysis.');
+    statusMessage = 'Limited data';
+  }
+
+  // RULE: If we have orders but stale inventory, focus on what's working
+  if (factors.hasOrders && !factors.inventoryFresh && confidence !== 'low') {
+    statusMessage = statusMessage || 'Order data current';
+  }
+
+  return {
+    confidence,
+    warnings: adjustedWarnings,
+    statusMessage: statusMessage || (confidence === 'high' ? 'Data current' : confidence === 'medium' ? 'Data aging' : 'Data limited')
+  };
+}
+
+/**
  * Check if snapshot was generated after inventory sync
  *
  * @param {object} snapshot - Snapshot object with generatedAt
