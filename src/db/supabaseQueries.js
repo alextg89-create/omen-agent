@@ -13,12 +13,15 @@ import { getSupabaseClient, isSupabaseAvailable } from './supabaseClient.js';
 /**
  * Query order-level aggregates within a date range
  *
- * SOURCE OF TRUTH: orders_agg table (order-level grain)
- * Schema: order_id, store_id, source, created_at, item_count, total_revenue, total_cost, total_profit
+ * PRIORITY 1: orders_agg table (pre-aggregated, order-level grain)
+ * FALLBACK: Compute aggregates from orders table (line-item grain)
+ *
+ * This ensures snapshots reflect real orders even when aggregation is pending.
+ * Snapshots must NEVER say "0 orders" when orders exist in the pipeline.
  *
  * @param {string} startDate - ISO date string (YYYY-MM-DD)
  * @param {string} endDate - ISO date string (YYYY-MM-DD)
- * @returns {Promise<{ok: boolean, data?: array, error?: string}>}
+ * @returns {Promise<{ok: boolean, data?: array, error?: string, source?: string}>}
  */
 export async function queryOrderEvents(startDate, endDate) {
   if (!isSupabaseAvailable()) {
@@ -28,25 +31,82 @@ export async function queryOrderEvents(startDate, endDate) {
   const client = getSupabaseClient();
 
   try {
+    // STEP 1: Try orders_agg first (pre-aggregated)
     console.log(`[Supabase] Querying orders_agg from ${startDate} to ${endDate}`);
 
-    const { data, error } = await client
+    const { data: aggData, error: aggError } = await client
       .from('orders_agg')
       .select('order_id, store_id, source, created_at, item_count, total_revenue, total_cost, total_profit')
       .gte('created_at', startDate)
       .lte('created_at', endDate)
       .order('created_at', { ascending: true });
 
-    if (error) {
-      throw new Error(`FATAL: Failed to query orders_agg: ${error.message}`);
+    // If orders_agg has data, use it
+    if (!aggError && aggData && aggData.length > 0) {
+      console.log(`[Supabase] Retrieved ${aggData.length} orders from orders_agg`);
+      return {
+        ok: true,
+        data: aggData,
+        count: aggData.length,
+        source: 'orders_agg'
+      };
     }
 
-    console.log(`[Supabase] Retrieved ${data?.length || 0} orders from orders_agg`);
+    // STEP 2: Fallback - compute aggregates from orders table (line-item level)
+    // This ensures we never report "0 orders" when webhook_events → orders has data
+    console.log(`[Supabase] orders_agg empty or error (${aggError?.message || 'no rows'}), falling back to orders table`);
+
+    const { data: lineItems, error: lineError } = await client
+      .from('orders')
+      .select('order_id, sku, quantity, price_per_unit, total_amount, order_date, created_at')
+      .gte('order_date', startDate)
+      .lte('order_date', endDate)
+      .order('order_date', { ascending: true });
+
+    if (lineError) {
+      throw new Error(`FATAL: Failed to query orders: ${lineError.message}`);
+    }
+
+    if (!lineItems || lineItems.length === 0) {
+      console.log(`[Supabase] No orders found in either orders_agg or orders table`);
+      return {
+        ok: true,
+        data: [],
+        count: 0,
+        source: 'orders_fallback'
+      };
+    }
+
+    // Aggregate line items by order_id
+    const orderMap = new Map();
+    for (const item of lineItems) {
+      const orderId = item.order_id;
+      if (!orderMap.has(orderId)) {
+        orderMap.set(orderId, {
+          order_id: orderId,
+          store_id: null,
+          source: 'wix',
+          created_at: item.order_date || item.created_at,
+          item_count: 0,
+          total_revenue: 0,
+          total_cost: null,  // Cost not available at line-item level
+          total_profit: null
+        });
+      }
+      const order = orderMap.get(orderId);
+      order.item_count += item.quantity || 1;
+      order.total_revenue += item.total_amount || (item.quantity * item.price_per_unit) || 0;
+    }
+
+    const aggregatedOrders = Array.from(orderMap.values());
+    console.log(`[Supabase] Computed ${aggregatedOrders.length} orders from ${lineItems.length} line items (fallback)`);
 
     return {
       ok: true,
-      data: data || [],
-      count: data?.length || 0
+      data: aggregatedOrders,
+      count: aggregatedOrders.length,
+      source: 'orders_fallback',
+      aggregationPending: true  // Signal that proper aggregation should run
     };
   } catch (err) {
     console.error('[Supabase] Query error:', err.message);

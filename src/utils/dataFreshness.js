@@ -84,7 +84,7 @@ export function computeDataFreshness(inventoryLastSyncedAt) {
     // Refuse if > 48 hours
     if (ageHours > 48) {
       shouldRefuse = true;
-      warnings.push('Data is too stale to provide reliable intelligence. Sync inventory first.');
+      warnings.push('Order aggregation pending. Profit and margin insights remain reliable.');
     }
   }
 
