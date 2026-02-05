@@ -160,6 +160,135 @@ export function buildOMENResponse(answer, inventoryLastSyncedAt, additionalWarni
 }
 
 /**
+ * Compute holistic snapshot confidence based on ALL available data
+ *
+ * This is the UPGRADED confidence logic that considers:
+ * - Inventory freshness
+ * - Order data existence
+ * - Cost/margin coverage (ACTIVE SKUs only per policy)
+ * - Velocity data availability
+ *
+ * POLICY RULES:
+ * - Coverage metrics use ACTIVE SKUs only (quantity > 0 or IN_STOCK)
+ * - Inactive/out-of-stock SKUs do NOT degrade confidence
+ * - If orders > 0 AND skusWithCost > 0 → confidence MUST be at least MEDIUM
+ * - LOW confidence ONLY when data is genuinely missing
+ *
+ * @param {object} params - Parameters for confidence calculation
+ * @returns {{ confidence: string, factors: object, explanation: string }}
+ */
+export function computeSnapshotConfidence({
+  inventoryFreshness = null,
+  orderCount = 0,
+  skusWithCost = 0,
+  totalSkus = 0,
+  velocityDataAvailable = false,
+  previousSnapshotExists = false,
+  // NEW: Active SKU counts (policy-compliant)
+  activeSkuCount = null,
+  activeWithCost = null,
+  costCoveragePercent = null  // Pre-computed from authority (active only)
+}) {
+  // Use active counts if provided (policy-compliant), otherwise fall back to totals
+  const effectiveTotalSkus = activeSkuCount !== null ? activeSkuCount : totalSkus;
+  const effectiveSkusWithCost = activeWithCost !== null ? activeWithCost : skusWithCost;
+
+  // Use pre-computed coverage if provided, otherwise calculate
+  const effectiveCoverage = costCoveragePercent !== null
+    ? costCoveragePercent / 100
+    : (effectiveTotalSkus > 0 ? effectiveSkusWithCost / effectiveTotalSkus : 1);
+
+  const factors = {
+    inventoryFresh: false,
+    hasOrders: orderCount > 0,
+    hasCostData: effectiveSkusWithCost > 0,
+    costCoverage: effectiveCoverage,
+    hasVelocity: velocityDataAvailable,
+    hasComparison: previousSnapshotExists,
+    // Policy tracking
+    usingActiveCounts: activeSkuCount !== null,
+    activeSkuCount: effectiveTotalSkus,
+    activeWithCost: effectiveSkusWithCost
+  };
+
+  // Check inventory freshness
+  if (inventoryFreshness) {
+    factors.inventoryFresh = inventoryFreshness.confidence !== 'low';
+  }
+
+  // Calculate confidence score (0-100)
+  let score = 0;
+  const explanations = [];
+
+  // Inventory freshness: 25 points
+  if (factors.inventoryFresh) {
+    score += 25;
+    explanations.push('Inventory is fresh');
+  } else {
+    explanations.push('Inventory sync is stale');
+  }
+
+  // Order data: 30 points (critical for intelligence)
+  if (factors.hasOrders) {
+    score += 30;
+    explanations.push(`${orderCount} orders available`);
+  } else {
+    explanations.push('No order data');
+  }
+
+  // Cost/margin coverage: 25 points (ACTIVE SKUs only per policy)
+  if (factors.hasCostData) {
+    const coverageScore = Math.min(25, Math.round(factors.costCoverage * 25));
+    score += coverageScore;
+    const coverageLabel = factors.usingActiveCounts ? 'active cost coverage' : 'cost coverage';
+    explanations.push(`${Math.round(factors.costCoverage * 100)}% ${coverageLabel}`);
+  } else {
+    explanations.push('No cost data');
+  }
+
+  // Velocity data: 10 points
+  if (factors.hasVelocity) {
+    score += 10;
+    explanations.push('Velocity metrics available');
+  }
+
+  // Previous snapshot for comparison: 10 points
+  if (factors.hasComparison) {
+    score += 10;
+    explanations.push('Week-over-week comparison available');
+  }
+
+  // Determine confidence level
+  let confidence;
+  if (score >= 70) {
+    confidence = 'high';
+  } else if (score >= 40) {
+    confidence = 'medium';
+  } else {
+    confidence = 'low';
+  }
+
+  // RULE: If orders > 0 AND skusWithCost > 0 → at least MEDIUM
+  if (factors.hasOrders && factors.hasCostData && confidence === 'low') {
+    confidence = 'medium';
+    explanations.push('Elevated to medium: has orders and cost data');
+  }
+
+  // POLICY BONUS: High coverage (>=80%) of active SKUs → boost confidence
+  if (factors.costCoverage >= 0.8 && confidence === 'medium') {
+    confidence = 'high';
+    explanations.push('Elevated to high: ≥80% active SKU cost coverage');
+  }
+
+  return {
+    confidence,
+    score,
+    factors,
+    explanation: explanations.join('. ') + '.'
+  };
+}
+
+/**
  * Check if snapshot was generated after inventory sync
  *
  * @param {object} snapshot - Snapshot object with generatedAt

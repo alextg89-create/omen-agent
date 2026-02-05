@@ -281,6 +281,31 @@ export async function getAuthoritativeInventory() {
   const inStockItems = enriched.filter(i => i.inventoryStatus === 'IN_STOCK').length;
   const outOfStockItems = enriched.filter(i => i.quantity === 0 && i.inventoryStatus !== 'IN_STOCK').length;
 
+  // ========================================================================
+  // POLICY: ACTIVE SKU DEFINITION
+  // ========================================================================
+  // ACTIVE = SKUs that are sellable and should count toward coverage metrics
+  // - Has quantity > 0 OR has IN_STOCK status (available but unknown quantity)
+  // - Inactive SKUs are preserved but excluded from coverage calculations
+  //
+  // This prevents out-of-stock or discontinued items from degrading confidence
+  // ========================================================================
+  const activeSKUs = enriched.filter(i =>
+    i.quantity > 0 || i.inventoryStatus === 'IN_STOCK'
+  );
+  const inactiveSKUs = enriched.filter(i =>
+    i.quantity === 0 && i.inventoryStatus !== 'IN_STOCK'
+  );
+
+  const activeCount = activeSKUs.length;
+  const inactiveCount = inactiveSKUs.length;
+
+  // Coverage stats for ACTIVE SKUs only (policy-compliant)
+  const activeWithCost = activeSKUs.filter(i => i.hasCost).length;
+  const activeWithRetail = activeSKUs.filter(i => i.hasRetail).length;
+  const activeWithMargin = activeSKUs.filter(i => i.hasMargin).length;
+  const activeWithoutCost = activeSKUs.filter(i => !i.hasCost).length;
+
   // Find the most recent synced_at timestamp from inventory
   const syncTimestamps = enriched
     .map(i => i.updated_at)
@@ -289,28 +314,40 @@ export async function getAuthoritativeInventory() {
 
   const inventoryLastSyncedAt = syncTimestamps[0] || null;
 
+  // Calculate coverage percentages based on ACTIVE SKUs only
+  const activeCostCoverage = activeCount > 0
+    ? parseFloat(((activeWithCost / activeCount) * 100).toFixed(1))
+    : 100;  // No active SKUs = 100% coverage (nothing to cover)
+  const activeMarginCoverage = activeCount > 0
+    ? parseFloat(((activeWithMargin / activeCount) * 100).toFixed(1))
+    : 100;
+  const activeRetailCoverage = activeCount > 0
+    ? parseFloat(((activeWithRetail / activeCount) * 100).toFixed(1))
+    : 100;
+
   // Log coverage summary
   console.log(`[Authority] ========================================`);
   console.log(`[Authority] ✅ ENRICHMENT COMPLETE at ${timestamp}`);
   console.log(`[Authority] Inventory: ${totalItems} SKUs from ${INVENTORY_TABLE}`);
   console.log(`[Authority] Costs: ${costTableCount} SKUs in ${COST_TABLE}`);
   console.log(`[Authority] ----------------------------------------`);
-  console.log(`[Authority] SKUs with retail price: ${skusWithRetail}`);
-  console.log(`[Authority] SKUs without retail price: ${skusWithoutRetail}`);
-  console.log(`[Authority] SKUs with cost: ${skusWithCost}`);
-  console.log(`[Authority] SKUs without cost: ${skusWithoutCost}`);
-  console.log(`[Authority] SKUs with margin: ${skusWithMargin}`);
+  console.log(`[Authority] ACTIVE SKUs (sellable): ${activeCount}`);
+  console.log(`[Authority] INACTIVE SKUs (excluded): ${inactiveCount}`);
   console.log(`[Authority] ----------------------------------------`);
-  console.log(`[Authority] Retail coverage: ${((skusWithRetail / totalItems) * 100).toFixed(1)}%`);
-  console.log(`[Authority] Cost coverage: ${((skusWithCost / totalItems) * 100).toFixed(1)}%`);
-  console.log(`[Authority] Margin coverage: ${((skusWithMargin / totalItems) * 100).toFixed(1)}%`);
+  console.log(`[Authority] Active SKUs with cost: ${activeWithCost}`);
+  console.log(`[Authority] Active SKUs without cost: ${activeWithoutCost}`);
+  console.log(`[Authority] Active SKUs with margin: ${activeWithMargin}`);
+  console.log(`[Authority] ----------------------------------------`);
+  console.log(`[Authority] Active Cost Coverage: ${activeCostCoverage}%`);
+  console.log(`[Authority] Active Margin Coverage: ${activeMarginCoverage}%`);
   console.log(`[Authority] ========================================`);
 
-  if (skusWithoutRetail > 0 && STRICT_MODE) {
-    console.warn(`[Authority] ⚠️ ${skusWithoutRetail} SKUs missing retail price - pricing unavailable`);
+  // Only warn about ACTIVE SKUs missing cost (inactive ones are excluded by policy)
+  if (activeWithoutCost > 0 && STRICT_MODE) {
+    console.warn(`[Authority] ⚠️ ${activeWithoutCost} ACTIVE SKUs missing cost data - margins will be NULL`);
   }
-  if (skusWithoutCost > 0 && STRICT_MODE) {
-    console.warn(`[Authority] ⚠️ ${skusWithoutCost} SKUs missing cost data - margins will be NULL`);
+  if (inactiveCount > 0) {
+    console.log(`[Authority] ℹ️ ${inactiveCount} inactive SKUs excluded from coverage (policy: preserved but not counted)`);
   }
 
   return {
@@ -325,12 +362,17 @@ export async function getAuthoritativeInventory() {
       total: totalItems,
       counted: countedItems,
       inStock: inStockItems,
-      outOfStock: outOfStockItems
+      outOfStock: outOfStockItems,
+      active: activeCount,
+      inactive: inactiveCount
     },
     pricingStats: {
       skusWithRetail,
       skusWithoutRetail,
-      retailCoverage: totalItems > 0 ? parseFloat(((skusWithRetail / totalItems) * 100).toFixed(1)) : 0
+      // Use ACTIVE coverage for policy compliance
+      retailCoverage: activeRetailCoverage,
+      // Keep raw stats for audit
+      rawRetailCoverage: totalItems > 0 ? parseFloat(((skusWithRetail / totalItems) * 100).toFixed(1)) : 0
     },
     costStats: {
       costTableExists,
@@ -338,8 +380,17 @@ export async function getAuthoritativeInventory() {
       skusWithCost,
       skusWithoutCost,
       skusWithMargin,
-      costCoverage: totalItems > 0 ? parseFloat(((skusWithCost / totalItems) * 100).toFixed(1)) : 0,
-      marginCoverage: totalItems > 0 ? parseFloat(((skusWithMargin / totalItems) * 100).toFixed(1)) : 0
+      // POLICY: Coverage uses ACTIVE SKUs only
+      costCoverage: activeCostCoverage,
+      marginCoverage: activeMarginCoverage,
+      // Keep raw stats for audit purposes
+      rawCostCoverage: totalItems > 0 ? parseFloat(((skusWithCost / totalItems) * 100).toFixed(1)) : 0,
+      rawMarginCoverage: totalItems > 0 ? parseFloat(((skusWithMargin / totalItems) * 100).toFixed(1)) : 0,
+      // Active-specific counts
+      activeWithCost,
+      activeWithoutCost,
+      activeWithMargin,
+      activeCount
     }
   };
 }

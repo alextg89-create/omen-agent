@@ -619,6 +619,12 @@ export function generateInsightResponse(message, recommendations, metrics, conte
  *
  * This adds unprompted intelligence to every response.
  * OMEN should feel like it's watching the business, not just answering questions.
+ *
+ * FRAMING ROTATION:
+ * - Profit maximization: "You're leaving money on the table"
+ * - Cash flow recovery: "Your capital is stuck"
+ * - Inventory risk: "You're about to lose sales"
+ * - Missed opportunity: "This is slipping away"
  */
 export function generateProactiveInsight(context) {
   const intelligence = context?.weekly?.intelligence || context?.daily?.intelligence;
@@ -626,63 +632,110 @@ export function generateProactiveInsight(context) {
 
   const proactiveInsights = [];
 
-  // 1. Surface the verdict if there's a critical signal
+  // 0. WOW INSIGHT - The most impactful, non-obvious insight (NEW)
+  const wowInsight = intelligence.wowInsight;
+  if (wowInsight) {
+    proactiveInsights.push({
+      priority: 0,  // Highest priority
+      text: `🎯 **${wowInsight.headline}** — ${wowInsight.insight} ${wowInsight.action}`
+    });
+  }
+
+  // 1. Hidden opportunities - profit sitting on shelves (NEW)
+  const hiddenOpportunities = intelligence.hiddenOpportunities || [];
+  if (hiddenOpportunities.length > 0 && proactiveInsights.length < 2) {
+    const top = hiddenOpportunities[0];
+    proactiveInsights.push({
+      priority: 1,
+      text: `💰 **Money on the table:** ${top.name} has ${top.margin}% margin but barely moves. ${top.insight}`
+    });
+  }
+
+  // 2. Top profit contributors not being promoted (NEW)
+  const topProfitContributors = intelligence.topProfitContributors || [];
+  const topSKUs = intelligence.topSKUs || [];
+  if (topProfitContributors.length > 0 && topSKUs.length > 0) {
+    // Check if top profit contributor is NOT in top velocity
+    const topProfit = topProfitContributors[0];
+    const isInTopVelocity = topSKUs.some(s => s.sku === topProfit.sku);
+    if (!isInTopVelocity && proactiveInsights.length < 2) {
+      proactiveInsights.push({
+        priority: 1,
+        text: `📊 **Profit mismatch:** ${topProfit.name} could contribute $${topProfit.potentialProfit.toLocaleString()} in profit but isn't in your top sellers. Push it harder.`
+      });
+    }
+  }
+
+  // 3. Surface the verdict if there's a critical signal
   const verdict = intelligence.verdict;
   if (verdict && verdict.verdictType !== 'STABLE') {
     if (verdict.verdictType === 'STOCKOUT_IMMINENT') {
       proactiveInsights.push({
         priority: 1,
-        text: `⚠️ **What you might not be seeing:** ${verdict.focusItem} is running low and will stock out soon. ${verdict.consequence}`
+        text: `🚨 **You're about to lose sales:** ${verdict.focusItem} will stock out soon. ${verdict.consequence}`
       });
     } else if (verdict.verdictType === 'UNDER_PROMOTED') {
       proactiveInsights.push({
         priority: 2,
-        text: `💡 **Hidden opportunity:** ${verdict.focusItem} has great margins but isn't moving. ${verdict.reason}`
+        text: `💡 **Profit hiding in plain sight:** ${verdict.focusItem} — ${verdict.reason}`
       });
     } else if (verdict.verdictType === 'REVENUE_DECLINE') {
       proactiveInsights.push({
         priority: 1,
-        text: `📉 **Trend to watch:** ${verdict.reason} ${verdict.consequence}`
+        text: `📉 **Cash flow alert:** ${verdict.reason} ${verdict.consequence}`
+      });
+    } else if (verdict.verdictType === 'DEAD_STOCK') {
+      proactiveInsights.push({
+        priority: 2,
+        text: `🧊 **Your capital is frozen:** ${verdict.reason} ${verdict.consequence}`
+      });
+    } else if (verdict.verdictType === 'CAPITAL_MISALLOCATION') {
+      proactiveInsights.push({
+        priority: 2,
+        text: `💸 **Cash stuck in the wrong place:** ${verdict.reason}`
       });
     }
   }
 
-  // 2. Surface forecasts that matter
+  // 4. Surface forecasts that matter
   const forecasts = intelligence.forecasts || [];
   for (const forecast of forecasts.slice(0, 2)) {
-    if (forecast.type === 'stockout_forecast') {
+    if (forecast.type === 'stockout_forecast' && proactiveInsights.length < 3) {
       proactiveInsights.push({
         priority: 1,
-        text: `🔮 **Looking ahead:** ${forecast.prediction}. ${forecast.action}`
+        text: `🔮 **This is coming:** ${forecast.prediction}. ${forecast.action}`
       });
-    } else if (forecast.type === 'momentum_forecast') {
+    } else if (forecast.type === 'momentum_forecast' && proactiveInsights.length < 3) {
       proactiveInsights.push({
         priority: 3,
-        text: `📈 **Momentum alert:** ${forecast.prediction}. ${forecast.action}`
+        text: `📈 **Catch this wave:** ${forecast.prediction}. ${forecast.action}`
       });
     }
   }
 
-  // 3. Surface anomalies the user didn't ask about
+  // 5. Surface anomalies the user didn't ask about
   const anomalies = intelligence.anomalies || [];
   const unusualChanges = anomalies.filter(a =>
     a.type === 'velocity_spike' || a.type === 'velocity_drop'
   );
 
-  if (unusualChanges.length > 0 && proactiveInsights.length < 2) {
+  if (unusualChanges.length > 0 && proactiveInsights.length < 3) {
     const change = unusualChanges[0];
+    const framing = change.type === 'velocity_spike'
+      ? `🔥 **Something's catching fire:**`
+      : `⚠️ **Momentum dying:**`;
     proactiveInsights.push({
       priority: 2,
-      text: `🔍 **Unusual pattern:** ${change.message}. Worth investigating.`
+      text: `${framing} ${change.message}. Worth investigating.`
     });
   }
 
-  // 4. Surface margin risks
+  // 6. Surface margin risks
   const marginAnalysis = intelligence.marginAnalysis;
-  if (marginAnalysis?.averageMargin && marginAnalysis.averageMargin < 40 && proactiveInsights.length < 2) {
+  if (marginAnalysis?.averageMargin && marginAnalysis.averageMargin < 40 && proactiveInsights.length < 3) {
     proactiveInsights.push({
       priority: 2,
-      text: `💸 **Margin watch:** Average margin is ${marginAnalysis.averageMargin.toFixed(1)}% — that's tight. Small discounts could hurt.`
+      text: `💸 **Thin ice:** Average margin is ${marginAnalysis.averageMargin.toFixed(1)}%. Every discount cuts deep. Protect your winners.`
     });
   }
 

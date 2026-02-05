@@ -443,9 +443,23 @@ async function runVerification() {
     console.log('  Average margin:    ', metrics.avgMargin + '%');
     console.log('');
 
+    // Policy metrics from authority
+    const costStats = snapshotData?.authority?.costStats || {};
+    if (costStats.activeCount) {
+      console.log('POLICY METRICS (Active SKUs Only):');
+      console.log('  Active SKUs:       ', costStats.activeCount);
+      console.log('  Inactive/excluded: ', metrics.totalSkus - costStats.activeCount);
+      console.log('  Active with cost:  ', costStats.activeWithCost);
+      console.log('  Active coverage:   ', costStats.costCoverage + '%');
+      console.log('');
+    }
+
     if (metrics.skusWithoutCost > 0) {
-      console.log('WARNINGS:');
-      console.log('  - ' + metrics.skusWithoutCost + ' SKUs without cost data (UNMAPPED)');
+      console.log('INFO:');
+      console.log('  - ' + metrics.skusWithoutCost + ' raw SKUs without cost (includes inactive)');
+      if (costStats.activeWithoutCost) {
+        console.log('  - ' + costStats.activeWithoutCost + ' ACTIVE SKUs need cost data');
+      }
     }
 
     console.log('');

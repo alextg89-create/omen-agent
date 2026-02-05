@@ -464,8 +464,14 @@ export function analyzeMargins(snapshot) {
   const metrics = snapshot.metrics || {};
   const inventory = snapshot.enrichedInventory || [];
 
+  // POLICY: Only analyze ACTIVE SKUs (quantity > 0 or IN_STOCK status)
+  // Inactive SKUs are preserved but excluded from margin analysis
+  const activeInventory = inventory.filter(i =>
+    i.quantity > 0 || i.inventoryStatus === 'IN_STOCK'
+  );
+
   // Find items with known margin (must be non-null and positive)
-  const itemsWithMargin = inventory.filter(i =>
+  const itemsWithMargin = activeInventory.filter(i =>
     i.pricing?.margin !== null && i.pricing?.margin !== undefined && i.pricing.margin > 0
   );
 
@@ -529,7 +535,13 @@ export function generateOMENVerdict(snapshot, previousSnapshot = null) {
   const velocityMetrics = velocity.velocityMetrics || [];
   const recommendations = snapshot.recommendations || {};
   const metrics = snapshot.metrics || {};
-  const inventory = snapshot.enrichedInventory || [];
+  const rawInventory = snapshot.enrichedInventory || [];
+
+  // POLICY: Only consider ACTIVE SKUs for verdicts
+  // Inactive/out-of-stock SKUs are preserved but don't generate alerts
+  const inventory = rawInventory.filter(i =>
+    i.quantity > 0 || i.inventoryStatus === 'IN_STOCK'
+  );
 
   // Collect all actionable signals with consequence scores
   const signals = [];
@@ -758,6 +770,229 @@ export function forecastConsequences(snapshot, previousSnapshot = null) {
 }
 
 /**
+ * Get top SKUs by profit contribution (margin * quantity * retail)
+ * EXCLUDES SKUs without cost data - they have no valid margin
+ *
+ * @param {object} snapshot - Current snapshot
+ * @param {number} limit - Max items to return
+ * @returns {Array} Top profit contributors
+ */
+export function getTopProfitContributors(snapshot, limit = 3) {
+  const inventory = snapshot.enrichedInventory || [];
+
+  // STRICT: Only include items with hasCost=true (valid cost/margin data)
+  const withProfit = inventory
+    .filter(i => i.hasCost === true && i.pricing?.margin !== null && i.pricing?.retail !== null && i.quantity > 0)
+    .map(i => {
+      const potentialProfit = i.quantity * i.pricing.retail * (i.pricing.margin / 100);
+      return {
+        sku: i.sku,
+        name: i.name || `${i.strain} (${i.unit})`,
+        quantity: i.quantity,
+        retail: i.pricing.retail,
+        margin: i.pricing.margin,
+        potentialProfit: Math.round(potentialProfit),
+        profitPerUnit: Math.round(i.pricing.retail * (i.pricing.margin / 100) * 100) / 100
+      };
+    })
+    .sort((a, b) => b.potentialProfit - a.potentialProfit);
+
+  return withProfit.slice(0, limit);
+}
+
+/**
+ * Find hidden opportunities - high margin + good stock + low velocity
+ * These are "money left on the table"
+ *
+ * @param {object} snapshot - Current snapshot
+ * @param {number} limit - Max items
+ * @returns {Array} Hidden opportunities
+ */
+export function findHiddenOpportunities(snapshot, limit = 3) {
+  const inventory = snapshot.enrichedInventory || [];
+  const velocityMetrics = snapshot.velocity?.velocityMetrics || [];
+
+  const opportunities = [];
+
+  for (const item of inventory) {
+    const margin = item.pricing?.margin;
+    const retail = item.pricing?.retail;
+    const quantity = item.quantity || 0;
+
+    // Skip if missing data
+    if (margin === null || margin === undefined || retail === null || quantity < 5) continue;
+    if (margin < 50) continue; // Only high-margin items
+
+    // Check velocity
+    const vel = velocityMetrics.find(v => v.sku === item.sku);
+    const dailyVelocity = vel?.dailyVelocity || 0;
+
+    // High margin (>=50%) + good stock (>=5) + low velocity (<0.5/day) = opportunity
+    if (dailyVelocity < 0.5) {
+      const potentialProfit = quantity * retail * (margin / 100);
+      const daysToSellout = dailyVelocity > 0 ? Math.round(quantity / dailyVelocity) : 999;
+
+      opportunities.push({
+        sku: item.sku,
+        name: item.name || `${item.strain} (${item.unit})`,
+        margin: Math.round(margin),
+        quantity,
+        retail,
+        dailyVelocity,
+        potentialProfit: Math.round(potentialProfit),
+        daysToSellout,
+        insight: daysToSellout > 60
+          ? `At current pace, this will sit for ${daysToSellout}+ days. That's ${Math.round(potentialProfit)} in profit waiting.`
+          : `Moving slowly. Promote to capture ${Math.round(potentialProfit)} in profit.`
+      });
+    }
+  }
+
+  return opportunities
+    .sort((a, b) => b.potentialProfit - a.potentialProfit)
+    .slice(0, limit);
+}
+
+/**
+ * Generate the WOW factor insight
+ * Combines multiple signals to create a non-obvious recommendation
+ *
+ * @param {object} snapshot - Current snapshot
+ * @param {object} previousSnapshot - Previous snapshot (optional)
+ * @returns {object|null} WOW insight or null
+ */
+export function generateWowInsight(snapshot, previousSnapshot = null) {
+  const inventory = snapshot.enrichedInventory || [];
+  const velocityMetrics = snapshot.velocity?.velocityMetrics || [];
+  const metrics = snapshot.metrics || {};
+
+  // Collect data for multi-signal analysis
+  const itemsWithFullData = inventory.filter(i =>
+    i.pricing?.margin !== null &&
+    i.pricing?.retail !== null &&
+    i.pricing?.cost !== null &&
+    i.quantity > 0
+  );
+
+  if (itemsWithFullData.length < 5) return null;
+
+  // WOW INSIGHT 1: "You're promoting the wrong things"
+  // Find if high-margin items are being outpaced by low-margin items
+  const marginBuckets = {
+    high: itemsWithFullData.filter(i => i.pricing.margin >= 60),
+    low: itemsWithFullData.filter(i => i.pricing.margin < 40)
+  };
+
+  const highMarginVelocity = marginBuckets.high.reduce((sum, i) => {
+    const vel = velocityMetrics.find(v => v.sku === i.sku);
+    return sum + (vel?.dailyVelocity || 0);
+  }, 0) / (marginBuckets.high.length || 1);
+
+  const lowMarginVelocity = marginBuckets.low.reduce((sum, i) => {
+    const vel = velocityMetrics.find(v => v.sku === i.sku);
+    return sum + (vel?.dailyVelocity || 0);
+  }, 0) / (marginBuckets.low.length || 1);
+
+  if (lowMarginVelocity > highMarginVelocity * 1.5 && marginBuckets.high.length >= 3) {
+    const topHighMargin = marginBuckets.high
+      .sort((a, b) => b.pricing.margin - a.pricing.margin)
+      .slice(0, 2)
+      .map(i => i.name || i.sku);
+
+    return {
+      type: 'MISALIGNED_PROMOTION',
+      headline: "You're promoting the wrong products",
+      insight: `Your low-margin items are selling ${(lowMarginVelocity / highMarginVelocity).toFixed(1)}x faster than high-margin ones. Every sale of a low-margin item instead of a high-margin one costs you profit.`,
+      action: `Feature these instead: ${topHighMargin.join(', ')}. They have 60%+ margins but are being overlooked.`,
+      impact: 'Shifting just 10% of sales to high-margin items could add thousands to your bottom line.',
+      confidence: 'high'
+    };
+  }
+
+  // WOW INSIGHT 2: "Your best-seller is about to become a problem"
+  // High velocity item with dwindling stock AND high margin
+  const criticalItems = velocityMetrics
+    .filter(v => v.daysUntilStockout !== null && v.daysUntilStockout <= 10 && v.dailyVelocity >= 1)
+    .map(v => {
+      const item = inventory.find(i => i.sku === v.sku);
+      return { ...v, margin: item?.pricing?.margin, retail: item?.pricing?.retail };
+    })
+    .filter(v => v.margin !== null && v.margin >= 40);
+
+  if (criticalItems.length > 0) {
+    const mostCritical = criticalItems.sort((a, b) => a.daysUntilStockout - b.daysUntilStockout)[0];
+    const dailyRevenue = mostCritical.dailyVelocity * (mostCritical.retail || 0);
+    const dailyProfit = dailyRevenue * (mostCritical.margin / 100);
+
+    return {
+      type: 'CRITICAL_RESTOCK',
+      headline: `${mostCritical.name || mostCritical.sku} needs attention NOW`,
+      insight: `This item sells ${mostCritical.dailyVelocity.toFixed(1)} units/day at ${mostCritical.margin}% margin. At current pace, you'll be out in ${mostCritical.daysUntilStockout} days.`,
+      action: `Order immediately. Every day without stock = $${Math.round(dailyProfit)} in lost profit.`,
+      impact: `A 1-week stockout would cost you ~$${Math.round(dailyProfit * 7)} in pure profit.`,
+      confidence: 'high'
+    };
+  }
+
+  // WOW INSIGHT 3: "Your inventory mix is costing you"
+  // Calculate what % of capital is tied up in low-margin vs high-margin items
+  const capitalByMargin = {
+    high: marginBuckets.high.reduce((sum, i) => sum + (i.quantity * (i.pricing.cost || 0)), 0),
+    low: marginBuckets.low.reduce((sum, i) => sum + (i.quantity * (i.pricing.cost || 0)), 0)
+  };
+
+  const totalCapital = capitalByMargin.high + capitalByMargin.low;
+  if (totalCapital > 0 && capitalByMargin.low > capitalByMargin.high * 1.5) {
+    const lowCapitalPercent = Math.round((capitalByMargin.low / totalCapital) * 100);
+
+    return {
+      type: 'CAPITAL_MISALLOCATION',
+      headline: "Your cash is stuck in the wrong products",
+      insight: `${lowCapitalPercent}% of your inventory capital ($${Math.round(capitalByMargin.low).toLocaleString()}) is tied up in low-margin items (<40% margin).`,
+      action: `Discount slow-moving low-margin items by 15-20% to free up cash. Reinvest in high-margin inventory.`,
+      impact: `Rebalancing could improve overall margins by 5-10 points.`,
+      confidence: 'medium'
+    };
+  }
+
+  // WOW INSIGHT 4: Week-over-week momentum shift
+  if (previousSnapshot?.velocity?.velocityMetrics) {
+    const prevVelocity = previousSnapshot.velocity.velocityMetrics;
+
+    // Find items that flipped from slow to fast
+    const accelerators = [];
+    for (const current of velocityMetrics) {
+      const prev = prevVelocity.find(p => p.sku === current.sku);
+      if (prev && prev.dailyVelocity < 0.3 && current.dailyVelocity >= 0.8) {
+        const item = inventory.find(i => i.sku === current.sku);
+        accelerators.push({
+          name: current.name || current.sku,
+          prevVelocity: prev.dailyVelocity,
+          currentVelocity: current.dailyVelocity,
+          margin: item?.pricing?.margin
+        });
+      }
+    }
+
+    if (accelerators.length > 0) {
+      const top = accelerators[0];
+      return {
+        type: 'MOMENTUM_SHIFT',
+        headline: `${top.name} just caught fire`,
+        insight: `Velocity jumped from ${top.prevVelocity.toFixed(1)} to ${top.currentVelocity.toFixed(1)} units/day this week - a ${Math.round((top.currentVelocity / top.prevVelocity - 1) * 100)}% increase.`,
+        action: top.margin && top.margin >= 50
+          ? `This is a high-margin item. Double down - feature it prominently and ensure stock depth.`
+          : `Monitor closely. If momentum holds, consider stocking up.`,
+        impact: 'Catching momentum early lets you ride the wave instead of missing it.',
+        confidence: 'medium'
+      };
+    }
+  }
+
+  return null;
+}
+
+/**
  * Enrich snapshot with intelligence layer
  *
  * @param {object} snapshot - Current snapshot
@@ -773,12 +1008,22 @@ export function enrichSnapshotWithIntelligence(snapshot, previousSnapshot = null
   const verdict = generateOMENVerdict(snapshot, previousSnapshot);
   const forecasts = forecastConsequences(snapshot, previousSnapshot);
 
+  // NEW: Enhanced insights
+  const topProfitContributors = getTopProfitContributors(snapshot, 3);
+  const hiddenOpportunities = findHiddenOpportunities(snapshot, 3);
+  const wowInsight = generateWowInsight(snapshot, previousSnapshot);
+
   return {
     ...snapshot,
     intelligence: {
       // THE BRIEFING - What to read first
       verdict,
+      wowInsight,  // THE insight that makes them say "wow"
       forecasts,
+
+      // ACTIONABLE INSIGHTS
+      topProfitContributors,
+      hiddenOpportunities,
 
       // DETAILED ANALYSIS
       executiveSummary,
