@@ -14,7 +14,50 @@
  * - metrics.hasVelocity = true when snapshot has real order data
  * - When hasVelocity is true, NEVER say "without velocity data" or similar
  * - Rank by velocity + margin when hasVelocity, margin-only when not
+ *
+ * TIMEFRAME TRANSPARENCY:
+ * - Every response MUST state what timeframe the data covers
+ * - Never mix metrics across scopes without explicit labels
  */
+
+/**
+ * Generate timeframe context prefix for chat responses
+ * OMEN TRUTH: Always state what timeframe the data covers
+ *
+ * @param {object} context - Chat context with weekly/daily snapshots
+ * @returns {string} Timeframe prefix for response
+ */
+export function getTimeframeContext(context) {
+  if (!context) return '';
+
+  const weekly = context.weekly;
+  const daily = context.daily;
+
+  // Determine which snapshot is being used
+  const activeSnapshot = weekly || daily;
+  if (!activeSnapshot) return '';
+
+  const timeframe = activeSnapshot.timeframe || 'weekly';
+  const dateRange = activeSnapshot.dateRange;
+  const orderCount = activeSnapshot.velocity?.orderCount || 0;
+
+  // Format date range
+  let rangeStr = '';
+  if (dateRange?.startDate && dateRange?.endDate) {
+    const start = new Date(dateRange.startDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    const end = new Date(dateRange.endDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    rangeStr = `${start}-${end}`;
+  }
+
+  // Build context string
+  if (orderCount > 0) {
+    return `[${timeframe.toUpperCase()} VIEW: ${rangeStr}, ${orderCount} orders]\n\n`;
+  } else if (rangeStr) {
+    return `[${timeframe.toUpperCase()} VIEW: ${rangeStr}]\n\n`;
+  }
+
+  return '';
+}
 
 /**
  * Generate insight-driven response for promotion questions
@@ -522,6 +565,22 @@ export function generateSKUAnalysisInsight(message, recommendations, metrics, co
 export function generateInsightResponse(message, recommendations, metrics, context = null) {
   const lower = message.toLowerCase();
 
+  // Generate response first, then prepend timeframe context
+  const response = generateInsightResponseCore(message, lower, recommendations, metrics, context);
+
+  // Prepend timeframe context for transparency
+  if (response) {
+    const timeframePrefix = getTimeframeContext(context);
+    return timeframePrefix + response;
+  }
+
+  return null;
+}
+
+/**
+ * Core insight response generation (without timeframe wrapper)
+ */
+function generateInsightResponseCore(message, lower, recommendations, metrics, context) {
   // IMPORTANT: Check SPECIFIC patterns BEFORE generic ones
   // Order matters - most specific first!
 

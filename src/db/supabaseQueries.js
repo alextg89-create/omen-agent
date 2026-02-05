@@ -504,3 +504,103 @@ export async function updateLiveInventory(inventoryUpdate) {
     return { ok: false, error: err.message };
   }
 }
+
+/**
+ * Get order context across multiple time scopes
+ *
+ * Returns order stats for:
+ * - Specified timeframe (passed in)
+ * - Last 30 days
+ * - All-time (lifetime)
+ *
+ * This provides context without mixing metrics.
+ *
+ * @returns {Promise<{ok: boolean, context?: object, error?: string}>}
+ */
+export async function getOrderContext() {
+  if (!isSupabaseAvailable()) {
+    return {
+      ok: false,
+      error: 'Supabase not available'
+    };
+  }
+
+  const client = getSupabaseClient();
+
+  try {
+    // Calculate date boundaries
+    const now = new Date();
+    const thirtyDaysAgo = new Date(now);
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+    console.log(`[Supabase] Querying order context (30-day and lifetime)`);
+
+    // Query 1: Last 30 days
+    const { data: last30Days, error: err30 } = await client
+      .from('orders')
+      .select('order_id, quantity, price_per_unit, total_amount, order_date')
+      .gte('order_date', thirtyDaysAgo.toISOString());
+
+    if (err30) {
+      console.warn(`[Supabase] 30-day query failed: ${err30.message}`);
+    }
+
+    // Query 2: All-time (no date filter)
+    const { data: allTime, error: errAll } = await client
+      .from('orders')
+      .select('order_id, sku, quantity, price_per_unit, total_amount');
+
+    if (errAll) {
+      console.warn(`[Supabase] All-time query failed: ${errAll.message}`);
+    }
+
+    // Aggregate 30-day stats
+    const last30DaysOrders = last30Days || [];
+    const uniqueOrders30 = new Set(last30DaysOrders.map(o => o.order_id));
+    const revenue30 = last30DaysOrders.reduce((sum, o) =>
+      sum + (o.total_amount || (o.quantity * o.price_per_unit) || 0), 0);
+
+    // Aggregate all-time stats
+    const allTimeOrders = allTime || [];
+    const uniqueOrdersAll = new Set(allTimeOrders.map(o => o.order_id));
+    const revenueAll = allTimeOrders.reduce((sum, o) =>
+      sum + (o.total_amount || (o.quantity * o.price_per_unit) || 0), 0);
+
+    // Find top SKU by revenue (all-time)
+    const skuRevenue = new Map();
+    for (const order of allTimeOrders) {
+      const sku = order.sku || 'Unknown';
+      const revenue = order.total_amount || (order.quantity * order.price_per_unit) || 0;
+      skuRevenue.set(sku, (skuRevenue.get(sku) || 0) + revenue);
+    }
+    const topSku = Array.from(skuRevenue.entries())
+      .sort((a, b) => b[1] - a[1])[0];
+
+    const context = {
+      last30Days: {
+        orderCount: uniqueOrders30.size,
+        lineItems: last30DaysOrders.length,
+        totalRevenue: Math.round(revenue30 * 100) / 100,
+        label: 'Last 30 days'
+      },
+      allTime: {
+        orderCount: uniqueOrdersAll.size,
+        lineItems: allTimeOrders.length,
+        totalRevenue: Math.round(revenueAll * 100) / 100,
+        topSku: topSku ? { sku: topSku[0], revenue: Math.round(topSku[1] * 100) / 100 } : null,
+        label: 'All time'
+      },
+      queriedAt: new Date().toISOString()
+    };
+
+    console.log(`[Supabase] Order context: 30-day=${context.last30Days.orderCount} orders, all-time=${context.allTime.orderCount} orders`);
+
+    return {
+      ok: true,
+      context
+    };
+  } catch (err) {
+    console.error('[Supabase] Order context query error:', err.message);
+    return { ok: false, error: err.message };
+  }
+}

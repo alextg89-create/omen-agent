@@ -85,7 +85,7 @@ import {
   getStatistics as getSnapshotStatistics
 } from "./utils/snapshotHistory.js";
 import { getConnectionStatus, testConnection, getSupabaseClient, isSupabaseAvailable } from "./db/supabaseClient.js";
-import { recordInventorySnapshot, updateLiveInventory } from "./db/supabaseQueries.js";
+import { recordInventorySnapshot, updateLiveInventory, getOrderContext } from "./db/supabaseQueries.js";
 import { sendSnapshotEmail, isEmailConfigured } from "./services/emailService.js";
 import { autoSyncOrders } from "./services/orderSyncService.js";
 import {
@@ -2655,6 +2655,19 @@ app.post("/snapshot/generate", async (req, res) => {
       insightCount: velocityAnalysis.insights?.length || 0
     });
 
+    // 7.5️⃣ GET ORDER CONTEXT (30-day and lifetime stats)
+    let orderContext = null;
+    try {
+      orderContext = await getOrderContext();
+      console.log("📸 [OMEN] Order context loaded", {
+        requestId,
+        last30Days: orderContext?.last30Days?.orderCount || 0,
+        allTime: orderContext?.allTime?.orderCount || 0
+      });
+    } catch (err) {
+      console.warn("📸 [OMEN] Order context unavailable:", err.message);
+    }
+
     // 8️⃣ GENERATE RECOMMENDATIONS (prioritize real data, fallback to deltas)
     let recommendations;
     let intelligenceSource;
@@ -2694,6 +2707,17 @@ app.post("/snapshot/generate", async (req, res) => {
         insights: velocityAnalysis.insights,
         velocityMetrics: velocityAnalysis.velocityMetrics
       } : null,
+      // Multi-scope order context (timeframe, 30-day, lifetime)
+      orderContext: {
+        timeframe: {
+          label: timeframe,
+          orderCount: velocityAnalysis.orderCount || 0,
+          lineItems: velocityAnalysis.lineItemCount || 0,
+          dateRange
+        },
+        last30Days: orderContext?.last30Days || { orderCount: 0, lineItems: 0, totalRevenue: 0 },
+        allTime: orderContext?.allTime || { orderCount: 0, lineItems: 0, totalRevenue: 0, topSku: null }
+      },
       // Legacy delta analysis
       deltas: deltas ? deltas.summary : null,
       temporal: {
