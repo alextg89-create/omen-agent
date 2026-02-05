@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import applyPricing from "./tools/applyPricing.js";
 import { saveInventory, getInventory, clearInventory, getInventoryWithMetadata, AUTHORITY_ERROR } from "./tools/inventoryStore.js";
-import { computeDataFreshness } from "./utils/dataFreshness.js";
+import { computeDataFreshness, computeSnapshotConfidence } from "./utils/dataFreshness.js";
 
 /**
  * Build OMEN refusal response for authority errors
@@ -2479,25 +2479,42 @@ app.post("/snapshot/generate", async (req, res) => {
     const {
       asOfDate = null,           // Optional: YYYY-MM-DD
       timeframe = "weekly",      // Default to weekly for backward compat
-      forceRegenerate = false    // NEW: Force regeneration even if exists
+      forceRegenerate = false,   // Force regeneration even if exists
+      // NEW: Custom date range support
+      startDate = null,          // For custom timeframe: YYYY-MM-DD
+      endDate = null             // For custom timeframe: YYYY-MM-DD
     } = req.body || {};
 
     console.log("📸 [OMEN] Snapshot generation requested", {
       requestId,
       asOfDate,
       timeframe,
-      forceRegenerate
+      forceRegenerate,
+      startDate,
+      endDate
     });
 
     // 1️⃣ VALIDATE INPUTS
 
     // Validate timeframe
-    if (timeframe !== "daily" && timeframe !== "weekly") {
+    const validTimeframes = ["daily", "weekly", "monthly", "custom"];
+    if (!validTimeframes.includes(timeframe)) {
       return res.status(400).json({
         ok: false,
         error: "Invalid timeframe",
-        message: "Timeframe must be 'daily' or 'weekly'"
+        message: `Timeframe must be one of: ${validTimeframes.join(", ")}`
       });
+    }
+
+    // For custom timeframe, require startDate and endDate
+    if (timeframe === "custom") {
+      if (!startDate || !endDate) {
+        return res.status(400).json({
+          ok: false,
+          error: "Missing date range",
+          message: "Custom timeframe requires startDate and endDate in YYYY-MM-DD format"
+        });
+      }
     }
 
     // Validate asOfDate (if provided)
@@ -2510,7 +2527,8 @@ app.post("/snapshot/generate", async (req, res) => {
     }
 
     // 2️⃣ CALCULATE DATE RANGE
-    const dateRange = calculateDateRange(timeframe, asOfDate);
+    const customRange = timeframe === "custom" ? { startDate, endDate } : null;
+    const dateRange = calculateDateRange(timeframe, asOfDate, customRange);
     const effectiveDate = dateRange.asOfDate; // Normalized date
 
     console.log("📸 [OMEN] Date range calculated", {
@@ -2698,13 +2716,34 @@ app.post("/snapshot/generate", async (req, res) => {
       },
       warnings: snapshotDataFreshness?.warnings || [],
       enrichedInventory: inventory,
-      confidence: snapshotDataFreshness?.confidence || (velocityAnalysis.ok ? "high" : "medium"),
       itemCount: inventory.length
     };
 
-    // 8️⃣ ENRICH WITH INTELLIGENCE LAYER
-    // Fetch previous snapshot for comparison (if exists)
+    // 🎯 COMPUTE HOLISTIC CONFIDENCE (upgraded logic)
     const previousSnapshots = getLastSnapshots(STORE_ID, 2, timeframe) || [];
+    const holisticConfidence = computeSnapshotConfidence({
+      inventoryFreshness: snapshotDataFreshness,
+      orderCount: velocityAnalysis.orderCount || 0,
+      skusWithCost: inventoryMetadata?.costStats?.skusWithCost || 0,
+      totalSkus: inventory.length,
+      velocityDataAvailable: velocityAnalysis.ok,
+      previousSnapshotExists: previousSnapshots.length > 1
+    });
+
+    snapshot.confidence = holisticConfidence.confidence;
+    snapshot.confidenceScore = holisticConfidence.score;
+    snapshot.confidenceExplanation = holisticConfidence.explanation;
+    snapshot.confidenceFactors = holisticConfidence.factors;
+
+    console.log("📸 [OMEN] Confidence computed", {
+      requestId,
+      confidence: holisticConfidence.confidence,
+      score: holisticConfidence.score,
+      factors: holisticConfidence.factors
+    });
+
+    // 8️⃣ ENRICH WITH INTELLIGENCE LAYER
+    // Use previousSnapshots already fetched for confidence calculation
     const previousSnapshot = previousSnapshots.length > 1 ? loadSnapshot(STORE_ID, timeframe, previousSnapshots[1].asOfDate)?.snapshot : null;
 
     // Add executive-level insights

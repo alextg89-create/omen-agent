@@ -131,19 +131,106 @@ export function formatDate(date) {
 }
 
 /**
- * Calculate date range based on timeframe
- * @param {string} timeframe - 'daily' or 'weekly'
+ * Calculate date range for "monthly" timeframe
+ *
+ * Monthly = 1st of month 00:00:00 to last day 23:59:59.999 of the month containing asOfDate
+ *
  * @param {string|null} asOfDate - Optional YYYY-MM-DD override
+ * @returns {object} - { startDate, endDate, asOfDate, timeframe }
+ */
+export function calculateMonthlyRange(asOfDate = null) {
+  const effectiveNow = getEffectiveNow(asOfDate);
+
+  // Start of month (1st day, 00:00:00 UTC)
+  const startDate = new Date(Date.UTC(
+    effectiveNow.getUTCFullYear(),
+    effectiveNow.getUTCMonth(),
+    1, 0, 0, 0, 0
+  ));
+
+  // End of month (last day, 23:59:59.999 UTC)
+  const endDate = new Date(Date.UTC(
+    effectiveNow.getUTCFullYear(),
+    effectiveNow.getUTCMonth() + 1,
+    0, 23, 59, 59, 999
+  ));
+
+  return {
+    startDate: startDate.toISOString(),
+    endDate: endDate.toISOString(),
+    asOfDate: asOfDate || formatDate(effectiveNow),
+    timeframe: 'monthly',
+    daysInPeriod: endDate.getUTCDate()
+  };
+}
+
+/**
+ * Calculate custom date range
+ *
+ * Custom = startDate 00:00:00 to endDate 23:59:59.999
+ *
+ * @param {string} startDateStr - Start date YYYY-MM-DD
+ * @param {string} endDateStr - End date YYYY-MM-DD
+ * @returns {object} - { startDate, endDate, asOfDate, timeframe }
+ */
+export function calculateCustomRange(startDateStr, endDateStr) {
+  const startParsed = parseDate(startDateStr);
+  const endParsed = parseDate(endDateStr);
+
+  if (!startParsed || !endParsed) {
+    throw new Error('Invalid date format. Use YYYY-MM-DD.');
+  }
+
+  if (startParsed > endParsed) {
+    throw new Error('Start date must be before or equal to end date.');
+  }
+
+  // Start of start date (00:00:00 UTC)
+  const startDate = new Date(startParsed);
+  startDate.setUTCHours(0, 0, 0, 0);
+
+  // End of end date (23:59:59.999 UTC)
+  const endDate = new Date(endParsed);
+  endDate.setUTCHours(23, 59, 59, 999);
+
+  // Calculate days in period
+  const daysInPeriod = Math.round((endDate - startDate) / (1000 * 60 * 60 * 24)) + 1;
+
+  return {
+    startDate: startDate.toISOString(),
+    endDate: endDate.toISOString(),
+    asOfDate: endDateStr,  // Use end date as the "as of" date
+    timeframe: 'custom',
+    daysInPeriod,
+    customRange: {
+      start: startDateStr,
+      end: endDateStr
+    }
+  };
+}
+
+/**
+ * Calculate date range based on timeframe
+ * @param {string} timeframe - 'daily', 'weekly', 'monthly', or 'custom'
+ * @param {string|null} asOfDate - Optional YYYY-MM-DD override
+ * @param {object|null} customRange - For 'custom' timeframe: { startDate, endDate }
  * @returns {object} - Date range object
  */
-export function calculateDateRange(timeframe = 'weekly', asOfDate = null) {
+export function calculateDateRange(timeframe = 'weekly', asOfDate = null, customRange = null) {
   switch (timeframe) {
     case 'daily':
       return calculateDailyRange(asOfDate);
     case 'weekly':
       return calculateWeeklyRange(asOfDate);
+    case 'monthly':
+      return calculateMonthlyRange(asOfDate);
+    case 'custom':
+      if (!customRange || !customRange.startDate || !customRange.endDate) {
+        throw new Error("Custom timeframe requires customRange with startDate and endDate");
+      }
+      return calculateCustomRange(customRange.startDate, customRange.endDate);
     default:
-      throw new Error(`Invalid timeframe: ${timeframe}. Must be 'daily' or 'weekly'.`);
+      throw new Error(`Invalid timeframe: ${timeframe}. Must be 'daily', 'weekly', 'monthly', or 'custom'.`);
   }
 }
 

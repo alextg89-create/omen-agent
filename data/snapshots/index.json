@@ -1,5 +1,79 @@
 [
   {
+    "id": "snapshot_weekly_2026-01-25_1769373599666_e96be7cd",
+    "timeframe": "weekly",
+    "asOfDate": "2026-01-25",
+    "createdAt": "2026-01-25T20:39:59.666Z",
+    "generatedAt": "2026-01-25T20:39:59.666Z",
+    "requestId": "a77021a4-6449-4e59-bae4-20a3e238b1db",
+    "store": "NJWeedWizard",
+    "summary": {
+      "itemCount": 217,
+      "totalRevenue": 81440,
+      "totalProfit": 49022,
+      "averageMargin": 60.19,
+      "recommendationCount": 5
+    },
+    "filePath": "snapshot_weekly_2026-01-25_1769373599666_e96be7cd.json",
+    "sizeBytes": 0,
+    "version": 1,
+    "supersedes": null,
+    "diffMetadata": {
+      "itemsWithPricing": 195,
+      "highestMarginSku": "Bloopiez (3.5 G)",
+      "lowestMarginSku": "Strawberry Shortcake (1 G)",
+      "dateRange": {
+        "startDate": "2026-01-19T00:00:00.000Z",
+        "endDate": "2026-01-25T23:59:59.999Z",
+        "asOfDate": "2026-01-25",
+        "timeframe": "weekly"
+      }
+    },
+    "createdBy": "api",
+    "createdVia": "api",
+    "regenerated": false,
+    "emailSent": false,
+    "emailSentAt": null,
+    "emailRecipient": null
+  },
+  {
+    "id": "snapshot_weekly_2026-01-19_1768854084526_70c244f2",
+    "timeframe": "weekly",
+    "asOfDate": "2026-01-19",
+    "createdAt": "2026-01-19T20:21:24.526Z",
+    "generatedAt": "2026-01-19T20:21:24.526Z",
+    "requestId": "fd927770-cb45-4d51-b4c6-25fbe1d49c62",
+    "store": "NJWeedWizard",
+    "summary": {
+      "itemCount": 217,
+      "totalRevenue": 81440,
+      "totalProfit": 49022,
+      "averageMargin": 60.19,
+      "recommendationCount": 2
+    },
+    "filePath": "snapshot_weekly_2026-01-19_1768854084526_70c244f2.json",
+    "sizeBytes": 0,
+    "version": 1,
+    "supersedes": null,
+    "diffMetadata": {
+      "itemsWithPricing": 195,
+      "highestMarginSku": "Bloopiez (3.5 G)",
+      "lowestMarginSku": "Strawberry Shortcake (1 G)",
+      "dateRange": {
+        "startDate": "2026-01-19T00:00:00.000Z",
+        "endDate": "2026-01-25T23:59:59.999Z",
+        "asOfDate": "2026-01-19",
+        "timeframe": "weekly"
+      }
+    },
+    "createdBy": "api",
+    "createdVia": "api",
+    "regenerated": false,
+    "emailSent": false,
+    "emailSentAt": null,
+    "emailRecipient": null
+  },
+  {
     "id": "snapshot_weekly_2026-01-11_1768159362255_bacd7a8f",
     "timeframe": "weekly",
     "asOfDate": "2026-01-11",

@@ -52,7 +52,10 @@ export async function getInventory(source) {
       timestamp: result.timestamp,
       source: result.source,
       inventoryLastSyncedAt: result.inventoryLastSyncedAt,
-      count: result.count
+      count: result.count,
+      // Cost authority metadata
+      costStats: result.costStats || null,
+      pricingStats: result.pricingStats || null
     };
     cacheTimestamp = now;
 

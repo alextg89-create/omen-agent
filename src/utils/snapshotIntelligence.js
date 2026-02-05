@@ -896,15 +896,34 @@ export function generateWowInsight(snapshot, previousSnapshot = null) {
   if (lowMarginVelocity > highMarginVelocity * 1.5 && marginBuckets.high.length >= 3) {
     const topHighMargin = marginBuckets.high
       .sort((a, b) => b.pricing.margin - a.pricing.margin)
-      .slice(0, 2)
-      .map(i => i.name || i.sku);
+      .slice(0, 2);
+
+    // Calculate the dollar impact of the misalignment
+    const avgHighMarginProfit = marginBuckets.high.reduce((sum, i) => {
+      const vel = velocityMetrics.find(v => v.sku === i.sku);
+      const dailyProfit = (vel?.dailyVelocity || 0) * i.pricing.retail * (i.pricing.margin / 100);
+      return sum + dailyProfit;
+    }, 0);
+
+    const avgLowMarginProfit = marginBuckets.low.reduce((sum, i) => {
+      const vel = velocityMetrics.find(v => v.sku === i.sku);
+      const dailyProfit = (vel?.dailyVelocity || 0) * i.pricing.retail * (i.pricing.margin / 100);
+      return sum + dailyProfit;
+    }, 0);
+
+    // What would happen if we shifted 20% of low-margin sales to high-margin?
+    const avgHighRetail = marginBuckets.high.reduce((sum, i) => sum + i.pricing.retail, 0) / marginBuckets.high.length;
+    const avgHighMargin = marginBuckets.high.reduce((sum, i) => sum + i.pricing.margin, 0) / marginBuckets.high.length;
+    const shiftedUnits = lowMarginVelocity * marginBuckets.low.length * 0.2 * 7; // 20% shifted over 7 days
+    const potentialGain = Math.round(shiftedUnits * avgHighRetail * (avgHighMargin / 100));
 
     return {
       type: 'MISALIGNED_PROMOTION',
       headline: "You're promoting the wrong products",
-      insight: `Your low-margin items are selling ${(lowMarginVelocity / highMarginVelocity).toFixed(1)}x faster than high-margin ones. Every sale of a low-margin item instead of a high-margin one costs you profit.`,
-      action: `Feature these instead: ${topHighMargin.join(', ')}. They have 60%+ margins but are being overlooked.`,
-      impact: 'Shifting just 10% of sales to high-margin items could add thousands to your bottom line.',
+      insight: `Your low-margin items are selling ${(lowMarginVelocity / highMarginVelocity).toFixed(1)}x faster than high-margin ones. Low-margin items generated ~$${Math.round(avgLowMarginProfit * 7).toLocaleString()} in profit this week vs $${Math.round(avgHighMarginProfit * 7).toLocaleString()} from high-margin.`,
+      action: `Feature these instead: ${topHighMargin.map(i => i.name || i.sku).join(', ')}. They have 60%+ margins but are being overlooked.`,
+      impact: `Shifting 20% of sales to high-margin items = +$${potentialGain.toLocaleString()} weekly profit.`,
+      dollarImpact: potentialGain,
       confidence: 'high'
     };
   }
@@ -955,7 +974,45 @@ export function generateWowInsight(snapshot, previousSnapshot = null) {
     };
   }
 
-  // WOW INSIGHT 4: Week-over-week momentum shift
+  // WOW INSIGHT 4: IDLE PROFIT - High-margin items sitting on shelves
+  // This is REAL quantified profit waiting to be captured
+  const idleHighMargin = marginBuckets.high.filter(i => {
+    const vel = velocityMetrics.find(v => v.sku === i.sku);
+    return (vel?.dailyVelocity || 0) < 0.3 && i.quantity >= 5;
+  });
+
+  if (idleHighMargin.length >= 2) {
+    const totalIdleProfit = idleHighMargin.reduce((sum, i) => {
+      const potentialProfit = i.quantity * i.pricing.retail * (i.pricing.margin / 100);
+      return sum + potentialProfit;
+    }, 0);
+
+    const totalIdleUnits = idleHighMargin.reduce((sum, i) => sum + i.quantity, 0);
+    const topIdle = idleHighMargin
+      .sort((a, b) => (b.quantity * b.pricing.retail * b.pricing.margin) - (a.quantity * a.pricing.retail * a.pricing.margin))
+      .slice(0, 3);
+
+    // Calculate if we could sell 30% of idle inventory at a 15% discount
+    const discountedSales = totalIdleProfit * 0.3 * 0.85; // 30% of stock at 85% of margin
+
+    return {
+      type: 'IDLE_PROFIT',
+      headline: `$${Math.round(totalIdleProfit).toLocaleString()} in profit is sitting idle`,
+      insight: `${idleHighMargin.length} high-margin items (${totalIdleUnits} units total) are barely moving. This is real profit trapped in slow-moving inventory.`,
+      action: `Promote: ${topIdle.map(i => i.name || i.sku).join(', ')}. Even a 15% discount captures most of the margin.`,
+      impact: `Moving 30% of idle stock = ~$${Math.round(discountedSales).toLocaleString()} in profit recovered.`,
+      dollarImpact: Math.round(discountedSales),
+      items: topIdle.map(i => ({
+        name: i.name || i.sku,
+        margin: i.pricing.margin,
+        quantity: i.quantity,
+        potentialProfit: Math.round(i.quantity * i.pricing.retail * (i.pricing.margin / 100))
+      })),
+      confidence: 'high'
+    };
+  }
+
+  // WOW INSIGHT 5: Week-over-week momentum shift
   if (previousSnapshot?.velocity?.velocityMetrics) {
     const prevVelocity = previousSnapshot.velocity.velocityMetrics;
 
@@ -965,28 +1022,60 @@ export function generateWowInsight(snapshot, previousSnapshot = null) {
       const prev = prevVelocity.find(p => p.sku === current.sku);
       if (prev && prev.dailyVelocity < 0.3 && current.dailyVelocity >= 0.8) {
         const item = inventory.find(i => i.sku === current.sku);
-        accelerators.push({
-          name: current.name || current.sku,
-          prevVelocity: prev.dailyVelocity,
-          currentVelocity: current.dailyVelocity,
-          margin: item?.pricing?.margin
-        });
+        if (item) {
+          const weeklyProfit = current.dailyVelocity * 7 * (item.pricing?.retail || 0) * ((item.pricing?.margin || 0) / 100);
+          accelerators.push({
+            name: current.name || current.sku,
+            prevVelocity: prev.dailyVelocity,
+            currentVelocity: current.dailyVelocity,
+            margin: item?.pricing?.margin,
+            weeklyProfit: Math.round(weeklyProfit)
+          });
+        }
       }
     }
 
     if (accelerators.length > 0) {
-      const top = accelerators[0];
+      const top = accelerators.sort((a, b) => (b.weeklyProfit || 0) - (a.weeklyProfit || 0))[0];
       return {
         type: 'MOMENTUM_SHIFT',
         headline: `${top.name} just caught fire`,
-        insight: `Velocity jumped from ${top.prevVelocity.toFixed(1)} to ${top.currentVelocity.toFixed(1)} units/day this week - a ${Math.round((top.currentVelocity / top.prevVelocity - 1) * 100)}% increase.`,
+        insight: `Velocity jumped from ${top.prevVelocity.toFixed(1)} to ${top.currentVelocity.toFixed(1)} units/day - a ${Math.round((top.currentVelocity / top.prevVelocity - 1) * 100)}% increase.`,
         action: top.margin && top.margin >= 50
           ? `This is a high-margin item. Double down - feature it prominently and ensure stock depth.`
           : `Monitor closely. If momentum holds, consider stocking up.`,
-        impact: 'Catching momentum early lets you ride the wave instead of missing it.',
+        impact: `At current velocity: ~$${top.weeklyProfit.toLocaleString()} weekly profit from this item alone.`,
+        dollarImpact: top.weeklyProfit,
         confidence: 'medium'
       };
     }
+  }
+
+  // WOW INSIGHT 6: Single SKU dominance (one item driving majority of profit)
+  const profitByItem = itemsWithFullData.map(i => {
+    const vel = velocityMetrics.find(v => v.sku === i.sku);
+    const weeklyProfit = (vel?.dailyVelocity || 0) * 7 * i.pricing.retail * (i.pricing.margin / 100);
+    return {
+      ...i,
+      weeklyProfit: Math.round(weeklyProfit),
+      dailyVelocity: vel?.dailyVelocity || 0
+    };
+  }).sort((a, b) => b.weeklyProfit - a.weeklyProfit);
+
+  const totalWeeklyProfit = profitByItem.reduce((sum, i) => sum + i.weeklyProfit, 0);
+  if (totalWeeklyProfit > 0 && profitByItem[0]?.weeklyProfit > totalWeeklyProfit * 0.25) {
+    const top = profitByItem[0];
+    const percentage = Math.round((top.weeklyProfit / totalWeeklyProfit) * 100);
+
+    return {
+      type: 'CONCENTRATION_RISK',
+      headline: `${percentage}% of profit comes from one SKU`,
+      insight: `${top.name || top.sku} generated $${top.weeklyProfit.toLocaleString()} this week - that's ${percentage}% of total profit. If this item stocks out, your revenue takes a serious hit.`,
+      action: top.quantity < 15 ? `URGENT: Only ${top.quantity} units left. Reorder immediately.` : `Ensure deep stock and consider promoting a backup high-margin item.`,
+      impact: `A 1-week stockout on this SKU = -$${top.weeklyProfit.toLocaleString()} in profit.`,
+      dollarImpact: top.weeklyProfit,
+      confidence: 'high'
+    };
   }
 
   return null;
