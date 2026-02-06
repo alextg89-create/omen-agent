@@ -96,6 +96,16 @@ import { recordInventorySnapshot, updateLiveInventory, getOrderContext } from ".
 import { sendSnapshotEmail, isEmailConfigured } from "./services/emailService.js";
 import { autoSyncOrders } from "./services/orderSyncService.js";
 import {
+  freshnessResolver,
+  rebuildController,
+  getSystemStatus,
+  verifyDataIntegrity,
+  onWixInventoryWebhook,
+  onCostImport,
+  onOrderWebhook,
+  onStaleDataDetected
+} from "./services/selfHealingService.js";
+import {
   generateTemporalRecommendationsFromSnapshots,
   computeInventoryDeltas
 } from "./utils/snapshotTemporalEngine.js";
@@ -728,6 +738,12 @@ app.post("/sync/wix-inventory", async (req, res) => {
     // This forces OMEN to use fresh data on next request
     clearInventory(STORE_ID);
 
+    // 7️⃣ TRIGGER SELF-HEALING HOOK (non-blocking)
+    // This ensures orders are synced and data is validated after inventory update
+    onWixInventoryWebhook().catch(err => {
+      console.warn('[SelfHealing] Post-sync hook failed:', err.message);
+    });
+
     return res.json({
       ok: true,
       message: `Successfully synced ${insertedCount} inventory items from Wix`,
@@ -912,6 +928,12 @@ app.post("/sync/sku-costs", async (req, res) => {
 
     // 5️⃣ CLEAR INVENTORY CACHE (margins need recalculation)
     clearInventory(STORE_ID);
+
+    // 6️⃣ TRIGGER SELF-HEALING HOOK (non-blocking)
+    // Re-enrich inventory with new cost data
+    onCostImport().catch(err => {
+      console.warn('[SelfHealing] Post-cost-import hook failed:', err.message);
+    });
 
     return res.json({
       ok: true,
@@ -3718,6 +3740,156 @@ app.get('/api/diagnostic/orders', async (req, res) => {
     });
 
   } catch (err) {
+    return res.status(500).json({
+      ok: false,
+      error: err.message
+    });
+  }
+});
+
+/* ---------- INTERNAL SELF-HEALING ENDPOINTS ---------- */
+/**
+ * INTERNAL: Get system status
+ *
+ * Returns comprehensive status of all data sources:
+ * - Inventory freshness and counts
+ * - Orders sync status
+ * - Rebuild history
+ *
+ * Bolt calls this to understand system health.
+ */
+app.get('/internal/status', async (req, res) => {
+  try {
+    const status = await getSystemStatus();
+
+    return res.json({
+      ok: true,
+      ...status
+    });
+  } catch (err) {
+    console.error('[Internal] Status error:', err.message);
+    return res.status(500).json({
+      ok: false,
+      error: err.message
+    });
+  }
+});
+
+/**
+ * INTERNAL: Trigger rebuild
+ *
+ * Forces a rebuild of specified data sources.
+ * Safe to call multiple times (idempotent).
+ *
+ * Body:
+ * - reason: string (why rebuild was triggered)
+ * - inventory: boolean (rebuild inventory, default true)
+ * - orders: boolean (rebuild orders, default true)
+ * - force: boolean (force even if locked, default false)
+ *
+ * Triggers:
+ * - 'wix_webhook': Wix inventory webhook fired
+ * - 'cost_import': New costs imported
+ * - 'order_webhook': New order arrived
+ * - 'stale_detection': Snapshot/chat detected stale data
+ * - 'manual': Manual trigger
+ */
+app.post('/internal/rebuild', async (req, res) => {
+  const {
+    reason = 'manual',
+    inventory = true,
+    orders = true,
+    force = false
+  } = req.body || {};
+
+  try {
+    console.log('[Internal] Rebuild requested:', { reason, inventory, orders, force });
+
+    const result = await rebuildController(reason, {
+      inventory,
+      orders,
+      force
+    });
+
+    return res.json({
+      ok: result.ok,
+      ...result
+    });
+
+  } catch (err) {
+    console.error('[Internal] Rebuild error:', err.message);
+    return res.status(500).json({
+      ok: false,
+      error: err.message
+    });
+  }
+});
+
+/**
+ * INTERNAL: Verify data integrity
+ *
+ * Runs comprehensive checks on data integrity:
+ * - Inventory exists and is fresh
+ * - Costs exist
+ * - Orders synced from webhooks
+ * - No phantom SKUs
+ *
+ * Returns list of issues if any.
+ */
+app.post('/internal/verify', async (req, res) => {
+  try {
+    console.log('[Internal] Verification requested');
+
+    const verification = await verifyDataIntegrity();
+
+    return res.json({
+      ok: verification.passed,
+      ...verification
+    });
+
+  } catch (err) {
+    console.error('[Internal] Verification error:', err.message);
+    return res.status(500).json({
+      ok: false,
+      error: err.message
+    });
+  }
+});
+
+/**
+ * INTERNAL: Resolve freshness issues
+ *
+ * Main self-healing entry point.
+ * Evaluates all guards and triggers rebuilds as needed.
+ *
+ * Body:
+ * - trigger: string (what triggered the check)
+ * - forcedByWebhook: boolean
+ * - forcedByCostImport: boolean
+ */
+app.post('/internal/resolve', async (req, res) => {
+  const {
+    trigger = 'api',
+    forcedByWebhook = false,
+    forcedByCostImport = false
+  } = req.body || {};
+
+  try {
+    console.log('[Internal] Freshness resolution requested:', { trigger });
+
+    const result = await freshnessResolver({
+      trigger,
+      forcedByWebhook,
+      forcedByCostImport
+    });
+
+    return res.json({
+      ok: true,
+      ...result
+    });
+
+  } catch (err) {
+    console.error('[Internal] Resolution error:', err.message);
     return res.status(500).json({
       ok: false,
       error: err.message
