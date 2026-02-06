@@ -1081,6 +1081,436 @@ export function generateWowInsight(snapshot, previousSnapshot = null) {
   return null;
 }
 
+// ============================================================================
+// EXECUTIVE BRIEF - THE NEW WOW OUTPUT
+// ============================================================================
+// Every snapshot answers 3 questions:
+// 1. What should I do TODAY?
+// 2. What happens if I do nothing?
+// 3. What is the upside and risk?
+//
+// Format:
+// - Executive Brief: 5 bullets max
+// - 3 Action Options with trade-offs
+// - 1 Recommended Decision
+// ============================================================================
+
+/**
+ * Generate Executive Brief - THE output that drives decisions
+ *
+ * @param {object} snapshot - Current snapshot
+ * @param {object} previousSnapshot - Previous snapshot (optional)
+ * @returns {object} Executive brief with actions and recommendation
+ */
+export function generateExecutiveBrief(snapshot, previousSnapshot = null) {
+  const metrics = snapshot.metrics || {};
+  const velocity = snapshot.velocity || {};
+
+  // Collect all actionable signals with QUANTIFIED impact
+  const signals = collectActionableSignals(snapshot, previousSnapshot);
+
+  // Sort by dollar impact (highest first)
+  signals.sort((a, b) => (b.dollarImpact || 0) - (a.dollarImpact || 0));
+
+  // ========================================================================
+  // EXECUTIVE BRIEF: 5 bullets max
+  // ========================================================================
+  const briefBullets = generateBriefBullets(signals, metrics, velocity);
+
+  // ========================================================================
+  // 3 ACTION OPTIONS with trade-offs
+  // ========================================================================
+  const actionOptions = generateActionOptions(signals);
+
+  // ========================================================================
+  // 1 RECOMMENDED DECISION
+  // ========================================================================
+  const recommendedDecision = selectRecommendedDecision(actionOptions);
+
+  return {
+    // THE BRIEF (what to read)
+    brief: briefBullets,
+
+    // THE OPTIONS (what to choose from)
+    actionOptions,
+
+    // THE DECISION (what to do)
+    recommendedDecision,
+
+    // Supporting data (don't lead with this)
+    supporting: {
+      signalCount: signals.length,
+      topSignals: signals.slice(0, 5).map(s => ({
+        type: s.type,
+        dollarImpact: s.dollarImpact,
+        timeframe: s.timeframe
+      })),
+      dataQuality: {
+        hasOrders: velocity.orderCount > 0,
+        hasCostData: metrics.skusWithCost > 0,
+        hasComparison: previousSnapshot !== null
+      }
+    },
+
+    generatedAt: new Date().toISOString()
+  };
+}
+
+/**
+ * Collect all actionable signals with quantified impact
+ */
+function collectActionableSignals(snapshot, previousSnapshot) {
+  const signals = [];
+  const velocity = snapshot.velocity || {};
+  const velocityMetrics = velocity.velocityMetrics || [];
+  const inventory = snapshot.enrichedInventory || [];
+  const metrics = snapshot.metrics || {};
+
+  // SIGNAL: Stockout risk (MOST URGENT)
+  const stockoutRisks = velocityMetrics.filter(v =>
+    v.daysUntilStockout !== null &&
+    v.daysUntilStockout <= 10 &&
+    v.dailyVelocity >= 0.3
+  );
+
+  for (const risk of stockoutRisks) {
+    const item = inventory.find(i => i.sku === risk.sku);
+    const dailyRevenue = risk.dailyVelocity * (item?.pricing?.retail || risk.revenue || 0);
+    const dailyProfit = dailyRevenue * ((item?.pricing?.margin || 50) / 100);
+    const daysOut = risk.daysUntilStockout;
+
+    signals.push({
+      type: 'RESTOCK_NOW',
+      item: risk.name || risk.sku,
+      action: `Reorder ${risk.name || risk.sku}`,
+      dollarImpact: Math.round(dailyProfit * Math.min(daysOut, 14)),
+      timeframe: `${daysOut} days until stockout`,
+      urgency: daysOut <= 3 ? 'TODAY' : daysOut <= 7 ? 'THIS_WEEK' : 'SOON',
+      inactionCost: `$${Math.round(dailyProfit * 7)} lost profit per week of stockout`,
+      upside: `Continuous sales = $${Math.round(dailyProfit * 30)}/month profit`,
+      risk: 'None if reordered. Stockout loses customers permanently.',
+      tradeOff: {
+        doIt: `Spend ~$${Math.round((item?.pricing?.cost || 20) * 20)} on reorder, secure $${Math.round(dailyProfit * 30)}/month`,
+        skipIt: `Save reorder cost, risk $${Math.round(dailyProfit * 7)}/week loss + customer churn`
+      }
+    });
+  }
+
+  // SIGNAL: Under-promoted high-margin (PROFIT OPPORTUNITY)
+  const highMarginSlow = inventory.filter(item => {
+    const margin = item.pricing?.margin;
+    if (margin === null || margin === undefined || margin < 50) return false;
+    const vel = velocityMetrics.find(v => v.sku === item.sku);
+    const dailyVel = vel?.dailyVelocity || 0;
+    return dailyVel < 0.5 && item.quantity >= 5;
+  });
+
+  for (const item of highMarginSlow.slice(0, 3)) {
+    const margin = item.pricing.margin;
+    const retail = item.pricing?.retail || 0;
+    const potentialProfit = item.quantity * retail * (margin / 100);
+    const weeklyPotential = Math.round(potentialProfit * 0.3); // Assume we can move 30% with promotion
+
+    signals.push({
+      type: 'PROMOTE_HIGH_MARGIN',
+      item: item.name || item.sku,
+      action: `Feature ${item.name || item.sku}`,
+      dollarImpact: weeklyPotential,
+      timeframe: '1-2 weeks to see results',
+      urgency: 'THIS_WEEK',
+      inactionCost: `$${Math.round(potentialProfit)} profit sits idle on shelf`,
+      upside: `Move 30% of stock = $${weeklyPotential} profit this week`,
+      risk: 'Low - already have the inventory. Just needs visibility.',
+      tradeOff: {
+        doIt: `Feature prominently, capture $${weeklyPotential} in 1-2 weeks`,
+        skipIt: `Profit stays locked. Capital tied up in slow inventory.`
+      }
+    });
+  }
+
+  // SIGNAL: Dead stock (CASH RECOVERY)
+  const slowMovers = getSlowMovers(snapshot, 5);
+  const totalCapitalTiedUp = slowMovers.reduce((sum, s) => sum + (s.capitalTiedUp || 0), 0);
+
+  if (totalCapitalTiedUp >= 500 && slowMovers.length >= 2) {
+    const recoverable = Math.round(totalCapitalTiedUp * 0.7); // 70% recovery with discount
+
+    signals.push({
+      type: 'CLEAR_DEAD_STOCK',
+      item: slowMovers.map(s => s.name).slice(0, 3).join(', '),
+      action: 'Discount slow movers 20-30%',
+      dollarImpact: recoverable,
+      timeframe: '2-4 weeks to clear',
+      urgency: 'SOON',
+      inactionCost: `$${Math.round(totalCapitalTiedUp)} capital frozen indefinitely`,
+      upside: `Free up $${recoverable} cash for better inventory`,
+      risk: 'Margin loss on discounted items (offset by freed capital)',
+      tradeOff: {
+        doIt: `Lose ~${Math.round(totalCapitalTiedUp * 0.3)} on discounts, recover $${recoverable} cash`,
+        skipIt: `Keep full margin on paper, but capital stays trapped`
+      }
+    });
+  }
+
+  // SIGNAL: Revenue decline (DIAGNOSIS NEEDED)
+  if (previousSnapshot) {
+    const currentRev = metrics.totalRevenue;
+    const prevRev = previousSnapshot?.metrics?.totalRevenue;
+    if (currentRev !== null && prevRev !== null && prevRev > 0 && currentRev < prevRev * 0.9) {
+      const decline = prevRev - currentRev;
+      const monthlyImpact = decline * 4;
+
+      signals.push({
+        type: 'REVENUE_DECLINE',
+        item: null,
+        action: 'Investigate revenue drop',
+        dollarImpact: Math.round(monthlyImpact),
+        timeframe: 'Diagnose within 48 hours',
+        urgency: 'TODAY',
+        inactionCost: `$${Math.round(monthlyImpact)}/month if trend continues`,
+        upside: `Identify and fix the leak before it compounds`,
+        risk: 'None - investigation has no downside',
+        tradeOff: {
+          doIt: `Spend 1 hour diagnosing, potentially save $${Math.round(monthlyImpact)}/month`,
+          skipIt: `Bleed $${Math.round(decline)}/week while hoping it fixes itself`
+        }
+      });
+    }
+  }
+
+  // SIGNAL: Margin compression
+  if (previousSnapshot) {
+    const currentMargin = metrics.averageMargin;
+    const prevMargin = previousSnapshot?.metrics?.averageMargin;
+    if (currentMargin !== null && prevMargin !== null && prevMargin > 0 && currentMargin < prevMargin - 3) {
+      const marginDrop = prevMargin - currentMargin;
+      const revenue = metrics.totalRevenue || 0;
+      const profitLost = (marginDrop / 100) * revenue;
+
+      signals.push({
+        type: 'MARGIN_SQUEEZE',
+        item: null,
+        action: 'Review pricing strategy',
+        dollarImpact: Math.round(profitLost * 4),
+        timeframe: 'Review within 1 week',
+        urgency: 'THIS_WEEK',
+        inactionCost: `${marginDrop.toFixed(1)} points of margin = $${Math.round(profitLost)}/week lost`,
+        upside: `Restore margins = +$${Math.round(profitLost)}/week profit`,
+        risk: 'Price increases may slow velocity (test carefully)',
+        tradeOff: {
+          doIt: `Raise prices 5%, risk 10% velocity drop, net gain if margin lift > velocity loss`,
+          skipIt: `Keep prices, accept margin erosion eating profit`
+        }
+      });
+    }
+  }
+
+  return signals;
+}
+
+/**
+ * Generate 5 executive brief bullets
+ */
+function generateBriefBullets(signals, metrics, velocity) {
+  const bullets = [];
+  const orderCount = velocity.orderCount || 0;
+  const revenue = metrics.totalRevenue;
+
+  // Bullet 1: State of business (1 sentence max)
+  if (orderCount > 0 && revenue !== null) {
+    bullets.push({
+      type: 'STATUS',
+      text: `${orderCount} orders generated $${Math.round(revenue).toLocaleString()} this period.`
+    });
+  } else if (orderCount > 0) {
+    bullets.push({
+      type: 'STATUS',
+      text: `${orderCount} orders tracked. Revenue data unavailable.`
+    });
+  } else {
+    bullets.push({
+      type: 'STATUS',
+      text: `No orders recorded this period. Check data sync.`
+    });
+  }
+
+  // Bullet 2-4: Top 3 actionable signals
+  const urgentSignals = signals.filter(s => s.urgency === 'TODAY' || s.urgency === 'THIS_WEEK');
+  for (const signal of urgentSignals.slice(0, 3)) {
+    bullets.push({
+      type: signal.type,
+      text: `${signal.action}: ${signal.timeframe}. ${signal.inactionCost}.`
+    });
+  }
+
+  // Bullet 5: Net opportunity or risk
+  const totalOpportunity = signals.reduce((sum, s) => sum + (s.dollarImpact || 0), 0);
+  if (totalOpportunity > 0) {
+    bullets.push({
+      type: 'NET_IMPACT',
+      text: `Total actionable opportunity: $${Math.round(totalOpportunity).toLocaleString()}.`
+    });
+  } else {
+    bullets.push({
+      type: 'NET_IMPACT',
+      text: `No critical actions needed. Optimize incrementally.`
+    });
+  }
+
+  return bullets.slice(0, 5);
+}
+
+/**
+ * Generate 3 action options with trade-offs
+ */
+function generateActionOptions(signals) {
+  if (signals.length === 0) {
+    return [{
+      option: 'A',
+      action: 'Monitor performance',
+      dollarImpact: 0,
+      timeframe: 'Ongoing',
+      tradeOff: 'Low effort, low return. Appropriate when business is stable.',
+      confidence: 'N/A'
+    }];
+  }
+
+  const options = [];
+
+  // Option A: Highest dollar impact
+  if (signals[0]) {
+    const s = signals[0];
+    options.push({
+      option: 'A',
+      action: s.action,
+      item: s.item,
+      dollarImpact: s.dollarImpact,
+      timeframe: s.timeframe,
+      tradeOff: `${s.tradeOff.doIt} | OR | ${s.tradeOff.skipIt}`,
+      upside: s.upside,
+      risk: s.risk,
+      urgency: s.urgency,
+      confidence: s.dollarImpact > 500 ? 'HIGH' : 'MEDIUM'
+    });
+  }
+
+  // Option B: Second priority or different category
+  const differentType = signals.find(s => s.type !== signals[0]?.type);
+  if (differentType) {
+    options.push({
+      option: 'B',
+      action: differentType.action,
+      item: differentType.item,
+      dollarImpact: differentType.dollarImpact,
+      timeframe: differentType.timeframe,
+      tradeOff: `${differentType.tradeOff.doIt} | OR | ${differentType.tradeOff.skipIt}`,
+      upside: differentType.upside,
+      risk: differentType.risk,
+      urgency: differentType.urgency,
+      confidence: differentType.dollarImpact > 500 ? 'HIGH' : 'MEDIUM'
+    });
+  } else if (signals[1]) {
+    const s = signals[1];
+    options.push({
+      option: 'B',
+      action: s.action,
+      item: s.item,
+      dollarImpact: s.dollarImpact,
+      timeframe: s.timeframe,
+      tradeOff: `${s.tradeOff.doIt} | OR | ${s.tradeOff.skipIt}`,
+      upside: s.upside,
+      risk: s.risk,
+      urgency: s.urgency,
+      confidence: s.dollarImpact > 500 ? 'HIGH' : 'MEDIUM'
+    });
+  }
+
+  // Option C: Combined action or "do nothing" baseline
+  if (signals.length >= 2) {
+    const combined = signals.slice(0, 2);
+    const totalImpact = combined.reduce((sum, s) => sum + (s.dollarImpact || 0), 0);
+    options.push({
+      option: 'C',
+      action: `Do both: ${combined.map(s => s.action).join(' + ')}`,
+      item: combined.map(s => s.item).filter(Boolean).join(', '),
+      dollarImpact: totalImpact,
+      timeframe: 'Stagger over 1-2 weeks',
+      tradeOff: 'More effort, maximum return. Requires bandwidth for both.',
+      upside: `Capture full $${Math.round(totalImpact).toLocaleString()} opportunity`,
+      risk: 'Execution complexity. May need to prioritize.',
+      urgency: 'THIS_WEEK',
+      confidence: 'HIGH'
+    });
+  } else {
+    options.push({
+      option: 'C',
+      action: 'Hold and monitor',
+      item: null,
+      dollarImpact: 0,
+      timeframe: 'Ongoing',
+      tradeOff: 'Zero effort, zero improvement. Only appropriate if capacity is maxed.',
+      upside: 'Preserve bandwidth for other priorities',
+      risk: 'Opportunity cost of inaction',
+      urgency: 'NONE',
+      confidence: 'N/A'
+    });
+  }
+
+  return options;
+}
+
+/**
+ * Select the recommended decision
+ */
+function selectRecommendedDecision(actionOptions) {
+  if (actionOptions.length === 0) {
+    return {
+      choice: 'MONITOR',
+      action: 'No urgent actions needed',
+      reason: 'Business appears stable',
+      confidence: 'N/A'
+    };
+  }
+
+  // Prioritize: TODAY urgency > highest dollar impact > lowest risk
+  const todayActions = actionOptions.filter(o => o.urgency === 'TODAY');
+  if (todayActions.length > 0) {
+    const best = todayActions.sort((a, b) => (b.dollarImpact || 0) - (a.dollarImpact || 0))[0];
+    return {
+      choice: best.option,
+      action: best.action,
+      reason: `Time-sensitive: ${best.timeframe}. Inaction costs money.`,
+      dollarImpact: best.dollarImpact,
+      confidence: best.confidence
+    };
+  }
+
+  // Otherwise, highest dollar impact
+  const sorted = [...actionOptions].sort((a, b) => (b.dollarImpact || 0) - (a.dollarImpact || 0));
+  const best = sorted[0];
+
+  // If Option C (combined) is within 20% of Option A+B sum, recommend it
+  const optionC = actionOptions.find(o => o.option === 'C');
+  const optionA = actionOptions.find(o => o.option === 'A');
+  if (optionC && optionA && optionC.dollarImpact > optionA.dollarImpact * 1.5) {
+    return {
+      choice: 'C',
+      action: optionC.action,
+      reason: `Maximum impact: $${Math.round(optionC.dollarImpact).toLocaleString()} opportunity.`,
+      dollarImpact: optionC.dollarImpact,
+      confidence: optionC.confidence
+    };
+  }
+
+  return {
+    choice: best.option,
+    action: best.action,
+    reason: `Highest impact: $${Math.round(best.dollarImpact || 0).toLocaleString()} opportunity.`,
+    dollarImpact: best.dollarImpact,
+    confidence: best.confidence
+  };
+}
+
 /**
  * Enrich snapshot with intelligence layer
  *
@@ -1097,24 +1527,30 @@ export function enrichSnapshotWithIntelligence(snapshot, previousSnapshot = null
   const verdict = generateOMENVerdict(snapshot, previousSnapshot);
   const forecasts = forecastConsequences(snapshot, previousSnapshot);
 
-  // NEW: Enhanced insights
+  // Enhanced insights
   const topProfitContributors = getTopProfitContributors(snapshot, 3);
   const hiddenOpportunities = findHiddenOpportunities(snapshot, 3);
   const wowInsight = generateWowInsight(snapshot, previousSnapshot);
 
+  // NEW: Executive Brief - THE decision-driving output
+  const executiveBrief = generateExecutiveBrief(snapshot, previousSnapshot);
+
   return {
     ...snapshot,
     intelligence: {
-      // THE BRIEFING - What to read first
-      verdict,
-      wowInsight,  // THE insight that makes them say "wow"
-      forecasts,
+      // ============================================================
+      // THE EXECUTIVE BRIEF - Read this first, act on this
+      // ============================================================
+      executiveBrief,
 
-      // ACTIONABLE INSIGHTS
+      // ============================================================
+      // LEGACY STRUCTURES (kept for backwards compatibility)
+      // ============================================================
+      verdict,
+      wowInsight,
+      forecasts,
       topProfitContributors,
       hiddenOpportunities,
-
-      // DETAILED ANALYSIS
       executiveSummary,
       topSKUs,
       slowMovers,
