@@ -1459,6 +1459,352 @@ function generateActionOptions(signals) {
   return options;
 }
 
+// ============================================================================
+// EXECUTIVE DECISION LAYER
+// ============================================================================
+// The FINAL word on what to do. One decision, two alternatives, no ambiguity.
+//
+// Input: insights, confidence, warnings
+// Output: {primaryDecision, alternatives, inactionCost, confidence, caveats}
+//
+// Rules:
+// - Warnings NEVER block decisions - they become caveats
+// - Always provide a decision, even with low confidence
+// - Dollar impact is REQUIRED for every option
+// - Timeframe is REQUIRED (TODAY / THIS_WEEK / SOON)
+// ============================================================================
+
+/**
+ * Generate the Executive Decision
+ *
+ * This is THE single output that tells the operator what to do.
+ * No more digging through analytics - one decision with quantified trade-offs.
+ *
+ * @param {object} insights - Collected insights from snapshot analysis
+ * @param {string} confidence - Overall confidence level ('high', 'medium', 'low')
+ * @param {Array} warnings - Any warnings or caveats from data quality
+ * @returns {object} Executive decision object
+ */
+export function generateExecutiveDecision(insights, confidence = 'medium', warnings = []) {
+  const {
+    signals = [],
+    metrics = {}
+  } = insights;
+
+  // ========================================================================
+  // RECONCILE WARNINGS → CAVEATS
+  // Critical warnings stay visible, non-critical become footnotes
+  // ========================================================================
+  const { caveats, criticalWarnings } = reconcileWarnings(warnings, signals);
+
+  // ========================================================================
+  // SELECT PRIMARY DECISION
+  // Priority: TODAY urgency > Highest $ impact > Lowest risk
+  // ========================================================================
+  const rankedSignals = rankSignals(signals);
+  const primarySignal = rankedSignals[0] || null;
+
+  const primaryDecision = primarySignal ? {
+    action: primarySignal.action,
+    item: primarySignal.item || null,
+    reason: generateDecisionReason(primarySignal, criticalWarnings),
+    dollarImpact: primarySignal.dollarImpact || 0,
+    timeframe: primarySignal.urgency || 'THIS_WEEK',
+    timeframeFriendly: formatTimeframe(primarySignal.urgency, primarySignal.timeframe),
+    tradeOff: primarySignal.tradeOff || null
+  } : {
+    action: 'Monitor and optimize',
+    item: null,
+    reason: 'No critical signals detected. Business is stable.',
+    dollarImpact: 0,
+    timeframe: 'ONGOING',
+    timeframeFriendly: 'Continue current operations',
+    tradeOff: null
+  };
+
+  // ========================================================================
+  // SELECT TWO ALTERNATIVES
+  // Must be different signal types to provide real optionality
+  // ========================================================================
+  const alternatives = selectAlternatives(rankedSignals, primarySignal);
+
+  // ========================================================================
+  // QUANTIFY INACTION COST
+  // What happens if they do NOTHING for 1 week?
+  // ========================================================================
+  const inactionCost = calculateInactionCost(rankedSignals, metrics);
+
+  // ========================================================================
+  // ADJUST CONFIDENCE BASED ON DATA QUALITY
+  // ========================================================================
+  const adjustedConfidence = adjustConfidence(confidence, signals, metrics, criticalWarnings);
+
+  return {
+    // THE DECISION
+    primaryDecision,
+
+    // THE ALTERNATIVES (always 2, or fewer if insufficient data)
+    alternatives,
+
+    // WHAT HAPPENS IF THEY DO NOTHING
+    inactionCost: {
+      weeklyLoss: inactionCost.weekly,
+      monthlyLoss: inactionCost.monthly,
+      explanation: inactionCost.explanation,
+      riskLevel: inactionCost.weekly > 500 ? 'HIGH' : inactionCost.weekly > 100 ? 'MEDIUM' : 'LOW'
+    },
+
+    // CONFIDENCE + CAVEATS
+    confidence: adjustedConfidence,
+    confidenceExplanation: generateConfidenceExplanation(adjustedConfidence, metrics, signals),
+    caveats,
+
+    // METADATA
+    signalCount: signals.length,
+    criticalWarningCount: criticalWarnings.length,
+    generatedAt: new Date().toISOString()
+  };
+}
+
+/**
+ * Reconcile warnings into caveats
+ * Critical = blocks execution or changes recommendation
+ * Non-critical = footnote that doesn't affect decision
+ */
+function reconcileWarnings(warnings, signals) {
+  const criticalWarnings = [];
+  const caveats = [];
+
+  for (const warning of warnings) {
+    const text = typeof warning === 'string' ? warning : warning.message || warning.text || '';
+    const severity = warning.severity || 'low';
+
+    // Critical if: affects pricing, inventory counts, or data freshness > 48 hours
+    const isCritical =
+      severity === 'critical' ||
+      severity === 'high' ||
+      text.toLowerCase().includes('stale data') ||
+      text.toLowerCase().includes('no orders') ||
+      text.toLowerCase().includes('missing cost') ||
+      text.toLowerCase().includes('supabase unavailable');
+
+    if (isCritical) {
+      criticalWarnings.push({
+        type: warning.type || 'data_quality',
+        message: text,
+        impact: 'May affect accuracy of dollar estimates'
+      });
+    } else {
+      caveats.push(text);
+    }
+  }
+
+  // Add implicit caveats based on signal quality
+  if (signals.length === 0) {
+    caveats.push('No actionable signals detected - data may be incomplete');
+  }
+
+  // Keep only top 3 caveats (don't overwhelm)
+  return {
+    caveats: caveats.slice(0, 3),
+    criticalWarnings: criticalWarnings.slice(0, 2)
+  };
+}
+
+/**
+ * Rank signals by priority
+ * TODAY urgency first, then by dollar impact
+ */
+function rankSignals(signals) {
+  if (!signals || signals.length === 0) return [];
+
+  const urgencyScore = {
+    'TODAY': 3,
+    'THIS_WEEK': 2,
+    'SOON': 1,
+    'ONGOING': 0,
+    'NONE': 0
+  };
+
+  return [...signals].sort((a, b) => {
+    // First by urgency
+    const urgencyA = urgencyScore[a.urgency] || 0;
+    const urgencyB = urgencyScore[b.urgency] || 0;
+    if (urgencyA !== urgencyB) return urgencyB - urgencyA;
+
+    // Then by dollar impact
+    return (b.dollarImpact || 0) - (a.dollarImpact || 0);
+  });
+}
+
+/**
+ * Generate a compelling reason for the primary decision
+ */
+function generateDecisionReason(signal, criticalWarnings) {
+  let reason = signal.inactionCost || signal.reason || `${signal.action} to capture opportunity`;
+
+  // If there are critical warnings, acknowledge but don't block
+  if (criticalWarnings.length > 0) {
+    reason += ` (Note: ${criticalWarnings[0].impact})`;
+  }
+
+  return reason;
+}
+
+/**
+ * Format timeframe for human readability
+ */
+function formatTimeframe(urgency, rawTimeframe) {
+  if (rawTimeframe) return rawTimeframe;
+
+  switch (urgency) {
+    case 'TODAY': return 'Act today - time sensitive';
+    case 'THIS_WEEK': return 'Complete within 7 days';
+    case 'SOON': return 'Address within 2 weeks';
+    default: return 'Ongoing optimization';
+  }
+}
+
+/**
+ * Select two alternatives that provide real optionality
+ */
+function selectAlternatives(rankedSignals, primarySignal) {
+  if (!rankedSignals || rankedSignals.length < 2) {
+    return [{
+      action: 'Hold and monitor',
+      dollarImpact: 0,
+      timeframe: 'ONGOING',
+      tradeOff: 'Zero effort, but may miss opportunity window'
+    }];
+  }
+
+  const alternatives = [];
+  const usedTypes = new Set([primarySignal?.type]);
+
+  // Find signals of different types for true alternatives
+  for (const signal of rankedSignals) {
+    if (alternatives.length >= 2) break;
+    if (signal === primarySignal) continue;
+
+    // Prefer different signal types
+    if (!usedTypes.has(signal.type) || rankedSignals.length <= 3) {
+      usedTypes.add(signal.type);
+      alternatives.push({
+        action: signal.action,
+        item: signal.item || null,
+        dollarImpact: signal.dollarImpact || 0,
+        timeframe: signal.urgency || 'THIS_WEEK',
+        tradeOff: signal.tradeOff ?
+          `${signal.tradeOff.doIt} vs ${signal.tradeOff.skipIt}` :
+          signal.risk || 'Standard execution risk'
+      });
+    }
+  }
+
+  // Always provide at least one alternative
+  if (alternatives.length === 0) {
+    alternatives.push({
+      action: 'Defer action and reassess next week',
+      dollarImpact: 0,
+      timeframe: 'NEXT_WEEK',
+      tradeOff: 'Preserves bandwidth but delays potential gains'
+    });
+  }
+
+  return alternatives;
+}
+
+/**
+ * Calculate the cost of doing nothing for 1 week
+ */
+function calculateInactionCost(signals, metrics) {
+  let weeklyLoss = 0;
+  const explanations = [];
+
+  // Sum up all signal inaction costs
+  for (const signal of signals.slice(0, 5)) {
+    if (signal.type === 'RESTOCK_NOW') {
+      const loss = (signal.dollarImpact || 0) * 0.5; // Assume 50% lost if stocked out
+      weeklyLoss += loss;
+      if (signal.item) {
+        explanations.push(`${signal.item} stockout: -$${Math.round(loss)}`);
+      }
+    } else if (signal.type === 'PROMOTE_HIGH_MARGIN') {
+      const opportunity = (signal.dollarImpact || 0) * 0.15; // 15% weekly opportunity cost
+      weeklyLoss += opportunity;
+      explanations.push(`Idle inventory: -$${Math.round(opportunity)} opportunity/week`);
+    } else if (signal.type === 'REVENUE_DECLINE') {
+      const decline = (signal.dollarImpact || 0) / 4; // Monthly to weekly
+      weeklyLoss += decline;
+      explanations.push(`Revenue bleed: -$${Math.round(decline)}/week if unchecked`);
+    }
+  }
+
+  // If no signal-based costs, use general estimate from margin compression
+  if (weeklyLoss === 0 && metrics.totalRevenue) {
+    const impliedWeekly = metrics.totalRevenue * 0.02; // 2% improvement opportunity
+    weeklyLoss = impliedWeekly;
+    explanations.push('General optimization opportunity');
+  }
+
+  return {
+    weekly: Math.round(weeklyLoss),
+    monthly: Math.round(weeklyLoss * 4),
+    explanation: explanations.length > 0 ?
+      explanations.slice(0, 3).join('. ') :
+      'Minimal measurable inaction cost'
+  };
+}
+
+/**
+ * Adjust confidence based on data quality
+ */
+function adjustConfidence(baseConfidence, signals, metrics, criticalWarnings) {
+  let confidence = baseConfidence;
+
+  // Downgrade for critical warnings
+  if (criticalWarnings.length >= 2) {
+    confidence = 'low';
+  } else if (criticalWarnings.length === 1 && confidence === 'high') {
+    confidence = 'medium';
+  }
+
+  // Downgrade if very few signals
+  if (signals.length === 0) {
+    confidence = 'low';
+  }
+
+  // Upgrade if we have strong data
+  if (metrics.totalRevenue > 0 && metrics.skusWithCost > 5 && signals.length >= 3 && criticalWarnings.length === 0) {
+    confidence = 'high';
+  }
+
+  return confidence;
+}
+
+/**
+ * Generate human-readable confidence explanation
+ */
+function generateConfidenceExplanation(confidence, metrics, signals) {
+  const parts = [];
+
+  if (confidence === 'high') {
+    parts.push('Strong data coverage');
+    if (metrics.skusWithCost > 5) parts.push(`${metrics.skusWithCost} SKUs with cost data`);
+    if (signals.length >= 3) parts.push(`${signals.length} actionable signals detected`);
+  } else if (confidence === 'medium') {
+    parts.push('Moderate data coverage');
+    if (!metrics.totalRevenue) parts.push('revenue data incomplete');
+    if (signals.length < 3) parts.push('limited actionable signals');
+  } else {
+    parts.push('Limited data available');
+    if (!metrics.totalRevenue) parts.push('no revenue data');
+    if (signals.length === 0) parts.push('no signals detected');
+  }
+
+  return parts.join('; ');
+}
+
 /**
  * Select the recommended decision
  */
@@ -1516,9 +1862,10 @@ function selectRecommendedDecision(actionOptions) {
  *
  * @param {object} snapshot - Current snapshot
  * @param {object} previousSnapshot - Previous snapshot (optional)
+ * @param {Array} warnings - Data quality warnings (optional)
  * @returns {object} Enriched snapshot with intelligence
  */
-export function enrichSnapshotWithIntelligence(snapshot, previousSnapshot = null) {
+export function enrichSnapshotWithIntelligence(snapshot, previousSnapshot = null, warnings = []) {
   const executiveSummary = generateExecutiveSummary(snapshot, previousSnapshot);
   const topSKUs = getTopSKUsByVelocity(snapshot, 5);
   const slowMovers = getSlowMovers(snapshot, 5);
@@ -1532,14 +1879,47 @@ export function enrichSnapshotWithIntelligence(snapshot, previousSnapshot = null
   const hiddenOpportunities = findHiddenOpportunities(snapshot, 3);
   const wowInsight = generateWowInsight(snapshot, previousSnapshot);
 
-  // NEW: Executive Brief - THE decision-driving output
+  // Executive Brief - collects signals with quantified impact
   const executiveBrief = generateExecutiveBrief(snapshot, previousSnapshot);
+
+  // ============================================================
+  // THE EXECUTIVE DECISION - ONE decision, TWO alternatives
+  // This is THE output that tells the operator what to do
+  // ============================================================
+  const metrics = snapshot.metrics || {};
+  const velocity = snapshot.velocity || {};
+  const inventory = snapshot.enrichedInventory || [];
+
+  // Collect signals from the brief for the decision layer
+  const signals = collectActionableSignals(snapshot, previousSnapshot);
+
+  // Determine base confidence from data quality
+  const baseConfidence = determineBaseConfidence(metrics, velocity, signals);
+
+  // Generate THE executive decision
+  const executiveDecision = generateExecutiveDecision(
+    {
+      signals,
+      metrics,
+      velocity,
+      inventory,
+      previousSnapshot
+    },
+    baseConfidence,
+    warnings
+  );
 
   return {
     ...snapshot,
     intelligence: {
       // ============================================================
-      // THE EXECUTIVE BRIEF - Read this first, act on this
+      // THE EXECUTIVE DECISION - Read FIRST, act on THIS
+      // One primary decision, two alternatives, quantified impact
+      // ============================================================
+      executiveDecision,
+
+      // ============================================================
+      // EXECUTIVE BRIEF - Supporting context
       // ============================================================
       executiveBrief,
 
@@ -1562,4 +1942,28 @@ export function enrichSnapshotWithIntelligence(snapshot, previousSnapshot = null
       hasComparison: previousSnapshot !== null
     }
   };
+}
+
+/**
+ * Determine base confidence level from data quality
+ */
+function determineBaseConfidence(metrics, velocity, signals) {
+  let score = 0;
+
+  // Has revenue data
+  if (metrics.totalRevenue && metrics.totalRevenue > 0) score += 2;
+
+  // Has order data
+  if (velocity.orderCount && velocity.orderCount > 0) score += 2;
+
+  // Has cost data
+  if (metrics.skusWithCost && metrics.skusWithCost > 3) score += 2;
+
+  // Has actionable signals
+  if (signals.length >= 3) score += 1;
+  if (signals.length >= 5) score += 1;
+
+  if (score >= 6) return 'high';
+  if (score >= 3) return 'medium';
+  return 'low';
 }

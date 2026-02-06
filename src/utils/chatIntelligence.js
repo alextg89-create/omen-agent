@@ -1497,7 +1497,15 @@ export function generateExecutiveDefaultWithContext(session, context) {
     return `Still on ${lastSku}: what specifically would you like to know? Promotion strategy, margin analysis, or reorder timing?`;
   }
 
-  // Surface the most important decision from intelligence
+  // ========================================================================
+  // EXECUTIVE DECISION TAKES PRIORITY
+  // ========================================================================
+  const executiveDecision = intelligence?.executiveDecision;
+  if (executiveDecision?.primaryDecision) {
+    return generateFromExecutiveDecision(executiveDecision);
+  }
+
+  // Fallback to verdict (legacy)
   if (intelligence?.verdict) {
     const verdict = intelligence.verdict;
     if (verdict.verdictType === 'STOCKOUT_IMMINENT') {
@@ -1510,4 +1518,270 @@ export function generateExecutiveDefaultWithContext(session, context) {
 
   // Default: ask what matters most
   return `What decision are you facing? Promotion, pricing, or inventory?`;
+}
+
+// ============================================================================
+// EXECUTIVE DECISION INTEGRATION
+// ============================================================================
+// All chat responses should reference the current executive decision
+// Follow-ups drill into the same decision, not reset to generic responses
+
+/**
+ * Generate response from executive decision
+ * This is THE primary output when no specific question is asked
+ *
+ * @param {object} executiveDecision - The executive decision from snapshot intelligence
+ * @returns {string} Decision-driven response
+ */
+export function generateFromExecutiveDecision(executiveDecision) {
+  const primary = executiveDecision.primaryDecision;
+  const alternatives = executiveDecision.alternatives || [];
+  const inactionCost = executiveDecision.inactionCost;
+  const confidence = executiveDecision.confidence || 'medium';
+  const caveats = executiveDecision.caveats || [];
+
+  let response = '';
+
+  // Lead with the decision
+  response += `**THE CALL:** ${primary.action}`;
+  if (primary.item) {
+    response += ` — ${primary.item}`;
+  }
+  response += '\n\n';
+
+  // Why this decision
+  response += `**WHY:** ${primary.reason}\n\n`;
+
+  // Dollar impact and timeframe
+  if (primary.dollarImpact > 0) {
+    response += `**IMPACT:** $${primary.dollarImpact.toLocaleString()} opportunity\n`;
+  }
+  response += `**WHEN:** ${primary.timeframeFriendly || formatTimeframeForChat(primary.timeframe)}\n\n`;
+
+  // Inaction cost
+  if (inactionCost && inactionCost.weeklyLoss > 0) {
+    response += `**IF YOU DO NOTHING:** -$${inactionCost.weeklyLoss.toLocaleString()}/week`;
+    if (inactionCost.explanation) {
+      response += ` (${inactionCost.explanation})`;
+    }
+    response += '\n\n';
+  }
+
+  // Alternatives (show top 2)
+  if (alternatives.length > 0) {
+    response += '**ALTERNATIVES:**\n';
+    for (const alt of alternatives.slice(0, 2)) {
+      const impact = alt.dollarImpact > 0 ? ` ($${alt.dollarImpact.toLocaleString()})` : '';
+      response += `→ ${alt.action}${impact}\n`;
+    }
+    response += '\n';
+  }
+
+  // Confidence (only show if not high)
+  if (confidence !== 'high') {
+    const explanation = executiveDecision.confidenceExplanation || '';
+    response += `(${confidence.charAt(0).toUpperCase() + confidence.slice(1)} confidence: ${explanation})`;
+  }
+
+  // Caveats as footnotes
+  if (caveats.length > 0) {
+    response += '\n\n---\n';
+    response += `Note: ${caveats.slice(0, 2).join('. ')}`;
+  }
+
+  return response;
+}
+
+/**
+ * Format timeframe for chat display
+ */
+function formatTimeframeForChat(timeframe) {
+  switch (timeframe) {
+    case 'TODAY': return 'Act today — time sensitive';
+    case 'THIS_WEEK': return 'Complete this week';
+    case 'SOON': return 'Address within 2 weeks';
+    case 'ONGOING': return 'Ongoing optimization';
+    default: return timeframe || 'This week';
+  }
+}
+
+/**
+ * Generate drill-down response for executive decision
+ * When user asks for more details on the primary decision
+ *
+ * @param {object} executiveDecision - Current executive decision
+ * @param {string} aspect - What aspect to drill into ('why', 'alternatives', 'impact', 'trade-offs')
+ * @returns {string} Detailed response
+ */
+export function drillIntoExecutiveDecision(executiveDecision, aspect) {
+  const primary = executiveDecision.primaryDecision;
+  const alternatives = executiveDecision.alternatives || [];
+
+  if (aspect === 'why' || aspect === 'reason') {
+    let response = `**Deep dive on: ${primary.action}**\n\n`;
+    response += `${primary.reason}\n\n`;
+
+    if (primary.tradeOff) {
+      response += '**Trade-off analysis:**\n';
+      if (typeof primary.tradeOff === 'object') {
+        response += `• DO IT: ${primary.tradeOff.doIt}\n`;
+        response += `• SKIP IT: ${primary.tradeOff.skipIt}\n`;
+      } else {
+        response += primary.tradeOff;
+      }
+    }
+
+    return response;
+  }
+
+  if (aspect === 'alternatives' || aspect === 'options') {
+    if (alternatives.length === 0) {
+      return `No strong alternatives to ${primary.action} right now. This is your best move.`;
+    }
+
+    let response = `**Other options instead of ${primary.action}:**\n\n`;
+    alternatives.forEach((alt, i) => {
+      response += `**${i + 1}. ${alt.action}**\n`;
+      if (alt.item) response += `   Item: ${alt.item}\n`;
+      if (alt.dollarImpact > 0) response += `   Impact: $${alt.dollarImpact.toLocaleString()}\n`;
+      if (alt.tradeOff) response += `   Trade-off: ${alt.tradeOff}\n`;
+      response += '\n';
+    });
+
+    response += `\nMy recommendation stands: ${primary.action}. But these are viable if you have constraints.`;
+    return response;
+  }
+
+  if (aspect === 'impact' || aspect === 'numbers') {
+    let response = `**Dollar breakdown for ${primary.action}:**\n\n`;
+
+    if (primary.dollarImpact > 0) {
+      response += `• Opportunity: $${primary.dollarImpact.toLocaleString()}\n`;
+    }
+
+    const inaction = executiveDecision.inactionCost;
+    if (inaction) {
+      response += `• Weekly inaction cost: $${inaction.weeklyLoss.toLocaleString()}\n`;
+      response += `• Monthly inaction cost: $${inaction.monthlyLoss.toLocaleString()}\n`;
+      if (inaction.explanation) {
+        response += `\nBreakdown: ${inaction.explanation}`;
+      }
+    }
+
+    return response;
+  }
+
+  // Default: summarize the decision
+  return generateFromExecutiveDecision(executiveDecision);
+}
+
+/**
+ * Reference executive decision in any response
+ * Appends decision context when relevant
+ *
+ * @param {string} response - The generated response
+ * @param {object} context - Full context including intelligence
+ * @returns {string} Response with decision reference
+ */
+export function referenceExecutiveDecision(response, context) {
+  const intelligence = context?.weekly?.intelligence || context?.daily?.intelligence;
+  const executiveDecision = intelligence?.executiveDecision;
+
+  if (!executiveDecision?.primaryDecision || !response) {
+    return response;
+  }
+
+  const primary = executiveDecision.primaryDecision;
+
+  // Don't add if response already mentions the primary decision
+  if (response.includes(primary.action)) {
+    return response;
+  }
+
+  // Add a brief reference to the current decision
+  const decisionRef = `\n\n---\n**Current priority:** ${primary.action}`;
+  if (primary.timeframe === 'TODAY') {
+    return response + decisionRef + ' (time-sensitive)';
+  }
+
+  return response + decisionRef;
+}
+
+/**
+ * Check if message is asking about the current executive decision
+ *
+ * @param {string} message - User message
+ * @param {object} executiveDecision - Current decision
+ * @returns {boolean}
+ */
+export function isAskingAboutDecision(message, executiveDecision) {
+  if (!executiveDecision?.primaryDecision) return false;
+
+  const lower = message.toLowerCase();
+  const primary = executiveDecision.primaryDecision;
+  const item = primary.item?.toLowerCase() || '';
+
+  // Direct references to the decision item
+  if (item && lower.includes(item)) {
+    return true;
+  }
+
+  // Questions about "the decision" or "your recommendation"
+  if (lower.includes('the decision') ||
+      lower.includes('your recommendation') ||
+      lower.includes('what you said') ||
+      lower.includes('that one') ||
+      lower.includes('tell me more')) {
+    return true;
+  }
+
+  // Questions about aspects of the decision
+  if (lower.includes('why') && (lower.includes('that') || lower.includes('this'))) {
+    return true;
+  }
+
+  if (lower.includes('alternative') || lower.includes('other option')) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Handle executive decision follow-up questions
+ *
+ * @param {string} message - User message
+ * @param {object} executiveDecision - Current decision
+ * @returns {string|null} Response or null if not a decision follow-up
+ */
+export function handleDecisionFollowUp(message, executiveDecision) {
+  if (!isAskingAboutDecision(message, executiveDecision)) {
+    return null;
+  }
+
+  const lower = message.toLowerCase();
+
+  // "Why?" questions
+  if (lower.includes('why')) {
+    return drillIntoExecutiveDecision(executiveDecision, 'why');
+  }
+
+  // "What else?" or alternatives
+  if (lower.includes('else') || lower.includes('alternative') || lower.includes('other')) {
+    return drillIntoExecutiveDecision(executiveDecision, 'alternatives');
+  }
+
+  // "How much?" or impact questions
+  if (lower.includes('how much') || lower.includes('impact') || lower.includes('dollar') || lower.includes('cost')) {
+    return drillIntoExecutiveDecision(executiveDecision, 'impact');
+  }
+
+  // "Tell me more" - give full breakdown
+  if (lower.includes('more') || lower.includes('detail')) {
+    return drillIntoExecutiveDecision(executiveDecision, 'why') + '\n\n' +
+           drillIntoExecutiveDecision(executiveDecision, 'impact');
+  }
+
+  // Default: re-state the decision
+  return generateFromExecutiveDecision(executiveDecision);
 }
