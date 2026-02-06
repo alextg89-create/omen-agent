@@ -275,20 +275,87 @@ export async function getAuthoritativeInventory() {
 
   const timestamp = new Date().toISOString();
 
-  // Calculate stats
+  // ========================================================================
+  // SKU COUNTING POLICY
+  // ========================================================================
+  // DISTINCTION: Products vs Variants (SKUs)
+  // - A PRODUCT is a unique item (e.g., "Bloopiez")
+  // - A VARIANT (SKU) is a specific pack size (e.g., "Bloopiez 3.5g")
+  // - One product typically has 4 variants (3.5g, 7g, 14g, 28g)
+  //
+  // SELLABLE DEFINITION:
+  // - visible: true (not hidden/archived in Wix)
+  // - quantity > 0 OR inventoryStatus = 'IN_STOCK' (available to purchase)
+  //
+  // EXCLUSION REASONS:
+  // - hidden: visible = false (archived, discontinued, internal)
+  // - out_of_stock: quantity = 0 AND status != 'IN_STOCK'
+  // - no_quantity: null quantity AND status != 'IN_STOCK'
+  // ========================================================================
+
+  // Calculate basic stats
   const totalItems = enriched.length;
   const countedItems = enriched.filter(i => i.inventoryStatus === 'COUNTED').length;
   const inStockItems = enriched.filter(i => i.inventoryStatus === 'IN_STOCK').length;
   const outOfStockItems = enriched.filter(i => i.quantity === 0 && i.inventoryStatus !== 'IN_STOCK').length;
 
   // ========================================================================
-  // POLICY: ACTIVE SKU DEFINITION
+  // PRODUCT vs VARIANT COUNTING
+  // ========================================================================
+  // Count unique products (by product_id)
+  const uniqueProductIds = new Set(enriched.map(i => i.product_id).filter(Boolean));
+  const totalProductCount = uniqueProductIds.size;
+  const totalVariantCount = enriched.length;  // Each SKU is a variant
+
+  // ========================================================================
+  // EXCLUSION TRACKING
+  // ========================================================================
+  const excludedReasonCounts = {
+    hidden: 0,
+    out_of_stock: 0,
+    no_quantity: 0
+  };
+
+  // Classify each item and track exclusion reasons
+  enriched.forEach(item => {
+    if (item.visible === false) {
+      excludedReasonCounts.hidden++;
+    } else if (item.quantity === 0 && item.inventoryStatus !== 'IN_STOCK') {
+      excludedReasonCounts.out_of_stock++;
+    } else if (item.quantity === null && item.inventoryStatus !== 'IN_STOCK') {
+      excludedReasonCounts.no_quantity++;
+    }
+  });
+
+  // ========================================================================
+  // SELLABLE SKU DEFINITION (Wix Dashboard Parity)
+  // ========================================================================
+  // SELLABLE = visible AND (has quantity OR marked IN_STOCK)
+  const sellableSKUs = enriched.filter(i =>
+    i.visible !== false &&  // Not hidden
+    (i.quantity > 0 || i.inventoryStatus === 'IN_STOCK')  // Has stock or available
+  );
+
+  // Non-sellable = anything not meeting sellable criteria
+  const nonSellableSKUs = enriched.filter(i =>
+    i.visible === false ||  // Hidden
+    (i.quantity === 0 && i.inventoryStatus !== 'IN_STOCK')  // Out of stock
+  );
+
+  // Unique SELLABLE products (for Wix dashboard parity)
+  const sellableProductIds = new Set(sellableSKUs.map(i => i.product_id).filter(Boolean));
+  const activeProductCount = sellableProductIds.size;
+  const activeVariantCount = sellableSKUs.length;
+
+  // ========================================================================
+  // LEGACY: ACTIVE SKU DEFINITION (for backwards compatibility)
   // ========================================================================
   // ACTIVE = SKUs that are sellable and should count toward coverage metrics
   // - Has quantity > 0 OR has IN_STOCK status (available but unknown quantity)
   // - Inactive SKUs are preserved but excluded from coverage calculations
   //
-  // This prevents out-of-stock or discontinued items from degrading confidence
+  // NOTE: This is slightly different from SELLABLE (doesn't check visibility)
+  // Keeping for backwards compatibility with existing coverage calculations
   // ========================================================================
   const activeSKUs = enriched.filter(i =>
     i.quantity > 0 || i.inventoryStatus === 'IN_STOCK'
@@ -331,9 +398,15 @@ export async function getAuthoritativeInventory() {
   console.log(`[Authority] Inventory: ${totalItems} SKUs from ${INVENTORY_TABLE}`);
   console.log(`[Authority] Costs: ${costTableCount} SKUs in ${COST_TABLE}`);
   console.log(`[Authority] ----------------------------------------`);
-  console.log(`[Authority] ACTIVE SKUs (sellable): ${activeCount}`);
-  console.log(`[Authority] INACTIVE SKUs (excluded): ${inactiveCount}`);
+  console.log(`[Authority] PRODUCTS: ${totalProductCount} total, ${activeProductCount} sellable`);
+  console.log(`[Authority] VARIANTS: ${totalVariantCount} total, ${activeVariantCount} sellable`);
   console.log(`[Authority] ----------------------------------------`);
+  console.log(`[Authority] EXCLUDED REASONS:`);
+  console.log(`[Authority]   - Hidden/Archived: ${excludedReasonCounts.hidden}`);
+  console.log(`[Authority]   - Out of Stock: ${excludedReasonCounts.out_of_stock}`);
+  console.log(`[Authority]   - No Quantity: ${excludedReasonCounts.no_quantity}`);
+  console.log(`[Authority] ----------------------------------------`);
+  console.log(`[Authority] LEGACY ACTIVE SKUs: ${activeCount} (for coverage)`);
   console.log(`[Authority] Active SKUs with cost: ${activeWithCost}`);
   console.log(`[Authority] Active SKUs without cost: ${activeWithoutCost}`);
   console.log(`[Authority] Active SKUs with margin: ${activeWithMargin}`);
@@ -358,13 +431,35 @@ export async function getAuthoritativeInventory() {
     costTable: COST_TABLE,
     count: enriched.length,
     inventoryLastSyncedAt,
+    // ========================================================================
+    // PRODUCT vs VARIANT COUNTS (Wix Dashboard Parity)
+    // ========================================================================
+    // activeProductCount: Unique sellable products (~75 to match Wix)
+    // activeVariantCount: Sellable SKUs (products × pack sizes)
+    // excludedReasonCounts: Why items were excluded
+    activeProductCount,
+    activeVariantCount,
+    excludedReasonCounts,
+    // Total counts (before exclusions)
+    totalProductCount,
+    totalVariantCount,
     stats: {
       total: totalItems,
       counted: countedItems,
       inStock: inStockItems,
       outOfStock: outOfStockItems,
       active: activeCount,
-      inactive: inactiveCount
+      inactive: inactiveCount,
+      // NEW: Product-level stats for Wix parity
+      products: {
+        total: totalProductCount,
+        sellable: activeProductCount
+      },
+      variants: {
+        total: totalVariantCount,
+        sellable: activeVariantCount
+      },
+      excluded: excludedReasonCounts
     },
     pricingStats: {
       skusWithRetail,
