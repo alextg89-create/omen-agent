@@ -3414,6 +3414,16 @@ app.post("/cron/daily-snapshot", async (req, res) => {
   console.log("⏰ [CRON] Daily snapshot triggered", { requestId, source: req.body?.source });
 
   try {
+    // SELF-HEALING: Sync orders before snapshot generation
+    // This ensures snapshots reflect latest order data from webhooks
+    try {
+      const { syncOrdersFromWebhooks } = await import('./services/orderSyncService.js');
+      const syncResult = await syncOrdersFromWebhooks(7); // Last 7 days for daily
+      console.log("⏰ [CRON] Order sync complete", { synced: syncResult.synced, skipped: syncResult.skipped });
+    } catch (syncErr) {
+      console.warn("⏰ [CRON] Order sync failed (continuing with snapshot)", { error: syncErr.message });
+    }
+
     // Generate daily snapshot
     const inventory = await getInventory(STORE_ID);
 
@@ -3497,6 +3507,16 @@ app.post("/cron/weekly-snapshot", async (req, res) => {
   console.log("⏰ [CRON] Weekly snapshot triggered", { requestId, source: req.body?.source });
 
   try {
+    // SELF-HEALING: Sync orders before snapshot generation
+    // This ensures snapshots reflect latest order data from webhooks
+    try {
+      const { syncOrdersFromWebhooks } = await import('./services/orderSyncService.js');
+      const syncResult = await syncOrdersFromWebhooks(30); // Last 30 days for weekly
+      console.log("⏰ [CRON] Order sync complete", { synced: syncResult.synced, skipped: syncResult.skipped });
+    } catch (syncErr) {
+      console.warn("⏰ [CRON] Order sync failed (continuing with snapshot)", { error: syncErr.message });
+    }
+
     // Generate weekly snapshot
     const inventory = await getInventory(STORE_ID);
 
