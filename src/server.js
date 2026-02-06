@@ -67,7 +67,10 @@ import {
   generateFollowUpResponse,
   generateFollowUpSuggestions,
   generateSessionAwareResponse,
-  generateExecutiveDefaultWithContext
+  generateExecutiveDefaultWithContext,
+  handleDecisionFollowUp,
+  generateFromExecutiveDecision,
+  referenceExecutiveDecision
 } from "./utils/chatIntelligence.js";
 import {
   getSession,
@@ -1499,6 +1502,9 @@ Current Recommendations Available:
       // Do NOT fall back to inventoryContext (catalog margin) for margin data
       const snapshotMetrics = weekly?.metrics || daily?.metrics || null;
 
+      // Extract executive decision from snapshot intelligence
+      const executiveDecision = weekly?.intelligence?.executiveDecision || daily?.intelligence?.executiveDecision || null;
+
       chatContext = {
         // Both snapshots available
         daily,
@@ -1516,7 +1522,9 @@ Current Recommendations Available:
         // Flag for chat intelligence to know if margin data is available
         hasRealizedMargin: !!snapshotMetrics?.highestMarginItem,
         // Inventory for SKU matching
-        inventory: inventoryData
+        inventory: inventoryData,
+        // THE EXECUTIVE DECISION - Primary output for chat
+        executiveDecision
       };
 
       // UPDATE SESSION: Track confidence basis for explanations
@@ -1536,48 +1544,59 @@ Current Recommendations Available:
       });
 
       try {
+        // EXECUTIVE DECISION FOLLOW-UP: Check if asking about current decision FIRST
+        if (chatContext.executiveDecision) {
+          const decisionFollowUp = handleDecisionFollowUp(message, chatContext.executiveDecision);
+          if (decisionFollowUp) {
+            intelligentResponse = decisionFollowUp;
+            console.log("💬 [OMEN] Executive decision follow-up handled", { requestId });
+          }
+        }
+
         // SESSION-AWARE RESPONSE: Use session context for better follow-up handling
-        const sessionAwareResult = generateSessionAwareResponse(
-          message,
-          chatContext.recommendations,
-          chatContext,
-          chatContext,
-          session,
-          sessionFollowUp
-        );
+        if (!intelligentResponse) {
+          const sessionAwareResult = generateSessionAwareResponse(
+            message,
+            chatContext.recommendations,
+            chatContext,
+            chatContext,
+            session,
+            sessionFollowUp
+          );
 
-        if (sessionAwareResult.response) {
-          intelligentResponse = sessionAwareResult.response;
+          if (sessionAwareResult.response) {
+            intelligentResponse = sessionAwareResult.response;
 
-          // UPDATE SESSION: Track what was discussed for future follow-ups
-          updateSession(session.sessionId, {
-            sku: sessionAwareResult.sku,
-            skuContext: sessionAwareResult.skuContext,
-            topic: sessionAwareResult.topic,
-            actionType: sessionAwareResult.actionType,
-            timeframe: sessionAwareResult.timeframe,
-            pendingFollowUp: sessionAwareResult.pendingFollowUp,
-            recommendation: sessionAwareResult.sku ? {
+            // UPDATE SESSION: Track what was discussed for future follow-ups
+            updateSession(session.sessionId, {
+              sku: sessionAwareResult.sku,
+              skuContext: sessionAwareResult.skuContext,
+              topic: sessionAwareResult.topic,
+              actionType: sessionAwareResult.actionType,
+              timeframe: sessionAwareResult.timeframe,
+              pendingFollowUp: sessionAwareResult.pendingFollowUp,
+              recommendation: sessionAwareResult.sku ? {
+                sku: sessionAwareResult.sku,
+                topic: sessionAwareResult.topic,
+                confidence: sessionAwareResult.confidence,
+              } : null,
+            });
+
+            // ADD CONFIDENCE EXPLANATION when not high
+            if (sessionAwareResult.confidence !== 'high' && sessionAwareResult.confidenceReason) {
+              const explanation = buildConfidenceExplanation(session, sessionAwareResult.confidence);
+              if (explanation && !intelligentResponse.includes('confidence')) {
+                intelligentResponse += `\n\n${explanation}`;
+              }
+            }
+
+            console.log("💬 [OMEN] Session-aware response generated", {
+              requestId,
               sku: sessionAwareResult.sku,
               topic: sessionAwareResult.topic,
               confidence: sessionAwareResult.confidence,
-            } : null,
-          });
-
-          // ADD CONFIDENCE EXPLANATION when not high
-          if (sessionAwareResult.confidence !== 'high' && sessionAwareResult.confidenceReason) {
-            const explanation = buildConfidenceExplanation(session, sessionAwareResult.confidence);
-            if (explanation && !intelligentResponse.includes('confidence')) {
-              intelligentResponse += `\n\n${explanation}`;
-            }
+            });
           }
-
-          console.log("💬 [OMEN] Session-aware response generated", {
-            requestId,
-            sku: sessionAwareResult.sku,
-            topic: sessionAwareResult.topic,
-            confidence: sessionAwareResult.confidence,
-          });
         }
 
         // LEGACY FALLBACK: If session-aware didn't generate, try legacy flow

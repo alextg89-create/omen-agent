@@ -908,9 +908,12 @@
 
       // Extract executive intelligence
       const intelligence = snapshot.intelligence || {};
+      const executiveDecision = intelligence.executiveDecision || {};
       const executiveSummary = intelligence.executiveSummary || {};
       const wowInsights = intelligence.wowInsights || [];
-      const topDecision = wowInsights[0];
+      const primaryDecision = executiveDecision.primaryDecision;
+      const alternatives = executiveDecision.alternatives || [];
+      const inactionCost = executiveDecision.inactionCost || {};
 
       let html = `
         <h3 style="color: #fff; margin-bottom: 5px;">${timeframeLabel} Intelligence Brief</h3>
@@ -918,24 +921,58 @@
       `;
 
       // ═══════════════════════════════════════════════════════════════════════
-      // EXECUTIVE SUMMARY - Lead with what matters, not metrics
+      // THE EXECUTIVE DECISION - Lead with THE call
       // ═══════════════════════════════════════════════════════════════════════
-      html += '<div class="executive-summary" style="background: linear-gradient(135deg, #1a2a3a 0%, #0a1a2a 100%); padding: 20px; border-radius: 8px; margin-bottom: 20px; border-left: 4px solid #4CAF50;">';
+      html += '<div class="executive-decision" style="background: linear-gradient(135deg, #1a2a3a 0%, #0a1a2a 100%); padding: 20px; border-radius: 8px; margin-bottom: 20px; border-left: 4px solid #4CAF50;">';
 
-      if (topDecision) {
-        // Lead with the top decision
+      if (primaryDecision && primaryDecision.action) {
+        // THE DECISION
         html += `
-          <div style="font-size: 1.1em; color: #fff; font-weight: 600; margin-bottom: 10px;">
-            ${topDecision.headline || 'Priority Decision Available'}
+          <div style="font-size: 0.75em; color: #4CAF50; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px;">THE CALL</div>
+          <div style="font-size: 1.2em; color: #fff; font-weight: 600; margin-bottom: 12px;">
+            ${primaryDecision.action}${primaryDecision.item ? ` — ${primaryDecision.item}` : ''}
           </div>
-          <div style="color: #ccc; margin-bottom: 12px; line-height: 1.5;">
-            ${topDecision.insight || executiveSummary.verdict || 'Generate insights to surface priority decisions.'}
+          <div style="color: #ccc; margin-bottom: 15px; line-height: 1.5;">
+            <strong style="color: #888;">WHY:</strong> ${primaryDecision.reason || 'Highest priority action identified.'}
           </div>
-          ${topDecision.action ? `<div style="color: #4CAF50; font-weight: 500;">→ ${topDecision.action}</div>` : ''}
-          ${topDecision.dollarImpact ? `<div style="color: #FFD700; margin-top: 8px; font-size: 0.95em;">Potential impact: $${topDecision.dollarImpact.toLocaleString()}</div>` : ''}
+          <div style="display: flex; gap: 20px; flex-wrap: wrap; margin-bottom: 15px;">
+            ${primaryDecision.dollarImpact > 0 ? `
+              <div>
+                <span style="color: #888; font-size: 0.85em;">IMPACT:</span>
+                <span style="color: #4CAF50; font-weight: 600; margin-left: 5px;">$${primaryDecision.dollarImpact.toLocaleString()}</span>
+              </div>
+            ` : ''}
+            <div>
+              <span style="color: #888; font-size: 0.85em;">WHEN:</span>
+              <span style="color: #fff; margin-left: 5px;">${primaryDecision.timeframeFriendly || primaryDecision.timeframe || 'This week'}</span>
+            </div>
+          </div>
+          ${inactionCost.weeklyLoss > 0 ? `
+            <div style="background: rgba(244, 67, 54, 0.1); border: 1px solid rgba(244, 67, 54, 0.3); padding: 10px 12px; border-radius: 4px; margin-bottom: 15px;">
+              <span style="color: #f44336; font-weight: 500;">IF YOU DO NOTHING:</span>
+              <span style="color: #ff8a80; margin-left: 8px;">-$${inactionCost.weeklyLoss.toLocaleString()}/week</span>
+              ${inactionCost.explanation ? `<div style="color: #888; font-size: 0.85em; margin-top: 5px;">${inactionCost.explanation}</div>` : ''}
+            </div>
+          ` : ''}
+          ${alternatives.length > 0 ? `
+            <div style="border-top: 1px solid rgba(255,255,255,0.1); padding-top: 12px;">
+              <div style="color: #888; font-size: 0.8em; text-transform: uppercase; margin-bottom: 8px;">ALTERNATIVES</div>
+              ${alternatives.slice(0, 2).map(alt => `
+                <div style="color: #ccc; padding: 6px 0; display: flex; justify-content: space-between; align-items: center;">
+                  <span>→ ${alt.action}</span>
+                  ${alt.dollarImpact > 0 ? `<span style="color: #888;">($${alt.dollarImpact.toLocaleString()})</span>` : ''}
+                </div>
+              `).join('')}
+            </div>
+          ` : ''}
+          ${executiveDecision.confidence && executiveDecision.confidence !== 'high' ? `
+            <div style="color: #888; font-size: 0.85em; margin-top: 10px;">
+              (${executiveDecision.confidence.charAt(0).toUpperCase() + executiveDecision.confidence.slice(1)} confidence${executiveDecision.confidenceExplanation ? `: ${executiveDecision.confidenceExplanation}` : ''})
+            </div>
+          ` : ''}
         `;
       } else if (executiveSummary.verdict) {
-        // Fall back to verdict
+        // Fall back to verdict if no executive decision
         html += `
           <div style="font-size: 1.1em; color: #fff; font-weight: 600; margin-bottom: 10px;">Current State</div>
           <div style="color: #ccc; line-height: 1.5;">${executiveSummary.verdict}</div>
