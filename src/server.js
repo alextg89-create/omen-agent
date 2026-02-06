@@ -65,8 +65,19 @@ import {
   wrapWithProactiveInsight,
   detectFollowUpIntent,
   generateFollowUpResponse,
-  generateFollowUpSuggestions
+  generateFollowUpSuggestions,
+  generateSessionAwareResponse,
+  generateExecutiveDefaultWithContext
 } from "./utils/chatIntelligence.js";
+import {
+  getSession,
+  updateSession,
+  extractEntitiesFromMessage,
+  analyzeFollowUp,
+  buildConfidenceExplanation,
+  generateBestActionGuidance,
+  generateFollowUpOpening
+} from "./services/sessionContext.js";
 import {
   evaluateGovernanceState,
   currentExecutionMode,
@@ -1205,23 +1216,32 @@ app.get("/costs/coverage", async (req, res) => {
  */
 app.post("/chat", async (req, res) => {
   const requestId = createRequestId();
-  const { message, conversationHistory = [] } = req.body;
+  const { message, conversationHistory = [], sessionId = null } = req.body;
 
   try {
     console.log("💬 [OMEN] CHAT HIT", {
       requestId,
       message,
       historyLength: conversationHistory.length,
+      sessionId,
     });
+
+    // 0️⃣ SESSION CONTEXT - Maintain conversation state across messages
+    const session = getSession(sessionId || requestId);
 
     // 1️⃣ INTENT DETECTION
     const needsInventory = detectInventoryIntent(message);
     const needsRecommendations = detectRecommendationIntent(message);
 
-    // 1.5️⃣ FOLLOW-UP DETECTION - Check if this is a follow-up to previous conversation
-    const followUpDetection = detectFollowUpIntent(message, conversationHistory);
-    const isFollowUp = followUpDetection.isFollowUp;
-    const followUpTopic = followUpDetection.topic;
+    // 1.5️⃣ FOLLOW-UP DETECTION - Use session-aware analysis
+    // Session context provides richer follow-up detection than message history alone
+    const sessionFollowUp = analyzeFollowUp(message, session);
+    const legacyFollowUp = detectFollowUpIntent(message, conversationHistory);
+
+    // Prefer session follow-up (tracks actual discussed entities)
+    const isFollowUp = sessionFollowUp.isFollowUp || legacyFollowUp.isFollowUp;
+    const followUpTopic = sessionFollowUp.priorTopic || legacyFollowUp.topic;
+    const priorSku = sessionFollowUp.priorSku;
 
     console.log("💬 [OMEN] Intent detection", {
       requestId,
@@ -1494,30 +1514,109 @@ Current Recommendations Available:
         highestMarginItem: snapshotMetrics?.highestMarginItem || null,
         itemsWithPricing: snapshotMetrics?.itemsWithPricing || inventoryContext?.itemsWithPricing || 0,
         // Flag for chat intelligence to know if margin data is available
-        hasRealizedMargin: !!snapshotMetrics?.highestMarginItem
+        hasRealizedMargin: !!snapshotMetrics?.highestMarginItem,
+        // Inventory for SKU matching
+        inventory: inventoryData
       };
 
+      // UPDATE SESSION: Track confidence basis for explanations
+      const orderCount = velocityData?.orderCount || 0;
+      const dataAge = inventoryMetadata?.inventoryLastSyncedAt
+        ? (Date.now() - new Date(inventoryMetadata.inventoryLastSyncedAt).getTime()) / (1000 * 60 * 60)
+        : null;
+
+      updateSession(session.sessionId, {
+        confidenceBasis: {
+          dataSource: hasVelocity ? 'snapshot' : 'inventory_only',
+          dataAge: dataAge,
+          orderCount: orderCount,
+          coveragePercent: snapshotMetrics?.costCoverage || null,
+          limitations: orderCount === 0 ? ['no order data in period'] : [],
+        }
+      });
+
       try {
-        // FOLLOW-UP HANDLING: Check if this is a follow-up question first
-        if (isFollowUp && followUpTopic) {
-          console.log("💬 [OMEN] Handling follow-up question", { requestId, topic: followUpTopic });
-          intelligentResponse = generateFollowUpResponse(
-            message,
-            followUpTopic,
-            chatContext.recommendations,
-            chatContext,
-            chatContext
-          );
+        // SESSION-AWARE RESPONSE: Use session context for better follow-up handling
+        const sessionAwareResult = generateSessionAwareResponse(
+          message,
+          chatContext.recommendations,
+          chatContext,
+          chatContext,
+          session,
+          sessionFollowUp
+        );
+
+        if (sessionAwareResult.response) {
+          intelligentResponse = sessionAwareResult.response;
+
+          // UPDATE SESSION: Track what was discussed for future follow-ups
+          updateSession(session.sessionId, {
+            sku: sessionAwareResult.sku,
+            skuContext: sessionAwareResult.skuContext,
+            topic: sessionAwareResult.topic,
+            actionType: sessionAwareResult.actionType,
+            timeframe: sessionAwareResult.timeframe,
+            pendingFollowUp: sessionAwareResult.pendingFollowUp,
+            recommendation: sessionAwareResult.sku ? {
+              sku: sessionAwareResult.sku,
+              topic: sessionAwareResult.topic,
+              confidence: sessionAwareResult.confidence,
+            } : null,
+          });
+
+          // ADD CONFIDENCE EXPLANATION when not high
+          if (sessionAwareResult.confidence !== 'high' && sessionAwareResult.confidenceReason) {
+            const explanation = buildConfidenceExplanation(session, sessionAwareResult.confidence);
+            if (explanation && !intelligentResponse.includes('confidence')) {
+              intelligentResponse += `\n\n${explanation}`;
+            }
+          }
+
+          console.log("💬 [OMEN] Session-aware response generated", {
+            requestId,
+            sku: sessionAwareResult.sku,
+            topic: sessionAwareResult.topic,
+            confidence: sessionAwareResult.confidence,
+          });
         }
 
-        // If not a follow-up or follow-up didn't generate response, try standard insight
+        // LEGACY FALLBACK: If session-aware didn't generate, try legacy flow
         if (!intelligentResponse) {
-          intelligentResponse = generateInsightResponse(message, chatContext.recommendations, chatContext, chatContext);
-        }
+          // FOLLOW-UP HANDLING: Check if this is a follow-up question first
+          if (isFollowUp && followUpTopic) {
+            console.log("💬 [OMEN] Handling follow-up question (legacy)", { requestId, topic: followUpTopic });
 
-        // PROACTIVE LAYER: Add "what you might not be seeing" to every response
-        if (intelligentResponse) {
-          intelligentResponse = wrapWithProactiveInsight(intelligentResponse, chatContext);
+            // Add context-aware opening for follow-ups
+            const opening = generateFollowUpOpening(sessionFollowUp, session);
+
+            intelligentResponse = generateFollowUpResponse(
+              message,
+              followUpTopic,
+              chatContext.recommendations,
+              chatContext,
+              chatContext
+            );
+
+            if (intelligentResponse && opening) {
+              intelligentResponse = opening + intelligentResponse;
+            }
+          }
+
+          // If not a follow-up or follow-up didn't generate response, try standard insight
+          if (!intelligentResponse) {
+            intelligentResponse = generateInsightResponse(message, chatContext.recommendations, chatContext, chatContext);
+          }
+
+          // PROACTIVE LAYER: Add "what you might not be seeing" to every response
+          if (intelligentResponse) {
+            intelligentResponse = wrapWithProactiveInsight(intelligentResponse, chatContext);
+
+            // Extract and track entities from response for session
+            const entities = extractEntitiesFromMessage(message, chatContext);
+            if (entities.topic || entities.sku) {
+              updateSession(session.sessionId, entities);
+            }
+          }
         }
       } catch (insightErr) {
         console.error("[OMEN] Insight generation failed", { requestId, error: insightErr.message });
@@ -1550,8 +1649,15 @@ Current Recommendations Available:
         } else if (needsInventory && inventoryContext) {
           llmResponse = generateFallbackInventoryResponse(message, inventoryContext);
         } else {
-          // DEFAULT: State the most important decision right now
-          llmResponse = generateExecutiveDefault(chatContext);
+          // DEFAULT: Use session-aware executive default
+          llmResponse = generateExecutiveDefaultWithContext(session, chatContext);
+        }
+
+        // ADD BEST-ACTION GUIDANCE even with low confidence
+        const topic = followUpTopic || session?.lastDiscussed?.topic || 'promotion';
+        const guidance = generateBestActionGuidance(topic, session, chatContext);
+        if (guidance && llmResponse && !llmResponse.includes('confidence')) {
+          llmResponse += `\n\n**Best action:** ${guidance}`;
         }
       } catch (fallbackErr) {
         console.error("[OMEN] Fallback generation failed", { requestId, error: fallbackErr.message });
@@ -1604,11 +1710,15 @@ Current Recommendations Available:
       ? "Inventory data not available"
       : "General query answered";
 
-    // 8️⃣ UPDATE CONVERSATION CONTEXT
+    // 8️⃣ UPDATE CONVERSATION CONTEXT (enhanced with session state)
     const conversationContext = {
       lastIntent: extractIntent(message),
       recentTopics: extractTopics(message, needsInventory || needsRecommendations),
       messagesExchanged: conversationHistory.length + 1,
+      // SESSION STATE: Enables stateful follow-ups
+      sessionId: session.sessionId,
+      lastDiscussed: session.lastDiscussed,
+      messageCount: session.messageCount,
     };
 
     // 9️⃣ RESPOND
@@ -1618,6 +1728,8 @@ Current Recommendations Available:
       reason,
       nextBestAction: null,
       conversationContext,
+      // SESSION ID: Client should pass this back for follow-ups
+      sessionId: session.sessionId,
       data_freshness: dataFreshness ? {
         inventory_last_synced_at: inventoryMetadata?.inventoryLastSyncedAt || null,
         status: dataFreshness.freshnessState?.status || 'unknown',

@@ -1086,3 +1086,428 @@ export function generateEnhancedInsightResponse(message, recommendations, metric
 
   return null;
 }
+
+// ============================================================================
+// SESSION-AWARE INTELLIGENCE
+// ============================================================================
+// These functions integrate with sessionContext.js for stateful conversations
+
+/**
+ * Generate session-aware response with context continuity
+ *
+ * @param {string} message - User message
+ * @param {object} recommendations - Available recommendations
+ * @param {object} metrics - Available metrics
+ * @param {object} context - Full context including snapshots
+ * @param {object} session - Session context from sessionContext.js
+ * @param {object} followUpAnalysis - Follow-up analysis from sessionContext.js
+ * @returns {object} Response object with text and metadata
+ */
+export function generateSessionAwareResponse(message, recommendations, metrics, context, session, followUpAnalysis) {
+  const lower = message.toLowerCase();
+  let response = null;
+  let responseMeta = {
+    sku: null,
+    skuContext: null,
+    topic: null,
+    actionType: null,
+    timeframe: null,
+    pendingFollowUp: null,
+    confidence: 'medium',
+    confidenceReason: null,
+  };
+
+  // ========================================================================
+  // FOLLOW-UP HANDLING: Reference prior context
+  // ========================================================================
+  if (followUpAnalysis.isFollowUp && followUpAnalysis.priorSku) {
+    const priorSku = followUpAnalysis.priorSku;
+    const priorTopic = followUpAnalysis.priorTopic;
+
+    // "Why?" questions about the prior recommendation
+    if (lower.includes('why')) {
+      response = generateWhyForSku(priorSku, priorTopic, recommendations, metrics, context);
+      if (response) {
+        responseMeta.topic = 'explanation';
+        responseMeta.sku = priorSku;
+        responseMeta.pendingFollowUp = 'alternatives';
+      }
+    }
+
+    // "What else?" or "Other options?" about the prior topic
+    else if (lower.includes('else') || lower.includes('other') || lower.includes('alternative') || lower.includes('different')) {
+      response = generateAlternativesFor(priorSku, priorTopic, recommendations, metrics, context);
+      if (response) {
+        responseMeta.topic = priorTopic;
+        responseMeta.pendingFollowUp = 'drill_down';
+      }
+    }
+
+    // Pronoun reference ("it", "that one", etc.) - continue with prior SKU context
+    else if (/\b(it|that|this)\b/i.test(lower) && !response) {
+      response = continueSKUContext(priorSku, message, recommendations, metrics, context);
+      if (response) {
+        responseMeta.sku = priorSku;
+        responseMeta.topic = priorTopic;
+      }
+    }
+  }
+
+  // ========================================================================
+  // STANDARD INSIGHT GENERATION (if not a follow-up)
+  // ========================================================================
+  if (!response) {
+    response = generateInsightResponse(message, recommendations, metrics, context);
+
+    // Extract what was discussed for session tracking
+    if (response) {
+      // Detect SKU mentioned in response
+      const skuMatch = extractSkuFromResponse(response, recommendations, metrics);
+      if (skuMatch) {
+        responseMeta.sku = skuMatch.sku;
+        responseMeta.skuContext = skuMatch.context;
+      }
+
+      // Detect topic
+      if (lower.includes('promot') || lower.includes('feature')) {
+        responseMeta.topic = 'promotion';
+        responseMeta.pendingFollowUp = 'promotion_strategies';
+      } else if (lower.includes('margin') || lower.includes('profit')) {
+        responseMeta.topic = 'margin';
+        responseMeta.pendingFollowUp = 'margin_optimization';
+      } else if (lower.includes('stock') || lower.includes('reorder')) {
+        responseMeta.topic = 'stock';
+        responseMeta.pendingFollowUp = 'reorder_priority';
+      } else if (lower.includes('velocity') || lower.includes('moving')) {
+        responseMeta.topic = 'velocity';
+        responseMeta.pendingFollowUp = 'velocity_drivers';
+      }
+    }
+  }
+
+  // ========================================================================
+  // ADD PROACTIVE LAYER
+  // ========================================================================
+  if (response) {
+    response = wrapWithProactiveInsight(response, context);
+  }
+
+  // ========================================================================
+  // CONFIDENCE EXPLANATION (when not high)
+  // ========================================================================
+  if (response && session?.confidenceBasis) {
+    const orderCount = session.confidenceBasis.orderCount || 0;
+    const dataAge = session.confidenceBasis.dataAge || 0;
+
+    if (orderCount === 0) {
+      responseMeta.confidence = 'low';
+      responseMeta.confidenceReason = 'no order data in this period';
+    } else if (orderCount < 10) {
+      responseMeta.confidence = 'medium';
+      responseMeta.confidenceReason = `based on ${orderCount} orders`;
+    } else if (dataAge > 48) {
+      responseMeta.confidence = 'medium';
+      responseMeta.confidenceReason = `data is ${Math.round(dataAge)} hours old`;
+    } else {
+      responseMeta.confidence = 'high';
+    }
+  }
+
+  return {
+    response,
+    ...responseMeta,
+  };
+}
+
+/**
+ * Generate explanation for why a specific SKU was recommended
+ */
+function generateWhyForSku(sku, topic, recommendations, metrics, context) {
+  // Find the SKU in recommendations
+  const promoRecs = recommendations?.promotions || [];
+  const invRecs = recommendations?.inventory || [];
+
+  const promoMatch = promoRecs.find(r => r.name === sku || r.sku === sku);
+  const invMatch = invRecs.find(r => r.name === sku || r.sku === sku);
+
+  if (promoMatch && topic === 'promotion') {
+    let response = `About ${sku}: `;
+
+    if (promoMatch.reason) {
+      response += promoMatch.reason + '. ';
+    }
+
+    const margin = promoMatch.triggeringMetrics?.margin;
+    const velocity = promoMatch.triggeringMetrics?.velocity;
+    const quantity = promoMatch.triggeringMetrics?.quantity;
+
+    if (margin !== null && margin !== undefined) {
+      response += `${margin.toFixed(1)}% margin gives you room to discount without hurting profit. `;
+    }
+    if (velocity) {
+      response += `It's moving at ${velocity.toFixed(1)} units/day — momentum you can accelerate. `;
+    }
+    if (quantity && quantity < 15) {
+      response += `Only ${quantity} units left creates natural scarcity urgency. `;
+    }
+
+    response += generateFollowUpSuggestions('promotion');
+    return response;
+  }
+
+  if (invMatch && topic === 'stock') {
+    let response = `About ${sku}: `;
+    response += invMatch.reason || 'Stock levels indicate reorder needed. ';
+
+    const quantity = invMatch.triggeringMetrics?.quantity;
+    if (quantity !== null && quantity !== undefined) {
+      response += `${quantity} units remaining — `;
+      if (quantity <= 2) {
+        response += 'this is CRITICAL. Reorder immediately or accept stockout.';
+      } else if (quantity <= 5) {
+        response += 'add to your next order within 48 hours.';
+      } else {
+        response += 'monitor closely over the next week.';
+      }
+    }
+
+    response += generateFollowUpSuggestions('stock');
+    return response;
+  }
+
+  // Generic explanation based on topic
+  if (topic === 'promotion') {
+    return `${sku} stood out because it has both margin headroom and recent movement. That combination means you can push it without risking profit or facing stockout.` + generateFollowUpSuggestions('promotion');
+  }
+
+  return null;
+}
+
+/**
+ * Generate alternatives to a previously discussed SKU
+ */
+function generateAlternativesFor(priorSku, priorTopic, recommendations, metrics, context) {
+  const promoRecs = recommendations?.promotions || [];
+  const invRecs = recommendations?.inventory || [];
+
+  if (priorTopic === 'promotion' && promoRecs.length > 1) {
+    const alternatives = promoRecs.filter(r => r.name !== priorSku && r.sku !== priorSku).slice(0, 3);
+
+    if (alternatives.length === 0) {
+      return `${priorSku} is your best promotion option right now. No strong alternatives in the current data.`;
+    }
+
+    let response = `Beyond ${priorSku}, here are your other options:\n\n`;
+    alternatives.forEach((alt, i) => {
+      const margin = alt.triggeringMetrics?.margin;
+      const marginStr = margin !== null && margin !== undefined ? `${margin.toFixed(1)}% margin` : 'margin unknown';
+      response += `${i + 1}. **${alt.name}** — ${marginStr}\n   ${alt.reason}\n\n`;
+    });
+
+    response += `My ranking: ${priorSku} first, then ${alternatives[0].name}. The others are fallbacks.`;
+    return response;
+  }
+
+  if (priorTopic === 'stock' && invRecs.length > 1) {
+    const alternatives = invRecs.filter(r => r.name !== priorSku && r.sku !== priorSku).slice(0, 3);
+
+    if (alternatives.length === 0) {
+      return `${priorSku} is your most urgent reorder. Other stock levels look stable.`;
+    }
+
+    let response = `Other items needing attention:\n\n`;
+    alternatives.forEach((alt, i) => {
+      const qty = alt.triggeringMetrics?.quantity;
+      response += `${i + 1}. **${alt.name}** — ${qty !== null && qty !== undefined ? qty + ' units' : 'low stock'}\n`;
+    });
+
+    return response;
+  }
+
+  return null;
+}
+
+/**
+ * Continue context when user references prior SKU with pronouns
+ */
+function continueSKUContext(priorSku, message, recommendations, metrics, context) {
+  const lower = message.toLowerCase();
+
+  // "How do I promote it?"
+  if (lower.includes('promot') || lower.includes('how')) {
+    return generatePromotionStrategiesForSku(priorSku, recommendations, metrics, context);
+  }
+
+  // "Should I discount it?"
+  if (lower.includes('discount')) {
+    return generateDiscountAnalysisForSku(priorSku, recommendations, metrics);
+  }
+
+  // "When should I reorder it?"
+  if (lower.includes('reorder') || lower.includes('order more')) {
+    return generateReorderAnalysisForSku(priorSku, recommendations, metrics);
+  }
+
+  return null;
+}
+
+/**
+ * Generate promotion strategies for a specific SKU
+ */
+function generatePromotionStrategiesForSku(sku, recommendations, metrics, context) {
+  const promoRecs = recommendations?.promotions || [];
+  const match = promoRecs.find(r => r.name === sku || r.sku === sku);
+
+  const margin = match?.triggeringMetrics?.margin ?? metrics?.highestMarginItem?.margin ?? 50;
+  const stock = match?.triggeringMetrics?.quantity ?? 20;
+
+  let response = `**3 ways to promote ${sku}:**\n\n`;
+
+  // Strategy 1: Flash discount
+  const discountRoom = Math.min(15, margin * 0.25);
+  response += `**1. Flash Discount (${Math.round(discountRoom)}% off)**\n`;
+  response += `   Keeps ${(margin - discountRoom).toFixed(0)}% margin. Best for quick cash.\n\n`;
+
+  // Strategy 2: Bundle
+  response += `**2. Bundle Deal**\n`;
+  response += `   Pair with a slow mover to lift both. Best for clearing dead stock.\n\n`;
+
+  // Strategy 3: Featured (no discount)
+  response += `**3. Featured Product**\n`;
+  response += `   Full margin, highlight quality/availability. Best when supply is limited.\n\n`;
+
+  // Recommendation
+  if (stock < 10) {
+    response += `**My pick:** Option 3 — with ${stock} units, create scarcity, don't discount.`;
+  } else if (margin > 60) {
+    response += `**My pick:** Option 1 — ${margin.toFixed(0)}% margin means you can afford to discount.`;
+  } else {
+    response += `**My pick:** Option 2 — bundle to maximize overall profit impact.`;
+  }
+
+  return response;
+}
+
+/**
+ * Generate discount analysis for a specific SKU
+ */
+function generateDiscountAnalysisForSku(sku, recommendations, metrics) {
+  const promoRecs = recommendations?.promotions || [];
+  const match = promoRecs.find(r => r.name === sku || r.sku === sku);
+
+  const margin = match?.triggeringMetrics?.margin ?? 50;
+  const stock = match?.triggeringMetrics?.quantity ?? 20;
+
+  if (margin < 40) {
+    return `${sku} has thin margin (${margin.toFixed(1)}%). Discounting risks profit erosion. Better to bundle or feature without price cut.`;
+  }
+
+  const safeDiscount = Math.round(margin * 0.2);
+  const remainingMargin = margin - safeDiscount;
+
+  return `${sku} can safely handle a ${safeDiscount}% discount (keeps ${remainingMargin.toFixed(0)}% margin). ` +
+    `With ${stock} units, ${stock < 15 ? 'use urgency messaging to move fast' : 'you have room for a sustained campaign'}. ` +
+    `Test for 3 days and track velocity change.`;
+}
+
+/**
+ * Generate reorder analysis for a specific SKU
+ */
+function generateReorderAnalysisForSku(sku, recommendations, metrics) {
+  const invRecs = recommendations?.inventory || [];
+  const match = invRecs.find(r => r.name === sku || r.sku === sku);
+
+  if (!match) {
+    return `${sku} isn't flagged for reorder. Current stock levels appear adequate.`;
+  }
+
+  const qty = match.triggeringMetrics?.quantity ?? 0;
+  const velocity = match.triggeringMetrics?.velocity ?? null;
+
+  let response = `${sku} has ${qty} units. `;
+
+  if (velocity && velocity > 0) {
+    const daysLeft = Math.round(qty / velocity);
+    response += `At ${velocity.toFixed(1)} units/day velocity, you have roughly ${daysLeft} days of stock. `;
+
+    if (daysLeft < 3) {
+      response += `URGENT: Reorder TODAY or accept stockout.`;
+    } else if (daysLeft < 7) {
+      response += `Place order within 48 hours to avoid gap.`;
+    } else {
+      response += `You have time, but add to next week's order.`;
+    }
+  } else {
+    if (qty <= 2) {
+      response += `Critical level — reorder immediately.`;
+    } else if (qty <= 5) {
+      response += `Add to your next order within the week.`;
+    } else {
+      response += `Monitor for the next 2 weeks.`;
+    }
+  }
+
+  return response;
+}
+
+/**
+ * Extract SKU mentioned in a response for session tracking
+ */
+function extractSkuFromResponse(response, recommendations, metrics) {
+  if (!response) return null;
+
+  // Check if any recommended SKU is mentioned
+  const promoRecs = recommendations?.promotions || [];
+  const invRecs = recommendations?.inventory || [];
+  const allRecs = [...promoRecs, ...invRecs];
+
+  for (const rec of allRecs) {
+    const name = rec.name || rec.sku;
+    if (name && response.includes(name)) {
+      return {
+        sku: name,
+        context: rec.action || 'discussed',
+      };
+    }
+  }
+
+  // Check metrics for highest margin item
+  const highestMargin = metrics?.highestMarginItem;
+  if (highestMargin?.name && response.includes(highestMargin.name)) {
+    return {
+      sku: highestMargin.name,
+      context: 'highest_margin',
+    };
+  }
+
+  return null;
+}
+
+/**
+ * Generate executive default response when no specific insight
+ * ALWAYS leads with the most important decision
+ */
+export function generateExecutiveDefaultWithContext(session, context) {
+  const lastTopic = session?.lastDiscussed?.topic;
+  const lastSku = session?.lastDiscussed?.sku;
+  const intelligence = context?.weekly?.intelligence || context?.daily?.intelligence;
+
+  // If we have a prior conversation, continue it
+  if (lastSku && lastTopic && session.messageCount > 1) {
+    return `Still on ${lastSku}: what specifically would you like to know? Promotion strategy, margin analysis, or reorder timing?`;
+  }
+
+  // Surface the most important decision from intelligence
+  if (intelligence?.verdict) {
+    const verdict = intelligence.verdict;
+    if (verdict.verdictType === 'STOCKOUT_IMMINENT') {
+      return `${verdict.focusItem || 'Your top seller'} is about to stock out. ${verdict.consequence || 'Reorder now or lose sales.'}`;
+    }
+    if (verdict.verdictType === 'UNDER_PROMOTED') {
+      return `${verdict.focusItem || 'Your highest-margin item'} is being ignored. ${verdict.reason || 'Promote it this week.'}`;
+    }
+  }
+
+  // Default: ask what matters most
+  return `What decision are you facing? Promotion, pricing, or inventory?`;
+}
