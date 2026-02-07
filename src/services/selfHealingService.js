@@ -508,16 +508,18 @@ export async function getSystemStatus() {
   try {
     const client = getSupabaseClient();
 
-    // Get inventory stats
+    // Get inventory stats from inventory_virtual (order-driven real-time view)
     const { data: invData, error: invError } = await client
-      .from('wix_inventory_live')
-      .select('sku, quantity, inventory_status, synced_at')
+      .from('inventory_virtual')
+      .select('sku, available_quantity, inventory_status, visible, synced_at')
       .limit(1000);
 
     if (!invError && invData) {
-      status.inventory.itemCount = invData.length;
-      status.inventory.activeCount = invData.filter(i =>
-        i.quantity > 0 || i.inventory_status === 'IN_STOCK'
+      // Only count VISIBLE SKUs (matches Wix dashboard)
+      const visibleItems = invData.filter(i => i.visible !== false);
+      status.inventory.itemCount = visibleItems.length;
+      status.inventory.activeCount = visibleItems.filter(i =>
+        i.available_quantity > 0 || i.inventory_status === 'IN_STOCK'
       ).length;
 
       // Get most recent sync timestamp
@@ -529,8 +531,10 @@ export async function getSystemStatus() {
       if (syncTimestamps.length > 0) {
         status.inventory.lastSyncedAt = syncTimestamps[0];
         const ageHours = (Date.now() - new Date(syncTimestamps[0]).getTime()) / (1000 * 60 * 60);
+        // With order-driven model, staleness is less critical - availability updates in real-time
         status.inventory.stale = ageHours > CONFIG.INVENTORY_STALE_THRESHOLD_HOURS;
         status.inventory.ageHours = Math.round(ageHours * 10) / 10;
+        status.inventory.model = 'order-driven';  // Flag the real-time model
       }
     }
 
@@ -595,9 +599,9 @@ export async function verifyDataIntegrity() {
   try {
     const client = getSupabaseClient();
 
-    // Check 1: Inventory exists
+    // Check 1: Inventory exists (using inventory_virtual - order-driven view)
     const { count: invCount } = await client
-      .from('wix_inventory_live')
+      .from('inventory_virtual')
       .select('*', { count: 'exact', head: true });
 
     verification.checks.push({
@@ -608,7 +612,7 @@ export async function verifyDataIntegrity() {
 
     if (invCount === 0) {
       verification.passed = false;
-      verification.issues.push('No inventory data in wix_inventory_live');
+      verification.issues.push('No inventory data in inventory_virtual');
     }
 
     // Check 2: Costs exist
@@ -655,7 +659,7 @@ export async function verifyDataIntegrity() {
       .limit(500);
 
     const { data: invSkus } = await client
-      .from('wix_inventory_live')
+      .from('inventory_virtual')
       .select('sku')
       .limit(500);
 
@@ -679,9 +683,9 @@ export async function verifyDataIntegrity() {
       }
     }
 
-    // Check 5: Inventory freshness
+    // Check 5: Inventory freshness (snapshot date - availability updates in real-time from orders)
     const { data: invTimestamps } = await client
-      .from('wix_inventory_live')
+      .from('inventory_virtual')
       .select('synced_at')
       .not('synced_at', 'is', null)
       .order('synced_at', { ascending: false })

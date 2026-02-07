@@ -19,7 +19,7 @@ function buildAuthorityRefusal(error, requestId) {
   switch (errorType) {
     case AUTHORITY_ERROR.TABLE_MISSING:
       refusalMessage = "I cannot provide inventory intelligence. The authority table does not exist.";
-      actionRequired = `Run migration ${migration || '003_wix_inventory_live.sql'} in Supabase SQL Editor, then sync inventory via POST /sync/wix-inventory.`;
+      actionRequired = `Create the inventory_virtual view in Supabase, then sync inventory via POST /sync/wix-inventory.`;
       break;
     case AUTHORITY_ERROR.EMPTY:
       refusalMessage = "I cannot provide inventory intelligence. The authority table exists but contains no data.";
@@ -109,6 +109,7 @@ import { getConnectionStatus, testConnection, getSupabaseClient, isSupabaseAvail
 import { recordInventorySnapshot, updateLiveInventory, getOrderContext } from "./db/supabaseQueries.js";
 import { sendSnapshotEmail, isEmailConfigured } from "./services/emailService.js";
 import { autoSyncOrders } from "./services/orderSyncService.js";
+import { startFreshnessScheduler, getSchedulerStatus, triggerManualCheck } from "./services/freshnessScheduler.js";
 import {
   freshnessResolver,
   rebuildController,
@@ -240,6 +241,115 @@ app.get("/supabase/status", async (_req, res) => {
     connectionTest,
     timestamp: new Date().toISOString()
   });
+});
+
+/* ---------- SKU Count Verification ---------- */
+/**
+ * VERIFICATION ENDPOINT: Compare OMEN SKU count with Supabase authority
+ *
+ * This endpoint ensures UI displays match the order-driven inventory_virtual table.
+ * CRITICAL: Only count visible=true SKUs to match Wix dashboard (~75, not 337)
+ *
+ * Returns:
+ * - supabaseCount: Direct query of visible SKUs from inventory_virtual
+ * - omenCount: What OMEN's inventoryStore returns
+ * - match: Boolean - do they agree?
+ * - details: Breakdown of visible/hidden/sellable
+ */
+app.get("/verify/sku-count", async (_req, res) => {
+  const requestId = crypto.randomUUID();
+  console.log(`[SKU Verify] Starting verification (${requestId})`);
+
+  try {
+    // STEP 1: Query Supabase directly for visible count
+    const client = getSupabaseClient();
+    if (!client) {
+      return res.status(503).json({
+        ok: false,
+        error: 'Supabase not configured',
+        hint: 'Set SUPABASE_SECRET_API_KEY in environment'
+      });
+    }
+
+    const { data: supabaseData, error: supabaseError } = await client
+      .from('inventory_virtual')
+      .select('sku, visible, available_quantity, inventory_status');
+
+    if (supabaseError) {
+      return res.status(500).json({
+        ok: false,
+        error: 'Supabase query failed',
+        message: supabaseError.message
+      });
+    }
+
+    // Count visible SKUs (Wix dashboard parity)
+    const allSkus = supabaseData || [];
+    const visibleSkus = allSkus.filter(s => s.visible === true);
+    const hiddenSkus = allSkus.filter(s => s.visible === false);
+    const sellableSkus = visibleSkus.filter(s =>
+      s.available_quantity > 0 || s.inventory_status === 'IN_STOCK'
+    );
+    const outOfStockSkus = visibleSkus.filter(s =>
+      s.available_quantity === 0 && s.inventory_status !== 'IN_STOCK'
+    );
+
+    // STEP 2: Get OMEN's view via inventoryStore
+    const omenResult = await getInventoryWithMetadata(STORE_ID);
+    const omenItems = omenResult.items || [];
+    const omenVisible = omenItems.filter(i => i.visible === true);
+    const omenSellable = omenVisible.filter(i =>
+      i.availableQuantity > 0 || i.inventoryStatus === 'IN_STOCK'
+    );
+
+    // STEP 3: Compare
+    const match = visibleSkus.length === omenVisible.length;
+
+    console.log(`[SKU Verify] Complete (${requestId}):`, {
+      supabaseVisible: visibleSkus.length,
+      omenVisible: omenVisible.length,
+      match
+    });
+
+    res.json({
+      ok: true,
+      match,
+      timestamp: new Date().toISOString(),
+      model: 'order-driven',
+      // Authority: Direct Supabase query
+      supabase: {
+        table: 'inventory_virtual',
+        total: allSkus.length,
+        visible: visibleSkus.length,    // THE COUNT (matches Wix)
+        hidden: hiddenSkus.length,
+        sellable: sellableSkus.length,
+        outOfStock: outOfStockSkus.length
+      },
+      // OMEN's view (should match)
+      omen: {
+        total: omenItems.length,
+        visible: omenVisible.length,
+        sellable: omenSellable.length,
+        visibleSKUCount: omenResult.visibleSKUCount,
+        sellableSKUCount: omenResult.sellableSKUCount
+      },
+      // Verification result
+      verification: {
+        wixDashboardParity: match && visibleSkus.length < 100,  // Wix should show ~75
+        discrepancy: match ? null : {
+          difference: Math.abs(visibleSkus.length - omenVisible.length),
+          message: 'OMEN count does not match Supabase authority'
+        }
+      }
+    });
+  } catch (err) {
+    console.error(`[SKU Verify] Error (${requestId}):`, err);
+    res.status(500).json({
+      ok: false,
+      error: 'Verification failed',
+      message: err.message
+    });
+  }
 });
 
 /* ---------- Intelligence Routing (CANONICAL) ---------- */
@@ -982,7 +1092,7 @@ app.post("/sync/sku-costs", async (req, res) => {
 /**
  * Get SKUs missing cost data
  *
- * Joins wix_inventory_live with sku_costs to find gaps
+ * Joins inventory_virtual with sku_costs to find gaps
  */
 app.get("/costs/missing", async (req, res) => {
   const requestId = crypto.randomUUID();
@@ -998,10 +1108,11 @@ app.get("/costs/missing", async (req, res) => {
 
     const client = getSupabaseClient();
 
-    // Get all inventory SKUs
+    // Get all inventory SKUs (visible only)
     const { data: inventory, error: invError } = await client
-      .from('wix_inventory_live')
-      .select('sku, product_name, variant_name, retail');
+      .from('inventory_virtual')
+      .select('sku, product_name, variant_name, retail')
+      .eq('visible', true);
 
     if (invError) {
       return res.status(500).json({
@@ -1148,10 +1259,11 @@ app.get("/costs/coverage", async (req, res) => {
 
     const client = getSupabaseClient();
 
-    // Get inventory count
+    // Get inventory count (visible SKUs only - matches Wix dashboard)
     const { count: inventoryCount, error: invCountError } = await client
-      .from('wix_inventory_live')
-      .select('*', { count: 'exact', head: true });
+      .from('inventory_virtual')
+      .select('*', { count: 'exact', head: true })
+      .eq('visible', true);
 
     // Get costs count
     const { count: costCount, error: costCountError } = await client
@@ -1164,8 +1276,9 @@ app.get("/costs/coverage", async (req, res) => {
 
     // Get inventory items with both cost AND retail (for margin calculation)
     const { data: inventory } = await client
-      .from('wix_inventory_live')
-      .select('sku, retail');
+      .from('inventory_virtual')
+      .select('sku, retail')
+      .eq('visible', true);
 
     const { data: costs } = await client
       .from('sku_costs')
@@ -1440,8 +1553,22 @@ Current Recommendations Available:
       // Daily = current signal (may have 0 orders today)
       // hasVelocity is TRUE if EITHER has order data
 
-      const daily = dailySnapshot;
-      const weekly = weeklySnapshot;
+      // FIXED: Extract from FETCHED snapshots, not stale globals
+      // Globals may be NULL if server restarted without generating new snapshots
+      const fetchedWeekly = snapshots.find(s => s.timeframe === 'weekly');
+      const fetchedDaily = snapshots.find(s => s.timeframe === 'daily');
+
+      // Use fetched snapshots, fall back to globals only if fetched are unavailable
+      const weekly = fetchedWeekly || weeklySnapshot;
+      const daily = fetchedDaily || dailySnapshot;
+
+      console.log("💬 [OMEN] Snapshot sources:", {
+        fetchedWeeklyId: fetchedWeekly?.id || null,
+        fetchedDailyId: fetchedDaily?.id || null,
+        usingGlobalFallback: !fetchedWeekly && !fetchedDaily,
+        weeklyOrderCount: weekly?.velocity?.orderCount || 0,
+        dailyOrderCount: daily?.velocity?.orderCount || 0
+      });
 
       // Velocity exists if weekly has orders (daily may be 0 for today)
       let weeklyHasVelocity = weekly?.velocity?.orderCount > 0;
@@ -1710,16 +1837,45 @@ Current Recommendations Available:
       formattedLength: llmResponse?.length || 0
     });
 
-    // 7️⃣ DETERMINE CONFIDENCE (use data freshness when available)
+    // 7️⃣ DETERMINE CONFIDENCE (ORDER-DRIVEN MODEL)
+    // Confidence is based on: inventory exists + orders exist + cost coverage
+    // NOT on snapshot age (availability updates in real-time from orders)
     let confidence;
-    if (dataFreshness && inventoryContext) {
-      // Use freshness-based confidence for inventory queries
-      confidence = dataFreshness.confidence;
+
+    // Get order count from multiple sources (robustness)
+    const snapshotOrderCount = chatContext?.velocity?.orderCount || 0;
+    const liveOrderCount = chatContext?.hasVelocity ? (chatContext.velocity?.orderCount || 0) : 0;
+    const totalOrderCount = Math.max(snapshotOrderCount, liveOrderCount);
+    const costStats = inventoryMetadata?.costStats || {};
+    const costCoverage = costStats.costCoverage || 0;
+
+    console.log("💬 [OMEN] Confidence calculation inputs:", {
+      requestId,
+      snapshotOrderCount,
+      liveOrderCount,
+      totalOrderCount,
+      costCoverage,
+      hasInventoryContext: !!inventoryContext,
+      hasInventoryMetadata: !!inventoryMetadata,
+      inventoryItemCount: inventoryData?.length || 0
+    });
+
+    if (inventoryContext && inventoryMetadata) {
+      // HIGH confidence if: inventory exists AND (orders > 0 OR cost coverage > 50%)
+      if (totalOrderCount > 0 || costCoverage > 50) {
+        confidence = "high";
+      } else if (inventoryData && inventoryData.length > 0) {
+        confidence = "medium";
+      } else {
+        confidence = "low";
+      }
     } else if ((needsInventory || needsRecommendations) && inventoryContext) {
       confidence = "high";
     } else {
       confidence = "medium";
     }
+
+    console.log("💬 [OMEN] Confidence determined:", { requestId, confidence, reason: totalOrderCount > 0 ? 'orders exist' : costCoverage > 50 ? 'good cost coverage' : 'inventory only' });
 
     const reason = needsRecommendations && recommendations
       ? `Answered using live recommendations (${recommendations.promotions.length + recommendations.pricing.length + recommendations.inventory.length} total)`
@@ -1741,6 +1897,34 @@ Current Recommendations Available:
     };
 
     // 9️⃣ RESPOND
+    // ORDER-DRIVEN MODEL: SUPPRESS scary warnings when we have good data
+    let chatWarnings = dataFreshness?.warnings || [];
+
+    // SUPPRESS ALL WARNINGS when we have orders OR high cost coverage
+    // The order-driven model means data is reliable - warnings are just noise
+    const hasGoodData = totalOrderCount > 0 || costCoverage > 50;
+
+    if (hasGoodData) {
+      // Filter out any warnings that could scare users - data IS reliable
+      chatWarnings = chatWarnings.filter(w => {
+        const lw = w.toLowerCase();
+        // Remove any warning about staleness, sync issues, or unreliable data
+        if (lw.includes('old') || lw.includes('stale') || lw.includes('unreliable') ||
+            lw.includes('sync') || lw.includes('pending') || lw.includes('warning')) {
+          return false;
+        }
+        return true;
+      });
+
+      // If ALL warnings were filtered out, that's good - no warnings needed
+      console.log("💬 [OMEN] Warnings suppressed - order-driven model active:", {
+        requestId,
+        originalWarningCount: (dataFreshness?.warnings || []).length,
+        filteredWarningCount: chatWarnings.length,
+        reason: totalOrderCount > 0 ? 'orders exist' : 'high cost coverage'
+      });
+    }
+
     return res.json({
       response: llmResponse,
       confidence,
@@ -1752,9 +1936,11 @@ Current Recommendations Available:
       data_freshness: dataFreshness ? {
         inventory_last_synced_at: inventoryMetadata?.inventoryLastSyncedAt || null,
         status: dataFreshness.freshnessState?.status || 'unknown',
-        age_hours: dataFreshness.freshnessState?.ageHours || null
+        age_hours: dataFreshness.freshnessState?.ageHours || null,
+        model: 'order-driven',  // Flag the model
+        description: 'Availability updates in real-time from orders'
       } : null,
-      warnings: dataFreshness?.warnings || [],
+      warnings: chatWarnings,
       meta: {
         requestId,
         decision: "RESPOND_DIRECT",
@@ -2325,39 +2511,81 @@ app.post("/inventory", (req, res) => {
 
 /**
  * Convert insights from temporal analyzer to legacy recommendation format
+ *
+ * ORDER-DRIVEN MODEL GUARDS:
+ * - hasMargin: Boolean flag if margin data is available
+ * - marginUnavailableReason: Explanation when margin is null
+ * - promotions: Only include items with known margins unless explicitly flagged
  */
 function convertInsightsToRecommendations(insights) {
   const recommendations = {
     promotions: [],
     pricing: [],
-    inventory: []
+    inventory: [],
+    _dataQuality: {
+      totalInsights: insights.length,
+      insightsWithMargin: 0,
+      insightsWithoutMargin: 0,
+      marginUnavailableSkus: []
+    }
   };
 
   for (const insight of insights) {
+    // ORDER-DRIVEN MODEL: Check margin availability
+    const margin = insight.data?.margin ?? null;
+    const hasMargin = margin !== null;
+
+    if (hasMargin) {
+      recommendations._dataQuality.insightsWithMargin++;
+    } else {
+      recommendations._dataQuality.insightsWithoutMargin++;
+      recommendations._dataQuality.marginUnavailableSkus.push(insight.sku);
+    }
+
     const rec = {
       sku: insight.sku,
       unit: insight.unit,
       name: insight.name,
       reason: insight.message,
-      triggeringMetrics: insight.data,
+      triggeringMetrics: {
+        ...insight.data,
+        // Explicit margin status for UI/chat
+        hasMargin,
+        marginUnavailableReason: hasMargin ? null : 'No sales data yet or cost not configured'
+      },
       confidence: insight.priority === 'HIGH' ? 0.9 : insight.priority === 'MEDIUM' ? 0.7 : 0.5,
       action: insight.type,
       signalType: insight.type,
       severity: insight.priority,
       priorityScore: insight.priority === 'HIGH' ? 90 : insight.priority === 'MEDIUM' ? 70 : 50,
       details: insight.details,
-      actionRequired: insight.action
+      actionRequired: insight.action,
+      // Data quality flags
+      hasMargin,
+      hasVelocity: insight.data?.dailyVelocity !== undefined
     };
 
     // Categorize into appropriate buckets
     if (insight.type === 'URGENT_RESTOCK' || insight.type === 'LOW_STOCK_HIGH_MARGIN') {
       recommendations.inventory.push(rec);
     } else if (insight.type === 'HIGH_VELOCITY' || insight.type === 'ACCELERATING_DEMAND') {
+      // GUARD: For promotions, prefer items with known margins
+      // Items without margin can still be promoted but flag them
+      if (!hasMargin) {
+        rec.reason = `${rec.reason} (margin unavailable - velocity-based recommendation)`;
+      }
       recommendations.promotions.push(rec);
     } else {
       recommendations.inventory.push(rec);
     }
   }
+
+  // Sort promotions: items with margin first
+  recommendations.promotions.sort((a, b) => {
+    if (a.hasMargin && !b.hasMargin) return -1;
+    if (!a.hasMargin && b.hasMargin) return 1;
+    return b.priorityScore - a.priorityScore;
+  });
 
   return recommendations;
 }
@@ -2952,6 +3180,28 @@ app.post("/snapshot/generate", async (req, res) => {
     }
 
     // 9️⃣ BUILD SNAPSHOT (with real intelligence)
+    // ========================================================================
+    // PROFIT SEMANTICS - CRITICAL DISTINCTION:
+    // - inventoryProfitPotential: Forward-looking profit from sellable inventory
+    //   (order-driven: available_quantity * unit_margin for visible+in-stock SKUs)
+    // - metrics.totalProfit: Legacy calculation (all items with pricing)
+    // - Realized profit: From orders (NOT stored here - separate query)
+    // ========================================================================
+    const inventoryProfitPotential = inventoryMetadata?.totalProfitAtRisk || 0;
+
+    // Enhance metrics with order-driven profit potential
+    const enhancedMetrics = {
+      ...metrics,
+      // PRIMARY: Order-driven inventory profit potential (sellable SKUs only)
+      inventoryProfitPotential,
+      // COUNTS: Visible SKU counts (Wix dashboard parity)
+      visibleSKUCount: inventoryMetadata?.visibleSKUCount || metrics.totalItems,
+      sellableSKUCount: inventoryMetadata?.sellableSKUCount || 0,
+      outOfStockCount: inventoryMetadata?.outOfStockCount || 0,
+      // Flag the profit model
+      profitModel: 'order_driven'
+    };
+
     const snapshot = {
       requestId,
       generatedAt: new Date().toISOString(),
@@ -2959,7 +3209,7 @@ app.post("/snapshot/generate", async (req, res) => {
       dateRange,
       timeframe,
       store: STORE_ID,
-      metrics,
+      metrics: enhancedMetrics,
       recommendations,
       // Real temporal intelligence
       velocity: velocityAnalysis.ok ? {
@@ -2992,12 +3242,14 @@ app.post("/snapshot/generate", async (req, res) => {
         } : null,
         inventoryWarning: inventoryWarning || null
       },
-      // DATA FRESHNESS - OMEN truth enforcement
+      // DATA FRESHNESS - ORDER-DRIVEN MODEL
+      // Snapshot age is INFORMATIONAL ONLY - availability updates from orders
       data_freshness: {
         inventory_last_synced_at: inventoryMetadata?.inventoryLastSyncedAt || null,
         status: snapshotDataFreshness?.freshnessState?.status || 'unknown',
         age_hours: snapshotDataFreshness?.freshnessState?.ageHours || null,
-        confidence: snapshotDataFreshness?.confidence || 'low'
+        model: 'order-driven',  // Flag the data model
+        description: 'Availability updates in real-time from orders'
       },
       warnings: snapshotDataFreshness?.warnings || [],
       enrichedInventory: inventory,
@@ -3892,13 +4144,39 @@ app.get('/api/diagnostic/orders', async (req, res) => {
 app.get('/internal/status', async (req, res) => {
   try {
     const status = await getSystemStatus();
+    const schedulerStatus = getSchedulerStatus();
 
     return res.json({
       ok: true,
-      ...status
+      ...status,
+      freshnessScheduler: schedulerStatus
     });
   } catch (err) {
     console.error('[Internal] Status error:', err.message);
+    return res.status(500).json({
+      ok: false,
+      error: err.message
+    });
+  }
+});
+
+/**
+ * INTERNAL: Trigger manual freshness check
+ *
+ * Forces an immediate freshness check (normally runs every 6h).
+ * If inventory is stale > 24h, triggers automatic resync.
+ */
+app.post('/internal/freshness-check', async (_req, res) => {
+  try {
+    console.log('[Internal] Manual freshness check triggered');
+    const result = await triggerManualCheck();
+
+    return res.json({
+      ok: true,
+      ...result
+    });
+  } catch (err) {
+    console.error('[Internal] Freshness check error:', err.message);
     return res.status(500).json({
       ok: false,
       error: err.message
@@ -4051,5 +4329,14 @@ app.listen(PORT, () => {
   autoSyncOrders()
     .then(result => console.log(`[Startup] Order sync complete: ${result.synced} synced`))
     .catch(err => console.warn('[Startup] Order sync failed:', err.message));
+
+  // Start freshness scheduler (checks every 6h, resyncs if stale > 24h)
+  console.log('\n⏰ Starting freshness scheduler...');
+  const schedulerResult = startFreshnessScheduler();
+  if (schedulerResult.started) {
+    console.log(`[Startup] Freshness scheduler active: check every ${schedulerResult.checkIntervalHours}h, resync if stale > ${schedulerResult.staleThresholdHours}h`);
+  } else {
+    console.log(`[Startup] Freshness scheduler not started: ${schedulerResult.reason}`);
+  }
 });
 

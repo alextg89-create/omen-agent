@@ -4,9 +4,10 @@
  * This module loaded pricing from static JSON file (src/data/pricing.json)
  * which caused stale data issues.
  *
- * CURRENT AUTHORITY: wix_inventory_live.retail
- * - Sell prices come ONLY from wix_inventory_live.retail
- * - Costs come ONLY from sku_costs.unit_cost
+ * CURRENT AUTHORITY MODEL:
+ * - Inventory: inventory_virtual (real-time, order-driven)
+ * - Pricing: sku_profitability (retail, cost, margin)
+ * - Costs: sku_costs (unit_cost)
  * - NO fallbacks, NO static files
  *
  * This file is disabled to prevent accidental usage.

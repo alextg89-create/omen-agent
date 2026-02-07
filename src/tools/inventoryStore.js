@@ -55,7 +55,17 @@ export async function getInventory(source) {
       count: result.count,
       // Cost authority metadata
       costStats: result.costStats || null,
-      pricingStats: result.pricingStats || null
+      pricingStats: result.pricingStats || null,
+      // ========================================================================
+      // PROFIT INTELLIGENCE - From Authority (order-driven, sellable only)
+      // ========================================================================
+      totalProfitAtRisk: result.totalProfitAtRisk || 0,  // Forward-looking inventory profit
+      // ========================================================================
+      // SKU COUNTS - Visible only (Wix dashboard parity)
+      // ========================================================================
+      visibleSKUCount: result.visibleSKUCount || 0,
+      sellableSKUCount: result.sellableSKUCount || 0,
+      outOfStockCount: result.outOfStockCount || 0
     };
     cacheTimestamp = now;
 

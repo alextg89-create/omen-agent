@@ -88,14 +88,14 @@ export async function syncOrdersFromWebhooks(lookbackDays = 30) {
 
   console.log(`[OrderSync] Starting sync for last ${lookbackDays} days...`);
 
-  // Load wix_inventory_live for SKU matching (OPTIONAL - continue if fails)
-  // AUTHORITY TABLE: wix_inventory_live (NOT inventory_live)
-  console.log('[OrderSync] 📡 QUERY 1: wix_inventory_live');
-  console.log('[OrderSync] Query table: wix_inventory_live');
+  // Load inventory_virtual for SKU matching (OPTIONAL - continue if fails)
+  // AUTHORITY TABLE: inventory_virtual (order-driven real-time view)
+  console.log('[OrderSync] QUERY 1: inventory_virtual');
+  console.log('[OrderSync] Query table: inventory_virtual');
   console.log('[OrderSync] Query columns: sku, product_name, variant_name');
 
   const { data: inventory, error: inventoryError } = await client
-    .from('wix_inventory_live')
+    .from('inventory_virtual')
     .select('sku, product_name, variant_name');
 
   console.log('[OrderSync] 📡 QUERY 1 COMPLETE:', {
@@ -327,7 +327,7 @@ async function findMatchingSKU(strain, unit, inventory, fullProductName) {
   }
 
   // 1. Try exact strain + unit match
-  // wix_inventory_live columns: product_name (strain), variant_name (unit)
+  // inventory_virtual columns: product_name (strain), variant_name (unit)
   for (const inv of inventory) {
     const invStrain = (inv.product_name || '').toLowerCase().trim();
     const invUnit = (inv.variant_name || '').toLowerCase().trim();

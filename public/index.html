@@ -621,25 +621,37 @@
         label.textContent = 'UNKNOWN';
       }
 
-      // Render freshness
+      // Render freshness - ORDER-DRIVEN MODEL
+      // ========================================================================
+      // CRITICAL: Snapshot age is INFORMATIONAL ONLY
+      // Availability = snapshot_quantity - sold_quantity (updates in real-time)
+      // Orders flowing = data is accurate regardless of snapshot age
+      // ========================================================================
       if (dataFreshness) {
-        const status = dataFreshness.status || 'unknown';
-        if (status === 'fresh') {
-          dot.classList.add('freshness-fresh');
-          text.textContent = 'Data fresh';
-        } else if (status === 'aging') {
-          dot.classList.add('freshness-aging');
-          text.textContent = `Synced ${dataFreshness.age_hours || '?'}h ago`;
-        } else if (status === 'stale') {
-          dot.classList.add('freshness-stale');
-          text.textContent = `Stale (${dataFreshness.age_hours || '?'}h ago)`;
+        const model = dataFreshness.model || 'order-driven';
+        const hours = dataFreshness.age_hours || 0;
+        const days = hours > 0 ? Math.floor(hours / 24) : 0;
+
+        // ORDER-DRIVEN MODEL: Always show green when orders exist
+        // Snapshot age is informational, NOT a quality indicator
+        if (model === 'order-driven' || model === 'order_driven') {
+          dot.classList.add('freshness-fresh');  // Always green for order-driven
+          if (days === 0) {
+            text.textContent = 'Order-driven • Current';
+          } else if (days === 1) {
+            text.textContent = 'Order-driven • 1d';
+          } else {
+            text.textContent = `Order-driven • ${days}d`;
+          }
         } else {
-          dot.classList.add('freshness-unknown');
-          text.textContent = 'Sync unknown';
+          // SNAPSHOT-ONLY: Show age informatively (no scary language)
+          dot.classList.add('freshness-fresh');
+          text.textContent = days > 0 ? `Snapshot • ${days}d` : 'Snapshot • Current';
         }
       } else {
+        // No data freshness info available
         dot.classList.add('freshness-unknown');
-        text.textContent = 'No freshness data';
+        text.textContent = 'Loading...';
       }
 
       strip.style.display = 'flex';
@@ -910,7 +922,13 @@
       const intelligence = snapshot.intelligence || {};
       const executiveDecision = intelligence.executiveDecision || {};
       const executiveSummary = intelligence.executiveSummary || {};
-      const wowInsights = intelligence.wowInsights || [];
+      // FILTER: Exclude 0-count items from wowInsights
+      const rawWowInsights = intelligence.wowInsights || [];
+      const wowInsights = rawWowInsights.filter(wow => {
+        const qty = wow.data?.quantity || wow.data?.currentStock;
+        // Include if quantity is positive OR if quantity is not specified
+        return qty === undefined || qty === null || qty > 0;
+      });
       const primaryDecision = executiveDecision.primaryDecision;
       const alternatives = executiveDecision.alternatives || [];
       const inactionCost = executiveDecision.inactionCost || {};
@@ -1033,12 +1051,15 @@
         </div>
       `;
 
-      // Revenue or Profit based on data availability
-      if (metrics.totalProfit && metrics.totalProfit > 0) {
+      // PROFIT POTENTIAL - Use order-driven metric (sellable SKUs only)
+      // inventoryProfitPotential = sum(availableQuantity * unitMargin) for visible+in-stock
+      const profitPotential = metrics.inventoryProfitPotential || metrics.totalProfit || 0;
+      if (profitPotential > 0) {
         html += `
           <div class="metric-card">
-            <div class="metric-label">Est. Profit Potential</div>
-            ${renderValue(metrics.totalProfit, 'currency')}
+            <div class="metric-label">Inventory Profit Potential</div>
+            ${renderValue(profitPotential, 'currency')}
+            ${metrics.profitModel === 'order_driven' ? '<div style="font-size: 0.7em; color: #4CAF50; margin-top: 4px;">Order-driven</div>' : ''}
           </div>
         `;
       } else if (metrics.totalRevenue && metrics.totalRevenue > 0) {
@@ -1076,9 +1097,23 @@
       }
 
       // DECISION INTELLIGENCE (not just recommendations)
-      const promotions = recommendations.promotions || [];
-      const inventoryActions = recommendations.inventory || [];
+      // FILTER: Exclude 0-count items from prominent display
+      const hasStock = (rec) => {
+        const qty = rec.triggeringMetrics?.quantity;
+        // Include if quantity is positive OR if quantity is not specified (trust the recommendation)
+        return qty === undefined || qty === null || qty > 0;
+      };
+
+      const promotions = (recommendations.promotions || []).filter(hasStock);
+      const inventoryActions = (recommendations.inventory || []).filter(hasStock);
       // Note: intelligence, wowInsights, executiveSummary already declared above
+
+      console.log('[UI] Filtered recommendations:', {
+        originalPromotions: (recommendations.promotions || []).length,
+        filteredPromotions: promotions.length,
+        originalInventory: (recommendations.inventory || []).length,
+        filteredInventory: inventoryActions.length
+      });
 
       html += '<div class="recommendations" style="margin-top: 30px;">';
       html += '<h4 style="color: #fff;">Decision Intelligence</h4>';

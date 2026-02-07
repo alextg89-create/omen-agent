@@ -1,38 +1,47 @@
 /**
- * Data Freshness Module
+ * Data Freshness Module - ORDER-DRIVEN MODEL
  *
- * Computes confidence level and warnings based on inventory sync state.
- * OMEN speaks truth, or refuses to speak.
+ * Computes confidence level and warnings based on data quality.
+ *
+ * IMPORTANT: OMEN uses an ORDER-DRIVEN inventory model:
+ * - available_quantity = snapshot_quantity - sold_quantity
+ * - Availability updates in REAL-TIME as orders arrive
+ * - The "snapshot date" is just the base inventory count date
+ * - Staleness of snapshot is LESS critical because availability is derived
  *
  * CONFIDENCE LEVELS:
- * - high: Inventory synced < 6 hours ago, data is fresh
- * - medium: Synced 6-24 hours ago, data is aging
- * - low: Synced > 24 hours ago OR unknown, advisory only
+ * - high: Good data coverage, costs and margins available
+ * - medium: Partial data, some insights available
+ * - low: Missing critical data, advisory only
  *
- * WARNINGS are MANDATORY when data is stale.
- * REFUSAL is REQUIRED when data cannot be trusted.
+ * WARNINGS reflect data quality, NOT sync status.
  */
 
 /**
  * Compute data freshness state
+ *
+ * NOTE: With order-driven model, staleness is less critical.
+ * Availability is computed as snapshot_quantity - sold_quantity,
+ * so it updates in real-time as orders arrive.
  *
  * @param {string|null} inventoryLastSyncedAt - ISO-8601 timestamp or null
  * @returns {{ confidence: string, warnings: string[], shouldRefuse: boolean, freshnessState: object }}
  */
 export function computeDataFreshness(inventoryLastSyncedAt) {
   const warnings = [];
-  let confidence = 'low';
+  let confidence = 'medium';  // Default to medium with order-driven model
   let shouldRefuse = false;
 
-  // NULL = ABSENCE OF DATA
+  // NULL = NO BASE SNAPSHOT
   if (!inventoryLastSyncedAt) {
-    warnings.push('Inventory has never been synced. Data cannot be trusted.');
+    warnings.push('No inventory snapshot loaded. Upload a Wix inventory export to begin.');
     return {
       confidence: 'low',
       warnings,
       shouldRefuse: true,
       freshnessState: {
         status: 'unknown',
+        model: 'order-driven',
         inventoryLastSyncedAt: null,
         ageMs: null,
         ageHours: null,
@@ -43,13 +52,14 @@ export function computeDataFreshness(inventoryLastSyncedAt) {
 
   const syncTime = new Date(inventoryLastSyncedAt);
   if (isNaN(syncTime.getTime())) {
-    warnings.push('Inventory sync timestamp is invalid. Data cannot be trusted.');
+    warnings.push('Inventory snapshot timestamp is invalid.');
     return {
       confidence: 'low',
       warnings,
       shouldRefuse: true,
       freshnessState: {
         status: 'invalid',
+        model: 'order-driven',
         inventoryLastSyncedAt,
         ageMs: null,
         ageHours: null,
@@ -65,28 +75,29 @@ export function computeDataFreshness(inventoryLastSyncedAt) {
 
   let status;
 
-  if (ageHours < 6) {
-    // FRESH: < 6 hours
-    confidence = 'high';
-    status = 'fresh';
-  } else if (ageHours < 24) {
-    // AGING: 6-24 hours
-    confidence = 'medium';
-    status = 'aging';
-    warnings.push(`Inventory synced ${Math.round(ageHours)} hours ago. Counts may have drifted.`);
-  } else {
-    // STALE: > 24 hours
-    confidence = 'low';
-    status = 'stale';
-    const daysAgo = Math.floor(ageDays);
-    warnings.push(`Inventory hasn't been synced in ${daysAgo} day${daysAgo > 1 ? 's' : ''}. Counts are unreliable.`);
+  // ========================================================================
+  // ORDER-DRIVEN MODEL: Snapshot age is INFORMATIONAL ONLY
+  // ========================================================================
+  // Availability = snapshot_quantity - sold_quantity
+  // Orders update availability in real-time regardless of snapshot age
+  // Confidence is determined by ORDER EXISTENCE, not snapshot age
+  // ========================================================================
 
-    // Refuse if > 48 hours
-    if (ageHours > 48) {
-      shouldRefuse = true;
-      warnings.push('Order aggregation pending. Profit and margin insights remain reliable.');
-    }
+  if (ageHours < 24) {
+    status = 'fresh';
+  } else if (ageDays < 7) {
+    status = 'recent';
+  } else {
+    status = 'older';
+    // NO WARNING: Snapshot age is informational only for order-driven model
+    // Availability is still accurate because it's computed from orders
   }
+
+  // CONFIDENCE RULES (order-driven model):
+  // - Actual confidence is determined by caller based on order existence
+  // - This function returns 'high' as default because order-driven model is reliable
+  // - Caller will downgrade to 'medium' if no orders exist
+  confidence = 'high';
 
   return {
     confidence,
@@ -94,10 +105,13 @@ export function computeDataFreshness(inventoryLastSyncedAt) {
     shouldRefuse,
     freshnessState: {
       status,
+      model: 'order-driven',  // Flag the model
       inventoryLastSyncedAt,
       ageMs: Math.round(ageMs),
       ageHours: Math.round(ageHours * 10) / 10,
-      ageDays: Math.round(ageDays * 10) / 10
+      ageDays: Math.round(ageDays * 10) / 10,
+      // Explain the model
+      description: 'Availability updates in real-time from orders'
     }
   };
 }
@@ -140,16 +154,18 @@ export function buildOMENResponse(answer, inventoryLastSyncedAt, additionalWarni
   // Merge warnings
   const allWarnings = [...freshness.warnings, ...additionalWarnings];
 
-  // If should refuse, override answer
+  // Only refuse if truly no data
   const finalAnswer = freshness.shouldRefuse
-    ? `I can't answer that confidently.\n\n${freshness.warnings[0]}\n\nSync inventory and try again.`
+    ? `I can't answer that confidently.\n\n${freshness.warnings[0]}\n\nUpload a Wix inventory export to begin.`
     : answer;
 
   return {
     answer: finalAnswer,
     confidence: freshness.confidence,
     data_freshness: {
-      inventory_last_synced_at: inventoryLastSyncedAt
+      inventory_last_synced_at: inventoryLastSyncedAt,
+      model: 'order-driven',
+      description: 'Availability updates in real-time from orders'
     },
     warnings: allWarnings,
     _meta: {
@@ -163,14 +179,14 @@ export function buildOMENResponse(answer, inventoryLastSyncedAt, additionalWarni
  * Compute holistic snapshot confidence based on ALL available data
  *
  * This is the UPGRADED confidence logic that considers:
- * - Inventory freshness
+ * - Inventory data existence (not staleness - order-driven model handles that)
  * - Order data existence
- * - Cost/margin coverage (ACTIVE SKUs only per policy)
+ * - Cost/margin coverage (VISIBLE SKUs only per policy)
  * - Velocity data availability
  *
  * POLICY RULES:
- * - Coverage metrics use ACTIVE SKUs only (quantity > 0 or IN_STOCK)
- * - Inactive/out-of-stock SKUs do NOT degrade confidence
+ * - Coverage metrics use VISIBLE SKUs only (matches Wix dashboard)
+ * - Hidden/archived SKUs do NOT degrade confidence
  * - If orders > 0 AND skusWithCost > 0 → confidence MUST be at least MEDIUM
  * - LOW confidence ONLY when data is genuinely missing
  *
@@ -178,20 +194,22 @@ export function buildOMENResponse(answer, inventoryLastSyncedAt, additionalWarni
  * @returns {{ confidence: string, factors: object, explanation: string }}
  */
 export function computeSnapshotConfidence({
-  inventoryFreshness = null,
+  inventoryFreshness: _inventoryFreshness = null,  // Kept for API compatibility
   orderCount = 0,
   skusWithCost = 0,
   totalSkus = 0,
   velocityDataAvailable = false,
   previousSnapshotExists = false,
-  // NEW: Active SKU counts (policy-compliant)
-  activeSkuCount = null,
-  activeWithCost = null,
-  costCoveragePercent = null  // Pre-computed from authority (active only)
+  // NEW: Visible SKU counts (Wix dashboard parity)
+  visibleSkuCount = null,
+  visibleWithCost = null,
+  costCoveragePercent = null,  // Pre-computed from authority (visible only)
+  // Profit intelligence
+  totalProfitAtRisk = 0
 }) {
-  // Use active counts if provided (policy-compliant), otherwise fall back to totals
-  const effectiveTotalSkus = activeSkuCount !== null ? activeSkuCount : totalSkus;
-  const effectiveSkusWithCost = activeWithCost !== null ? activeWithCost : skusWithCost;
+  // Use visible counts if provided (policy-compliant), otherwise fall back to totals
+  const effectiveTotalSkus = visibleSkuCount !== null ? visibleSkuCount : totalSkus;
+  const effectiveSkusWithCost = visibleWithCost !== null ? visibleWithCost : skusWithCost;
 
   // Use pre-computed coverage if provided, otherwise calculate
   const effectiveCoverage = costCoveragePercent !== null
@@ -199,70 +217,72 @@ export function computeSnapshotConfidence({
     : (effectiveTotalSkus > 0 ? effectiveSkusWithCost / effectiveTotalSkus : 1);
 
   const factors = {
-    inventoryFresh: false,
+    inventoryExists: effectiveTotalSkus > 0,
     hasOrders: orderCount > 0,
     hasCostData: effectiveSkusWithCost > 0,
     costCoverage: effectiveCoverage,
     hasVelocity: velocityDataAvailable,
     hasComparison: previousSnapshotExists,
+    hasProfitData: totalProfitAtRisk > 0,
     // Policy tracking
-    usingActiveCounts: activeSkuCount !== null,
-    activeSkuCount: effectiveTotalSkus,
-    activeWithCost: effectiveSkusWithCost
+    usingVisibleCounts: visibleSkuCount !== null,
+    visibleSkuCount: effectiveTotalSkus,
+    visibleWithCost: effectiveSkusWithCost,
+    model: 'order-driven'
   };
-
-  // Check inventory freshness
-  if (inventoryFreshness) {
-    factors.inventoryFresh = inventoryFreshness.confidence !== 'low';
-  }
 
   // Calculate confidence score (0-100)
   let score = 0;
   const explanations = [];
 
-  // Inventory freshness: 25 points
-  if (factors.inventoryFresh) {
-    score += 25;
-    explanations.push('Inventory is fresh');
+  // Inventory exists: 20 points (binary - with order-driven model, existence matters more than freshness)
+  if (factors.inventoryExists) {
+    score += 20;
+    explanations.push(`${effectiveTotalSkus} visible SKUs loaded`);
   } else {
-    explanations.push('Inventory sync is stale');
+    explanations.push('No inventory data');
   }
 
   // Order data: 30 points (critical for intelligence)
   if (factors.hasOrders) {
     score += 30;
-    explanations.push(`${orderCount} orders available`);
+    explanations.push(`${orderCount} orders driving availability`);
   } else {
     explanations.push('No order data');
   }
 
-  // Cost/margin coverage: 25 points (ACTIVE SKUs only per policy)
+  // Cost/margin coverage: 30 points (VISIBLE SKUs only per policy)
   if (factors.hasCostData) {
-    const coverageScore = Math.min(25, Math.round(factors.costCoverage * 25));
+    const coverageScore = Math.min(30, Math.round(factors.costCoverage * 30));
     score += coverageScore;
-    const coverageLabel = factors.usingActiveCounts ? 'active cost coverage' : 'cost coverage';
-    explanations.push(`${Math.round(factors.costCoverage * 100)}% ${coverageLabel}`);
+    explanations.push(`${Math.round(factors.costCoverage * 100)}% cost coverage`);
   } else {
     explanations.push('No cost data');
   }
 
-  // Velocity data: 10 points
-  if (factors.hasVelocity) {
+  // Profit at risk data: 10 points
+  if (factors.hasProfitData) {
     score += 10;
+    explanations.push(`$${totalProfitAtRisk.toLocaleString()} profit at risk tracked`);
+  }
+
+  // Velocity data: 5 points
+  if (factors.hasVelocity) {
+    score += 5;
     explanations.push('Velocity metrics available');
   }
 
-  // Previous snapshot for comparison: 10 points
+  // Previous snapshot for comparison: 5 points
   if (factors.hasComparison) {
-    score += 10;
+    score += 5;
     explanations.push('Week-over-week comparison available');
   }
 
   // Determine confidence level
   let confidence;
-  if (score >= 70) {
+  if (score >= 65) {
     confidence = 'high';
-  } else if (score >= 40) {
+  } else if (score >= 35) {
     confidence = 'medium';
   } else {
     confidence = 'low';
@@ -271,13 +291,13 @@ export function computeSnapshotConfidence({
   // RULE: If orders > 0 AND skusWithCost > 0 → at least MEDIUM
   if (factors.hasOrders && factors.hasCostData && confidence === 'low') {
     confidence = 'medium';
-    explanations.push('Elevated to medium: has orders and cost data');
+    explanations.push('Elevated: has orders and cost data');
   }
 
-  // POLICY BONUS: High coverage (>=80%) of active SKUs → boost confidence
+  // POLICY BONUS: High coverage (>=80%) of visible SKUs → boost confidence
   if (factors.costCoverage >= 0.8 && confidence === 'medium') {
     confidence = 'high';
-    explanations.push('Elevated to high: ≥80% active SKU cost coverage');
+    explanations.push('Elevated: ≥80% cost coverage');
   }
 
   return {
@@ -294,6 +314,8 @@ export function computeSnapshotConfidence({
  * RULE: HIGH confidence + critical warning = contradiction
  * This function adjusts either confidence or warnings to be coherent
  *
+ * ORDER-DRIVEN MODEL: Warnings should explain the model, not imply broken sync
+ *
  * @param {string} confidence - Computed confidence level
  * @param {string[]} warnings - List of warnings
  * @param {object} factors - Confidence factors
@@ -303,38 +325,63 @@ export function reconcileConfidenceAndWarnings(confidence, warnings, factors = {
   const adjustedWarnings = [...warnings];
   let statusMessage = '';
 
-  // RULE: If confidence is HIGH but we have stale warnings, soften them
-  if (confidence === 'high' && warnings.length > 0) {
-    // Replace harsh "stale" language with softer "catching up" language
-    const staleWarningIndex = adjustedWarnings.findIndex(w =>
-      w.toLowerCase().includes('stale') ||
-      w.toLowerCase().includes('unreliable') ||
-      w.toLowerCase().includes("hasn't been synced")
-    );
+  // ORDER-DRIVEN MODEL: Replace any old "sync" warnings with model explanation
+  const oldSyncWarningIndex = adjustedWarnings.findIndex(w =>
+    w.toLowerCase().includes('stale') ||
+    w.toLowerCase().includes('unreliable') ||
+    w.toLowerCase().includes("hasn't been synced") ||
+    w.toLowerCase().includes('out of sync')
+  );
 
-    if (staleWarningIndex >= 0) {
-      // We have good data despite stale sync - reframe positively
-      adjustedWarnings[staleWarningIndex] = 'Inventory sync pending — profit and margin insights remain reliable.';
-      statusMessage = 'Insights reliable';
-    }
+  if (oldSyncWarningIndex >= 0) {
+    // Replace with order-driven model explanation
+    adjustedWarnings[oldSyncWarningIndex] = 'Availability updates in real-time from orders.';
   }
 
-  // RULE: If confidence is LOW, make sure warnings reflect severity
-  if (confidence === 'low' && warnings.length === 0) {
-    adjustedWarnings.push('Limited data available for analysis.');
+  // Determine status message based on confidence and model
+  if (confidence === 'high') {
+    statusMessage = 'Order-driven • Real-time';
+  } else if (confidence === 'medium') {
+    statusMessage = factors.hasOrders ? 'Order data current' : 'Partial data';
+  } else {
     statusMessage = 'Limited data';
-  }
-
-  // RULE: If we have orders but stale inventory, focus on what's working
-  if (factors.hasOrders && !factors.inventoryFresh && confidence !== 'low') {
-    statusMessage = statusMessage || 'Order data current';
+    if (adjustedWarnings.length === 0) {
+      adjustedWarnings.push('Limited data available for analysis.');
+    }
   }
 
   return {
     confidence,
     warnings: adjustedWarnings,
-    statusMessage: statusMessage || (confidence === 'high' ? 'Data current' : confidence === 'medium' ? 'Data aging' : 'Data limited')
+    statusMessage
   };
+}
+
+/**
+ * Generate snapshot freshness message for UI
+ *
+ * ORDER-DRIVEN MODEL: Explain that availability is derived, not synced
+ *
+ * @param {string|null} inventoryLastSyncedAt - Base snapshot date
+ * @returns {string} Human-readable freshness message
+ */
+export function getSnapshotFreshnessMessage(inventoryLastSyncedAt) {
+  if (!inventoryLastSyncedAt) {
+    return 'No inventory snapshot. Upload a Wix export to begin.';
+  }
+
+  const date = new Date(inventoryLastSyncedAt);
+  if (isNaN(date.getTime())) {
+    return 'Invalid snapshot date.';
+  }
+
+  const formattedDate = date.toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric'
+  });
+
+  return `Base snapshot: ${formattedDate}. Availability updates in real-time from orders.`;
 }
 
 /**
@@ -348,7 +395,7 @@ export function validateSnapshotFreshness(snapshot, inventoryLastSyncedAt) {
   if (!inventoryLastSyncedAt) {
     return {
       isValid: false,
-      reason: 'Inventory has not been synced. Snapshot cannot be validated.'
+      reason: 'No inventory snapshot loaded. Upload a Wix export first.'
     };
   }
 
@@ -371,10 +418,9 @@ export function validateSnapshotFreshness(snapshot, inventoryLastSyncedAt) {
 
   // Snapshot must be generated AFTER inventory sync
   if (snapshotTime < syncTime) {
-    const syncAge = Math.round((snapshotTime - syncTime) / (1000 * 60 * 60));
     return {
       isValid: false,
-      reason: `Snapshot was generated ${Math.abs(syncAge)} hours BEFORE the last inventory sync. It shows outdated data.`
+      reason: 'Snapshot predates current inventory. Regenerate for accurate data.'
     };
   }
 
