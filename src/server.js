@@ -3305,8 +3305,13 @@ app.post("/snapshot/generate", async (req, res) => {
 
     // 8.5️⃣ GENERATE EXECUTIVE ACTION BRIEF
     // THE canonical decision output: SELL_NOW, REORDER_NOW, HOLD_LINE, DEPRIORITIZE
-    const actionBrief = generateExecutiveActionBrief(snapshot);
-    snapshot.actionBrief = actionBrief;
+    try {
+      const actionBrief = generateExecutiveActionBrief(snapshot);
+      snapshot.actionBrief = actionBrief;
+    } catch (actionBriefError) {
+      console.error('[Snapshot] Action brief generation failed:', actionBriefError.message);
+      snapshot.actionBrief = null;
+    }
 
     console.log("📸 [OMEN] Intelligence layer added", {
       requestId,
