@@ -254,36 +254,60 @@ export function buildFactTables(inventory, velocityMetrics = [], periodSalesMap 
 /**
  * Compute weighted average margin from SALES_FACTS only.
  * Weighted by revenue (more accurate than unit count).
+ *
+ * STRICT: All values must be finite. NaN propagation is blocked.
  */
 export function computeWeightedMargin(salesFacts) {
   let totalRevenue = 0;
   let totalMarginDollars = 0;
+  let skusWithValidMargin = 0;
 
   for (const [sku, fact] of salesFacts) {
-    if (fact.unit_margin !== null && fact.revenue > 0) {
-      totalRevenue += fact.revenue;
-      // Total margin = unit_margin * units_sold
-      totalMarginDollars += fact.unit_margin * fact.units_sold;
-    }
+    // STRICT: All values must be finite
+    if (fact.unit_margin === null || !isFinite(fact.unit_margin)) continue;
+    if (fact.revenue === null || !isFinite(fact.revenue) || fact.revenue <= 0) continue;
+    if (fact.units_sold === null || !isFinite(fact.units_sold) || fact.units_sold <= 0) continue;
+
+    const marginContribution = fact.unit_margin * fact.units_sold;
+    if (!isFinite(marginContribution)) continue;
+
+    totalRevenue += fact.revenue;
+    totalMarginDollars += marginContribution;
+    skusWithValidMargin++;
   }
 
-  if (totalRevenue <= 0) {
+  // STRICT: Require minimum threshold for valid margin computation
+  const MIN_SKUS_FOR_MARGIN = 5;
+  if (totalRevenue <= 0 || skusWithValidMargin < MIN_SKUS_FOR_MARGIN) {
     return {
       averageMargin: null,
-      totalRevenue: 0,
-      totalMarginDollars: 0,
-      skusWithMargin: 0,
-      reason: 'No sales with margin data in period'
+      totalRevenue: totalRevenue || 0,
+      totalMarginDollars: totalMarginDollars || 0,
+      skusWithMargin: skusWithValidMargin,
+      reason: skusWithValidMargin < MIN_SKUS_FOR_MARGIN
+        ? `Insufficient data (${skusWithValidMargin} SKUs with valid margin, need ${MIN_SKUS_FOR_MARGIN})`
+        : 'No sales with margin data in period'
     };
   }
 
   const avgMarginPercent = (totalMarginDollars / totalRevenue) * 100;
 
+  // STRICT: Final NaN guard
+  if (!isFinite(avgMarginPercent)) {
+    return {
+      averageMargin: null,
+      totalRevenue,
+      totalMarginDollars,
+      skusWithMargin: skusWithValidMargin,
+      reason: 'Margin calculation resulted in invalid value'
+    };
+  }
+
   return {
     averageMargin: parseFloat(avgMarginPercent.toFixed(2)),
     totalRevenue,
     totalMarginDollars: parseFloat(totalMarginDollars.toFixed(2)),
-    skusWithMargin: Array.from(salesFacts.values()).filter(f => f.unit_margin !== null).length,
+    skusWithMargin: skusWithValidMargin,
     reason: null
   };
 }
@@ -300,46 +324,65 @@ export function generateDecisions(salesFacts, inventoryFacts) {
 
   // ════════════════════════════════════════════════════════════════════════
   // DECISION 1: REORDER_NOW - High velocity + low stock (needs both facts)
+  // REQUIRES: revenue, velocity, days_of_coverage (all must be finite)
   // ════════════════════════════════════════════════════════════════════════
   for (const [sku, invFact] of inventoryFacts) {
     const salesFact = salesFacts.get(sku);
 
-    // Must have sales AND low stock coverage
-    if (salesFact && invFact.velocity >= THRESHOLDS.HIGH_VELOCITY) {
-      if (invFact.days_of_coverage !== null && invFact.days_of_coverage <= THRESHOLDS.LOW_STOCK_DAYS) {
-        const isCritical = invFact.days_of_coverage <= THRESHOLDS.CRITICAL_STOCK_DAYS;
-        const weeklyRevenue = salesFact.revenue > 0 && salesFact.units_sold > 0
-          ? (salesFact.revenue / salesFact.units_sold) * invFact.velocity * 7
-          : 0;
+    // VALIDATION: Must have sales AND velocity AND coverage (all finite)
+    if (!salesFact) continue;
+    if (!isFinite(invFact.velocity) || invFact.velocity < THRESHOLDS.HIGH_VELOCITY) continue;
+    if (invFact.days_of_coverage === null || !isFinite(invFact.days_of_coverage)) continue;
+    if (invFact.days_of_coverage > THRESHOLDS.LOW_STOCK_DAYS) continue;
 
-        decisions.push({
-          type: DECISION_TYPES.REORDER_NOW,
-          sku,
-          name: invFact.display_name,
-          reason: `Selling ${invFact.velocity.toFixed(1)}/day, only ${invFact.days_of_coverage} days of stock`,
-          action: isCritical ? `Reorder immediately` : `Place reorder this week`,
-          dollarImpact: Math.round(weeklyRevenue),
-          impactLabel: weeklyRevenue > 0 ? `$${Math.round(weeklyRevenue).toLocaleString()}/week at risk` : null,
-          timeframe: isCritical ? 'TODAY' : 'THIS_WEEK',
-          urgency: isCritical ? 3 : 2,
-          metrics: {
-            quantity: invFact.available_quantity,
-            velocity: invFact.velocity,
-            daysOfCoverage: invFact.days_of_coverage,
-            unitsSold: salesFact.units_sold
-          }
-        });
+    const isCritical = invFact.days_of_coverage <= THRESHOLDS.CRITICAL_STOCK_DAYS;
+
+    // Calculate weekly revenue at risk
+    const hasValidRevenue = salesFact.revenue > 0 && salesFact.units_sold > 0;
+    const avgPrice = hasValidRevenue ? salesFact.revenue / salesFact.units_sold : 0;
+    const weeklyRevenue = avgPrice * invFact.velocity * 7;
+
+    // Only include if we can compute a valid revenue number
+    if (!isFinite(weeklyRevenue)) continue;
+
+    decisions.push({
+      type: DECISION_TYPES.REORDER_NOW,
+      sku,
+      name: invFact.display_name,
+      reason: `Selling ${invFact.velocity.toFixed(1)}/day, only ${invFact.days_of_coverage} days of stock`,
+      action: isCritical ? `Reorder immediately` : `Place reorder this week`,
+      dollarImpact: Math.round(weeklyRevenue),
+      impactLabel: weeklyRevenue > 0 ? `$${Math.round(weeklyRevenue).toLocaleString()}/week at risk` : null,
+      timeframe: isCritical ? 'TODAY' : 'THIS_WEEK',
+      urgency: isCritical ? 3 : 2,
+      hasFinancialData: weeklyRevenue > 0,
+      metrics: {
+        quantity: invFact.available_quantity,
+        velocity: invFact.velocity,
+        daysOfCoverage: invFact.days_of_coverage,
+        unitsSold: salesFact.units_sold
       }
-    }
+    });
   }
 
   // ════════════════════════════════════════════════════════════════════════
   // DECISION 2: HOLD_LINE - High margin sellers (from SALES_FACTS)
+  // REQUIRES: margin_percent, unit_margin (both must be finite)
   // ════════════════════════════════════════════════════════════════════════
   for (const [sku, salesFact] of salesFacts) {
-    if (salesFact.margin_percent !== null && salesFact.margin_percent >= THRESHOLDS.HIGH_MARGIN) {
+    // VALIDATION: Both margin metrics must be finite numbers
+    if (salesFact.margin_percent !== null &&
+        isFinite(salesFact.margin_percent) &&
+        salesFact.margin_percent >= THRESHOLDS.HIGH_MARGIN &&
+        salesFact.unit_margin !== null &&
+        isFinite(salesFact.unit_margin)) {
+
       const invFact = inventoryFacts.get(sku);
-      const weeklyProfit = salesFact.unit_margin * (invFact?.velocity || 0) * 7;
+      const velocity = invFact?.velocity || 0;
+      const weeklyProfit = salesFact.unit_margin * velocity * 7;
+
+      // Only include if we can compute a valid profit number
+      if (!isFinite(weeklyProfit)) continue;
 
       decisions.push({
         type: DECISION_TYPES.HOLD_LINE,
@@ -362,6 +405,8 @@ export function generateDecisions(salesFacts, inventoryFacts) {
 
   // ════════════════════════════════════════════════════════════════════════
   // DECISION 3: DISCOUNT_SLOW - Slow movers with stock (INVENTORY_FACTS only)
+  // REQUIRES: unit_cost for financial impact calculation
+  // If no cost data, still show action but with explicit messaging
   // ════════════════════════════════════════════════════════════════════════
   for (const [sku, invFact] of inventoryFacts) {
     // Skip if already has a decision
@@ -369,9 +414,15 @@ export function generateDecisions(salesFacts, inventoryFacts) {
 
     // Slow mover with stock = discount candidate
     if (invFact.is_slow_mover && invFact.available_quantity >= THRESHOLDS.MIN_STOCK_FOR_DISCOUNT) {
-      const profitAtRisk = invFact.unit_margin !== null
-        ? invFact.unit_margin * invFact.available_quantity
+      // Calculate capital at risk (cost basis)
+      // NOTE: Per requirements, "Unsold Inventory at Risk" = units * cost, NOT profit
+      const hasValidCost = invFact.unit_cost !== null && isFinite(invFact.unit_cost) && invFact.unit_cost > 0;
+      const capitalAtRisk = hasValidCost
+        ? invFact.unit_cost * invFact.available_quantity
         : null;
+
+      // Only render if we have valid financial data OR explicit messaging
+      const hasFinancialData = capitalAtRisk !== null && isFinite(capitalAtRisk);
 
       decisions.push({
         type: DECISION_TYPES.DISCOUNT_SLOW,
@@ -381,14 +432,19 @@ export function generateDecisions(salesFacts, inventoryFacts) {
           ? `No sale in ${invFact.days_since_last_sale} days, ${invFact.available_quantity} units sitting`
           : `${invFact.available_quantity} units, velocity ${invFact.velocity.toFixed(2)}/day`,
         action: 'Consider 15-20% discount to move inventory',
-        dollarImpact: profitAtRisk !== null ? Math.round(profitAtRisk) : 0,
-        impactLabel: profitAtRisk !== null ? `$${Math.round(profitAtRisk).toLocaleString()} trapped` : null,
+        // Dollar impact is COST BASIS (capital at risk), not profit
+        dollarImpact: hasFinancialData ? Math.round(capitalAtRisk) : 0,
+        impactLabel: hasFinancialData
+          ? `$${Math.round(capitalAtRisk).toLocaleString()} capital at risk`
+          : `${invFact.available_quantity} units (cost unknown)`,
         timeframe: 'THIS_WEEK',
         urgency: 1,
+        hasFinancialData,
         metrics: {
           quantity: invFact.available_quantity,
           velocity: invFact.velocity,
-          daysSinceLastSale: invFact.days_since_last_sale
+          daysSinceLastSale: invFact.days_since_last_sale,
+          unitCost: invFact.unit_cost
         }
       });
     }
@@ -409,10 +465,27 @@ export function generateDecisions(salesFacts, inventoryFacts) {
 
 /**
  * Generate Executive Action Brief from split fact tables.
+ * Tracks suppressed items for diagnostic output.
  */
 export function generateExecutiveActionBrief(snapshot) {
   const inventory = snapshot.enrichedInventory || [];
   const velocityMetrics = snapshot.velocity?.velocityMetrics || [];
+  const suppressedItems = [];
+
+  // ════════════════════════════════════════════════════════════════════════
+  // STEP 0: TRACK EXCLUDED ITEMS
+  // ════════════════════════════════════════════════════════════════════════
+  for (const item of inventory) {
+    if (item.hasValidIdentity === false) {
+      suppressedItems.push({
+        sku: item.sku,
+        reason: 'Missing product_name or variant_name'
+      });
+    } else if (!item.hasCost && !item.hasMargin) {
+      // Track items without financial data (informational, not blocking)
+      // These can still have inventory-based decisions
+    }
+  }
 
   // ════════════════════════════════════════════════════════════════════════
   // STEP 1: BUILD SPLIT FACT TABLES
@@ -491,8 +564,11 @@ export function generateExecutiveActionBrief(snapshot) {
     marginData: marginResult,
     factLayerStats: {
       salesFacts: salesFacts.size,
-      inventoryFacts: inventoryFacts.size
+      inventoryFacts: inventoryFacts.size,
+      excluded: suppressedItems.length
     },
+    // DIAGNOSTIC: Suppressed items and why
+    suppressedItems,
     generatedAt: new Date().toISOString()
   };
 }

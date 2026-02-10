@@ -366,17 +366,28 @@ export async function getAuthoritativeInventory() {
     else skusWithoutCost++;
     if (margin !== null) skusWithMargin++;
 
-    // Extract product info
-    const productName = item.product_name || item.strain || item.name || 'Unknown';
-    const variantName = item.variant_name || item.unit || 'Unknown';
+    // ======================================================================
+    // EXTRACT PRODUCT INFO - NO FALLBACK TO 'Unknown'
+    // SKUs missing identity are EXCLUDED, not rendered with placeholders
+    // ======================================================================
+    const productName = item.product_name || item.strain || item.name || null;
+    const variantName = item.variant_name || item.unit || null;
     const category = item.category || item.quality || item.tier || 'STANDARD';
+
+    // VALIDATION GATE: Exclude SKUs with missing identity
+    const hasValidIdentity = productName && variantName &&
+      productName.toLowerCase() !== 'unknown' &&
+      variantName.toLowerCase() !== 'unknown';
+    const identityStatus = hasValidIdentity ? 'VALID' : 'EXCLUDED_MISSING_IDENTITY';
 
     return {
       sku: item.sku,
-      strain: productName,
-      name: `${productName} (${variantName})`,
-      unit: variantName,
+      strain: productName || 'MISSING',
+      name: hasValidIdentity ? `${productName} (${variantName})` : null,
+      unit: variantName || 'MISSING',
       quality: category,
+      identityStatus,
+      hasValidIdentity,
       // ======================================================================
       // QUANTITY FIELDS - Order-driven, real-time
       // ======================================================================
@@ -427,8 +438,22 @@ export async function getAuthoritativeInventory() {
   // CRITICAL: Only count SKUs where visible = true
   // This matches the Wix dashboard count (~75, not 337)
   // ========================================================================
-  const visibleSKUs = enriched.filter(i => i.visible === true);
-  const hiddenSKUs = enriched.filter(i => i.visible === false);
+  // ========================================================================
+  // IDENTITY VALIDATION - Exclude SKUs with missing names
+  // These are excluded from all analytics, not rendered with "Unknown"
+  // ========================================================================
+  const excludedForMissingIdentity = enriched.filter(i => !i.hasValidIdentity);
+  const validItems = enriched.filter(i => i.hasValidIdentity);
+
+  if (excludedForMissingIdentity.length > 0) {
+    console.warn(`[Authority] EXCLUDED ${excludedForMissingIdentity.length} SKUs with missing identity (no name/variant)`);
+    for (const item of excludedForMissingIdentity.slice(0, 5)) {
+      console.warn(`[Authority]   - SKU: ${item.sku}, product_name: ${item.strain}, variant_name: ${item.unit}`);
+    }
+  }
+
+  const visibleSKUs = validItems.filter(i => i.visible === true);
+  const hiddenSKUs = validItems.filter(i => i.visible === false);
 
   // Sellable = visible AND has available quantity
   const sellableSKUs = visibleSKUs.filter(i =>
@@ -596,6 +621,8 @@ export async function getAuthoritativeInventory() {
     // ========================================================================
     stats: {
       total: enriched.length,
+      totalWithValidIdentity: validItems.length,
+      excludedForMissingIdentity: excludedForMissingIdentity.length,
       visible: visibleSKUs.length,
       hidden: hiddenSKUs.length,
       sellable: sellableSKUs.length,

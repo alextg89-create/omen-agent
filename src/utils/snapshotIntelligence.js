@@ -780,11 +780,24 @@ export function forecastConsequences(snapshot, previousSnapshot = null) {
 export function getTopProfitContributors(snapshot, limit = 3) {
   const inventory = snapshot.enrichedInventory || [];
 
-  // STRICT: Only include items with hasCost=true (valid cost/margin data)
+  // STRICT: Only include items with:
+  // 1. hasCost=true (valid cost/margin data)
+  // 2. hasValidIdentity (not excluded for missing name)
+  // 3. All numeric values are finite (no NaN/Infinity)
   const withProfit = inventory
-    .filter(i => i.hasCost === true && i.pricing?.margin !== null && i.pricing?.retail !== null && i.quantity > 0)
+    .filter(i => {
+      if (i.hasCost !== true) return false;
+      if (i.hasValidIdentity === false) return false;
+      if (i.pricing?.margin === null || !isFinite(i.pricing?.margin)) return false;
+      if (i.pricing?.retail === null || !isFinite(i.pricing?.retail)) return false;
+      if (!i.quantity || !isFinite(i.quantity) || i.quantity <= 0) return false;
+      return true;
+    })
     .map(i => {
       const potentialProfit = i.quantity * i.pricing.retail * (i.pricing.margin / 100);
+      // NaN guard
+      if (!isFinite(potentialProfit)) return null;
+
       return {
         sku: i.sku,
         name: i.name || `${i.strain} (${i.unit})`,
@@ -795,6 +808,7 @@ export function getTopProfitContributors(snapshot, limit = 3) {
         profitPerUnit: Math.round(i.pricing.retail * (i.pricing.margin / 100) * 100) / 100
       };
     })
+    .filter(Boolean) // Remove any nulls from NaN guard
     .sort((a, b) => b.potentialProfit - a.potentialProfit);
 
   return withProfit.slice(0, limit);
@@ -815,12 +829,17 @@ export function findHiddenOpportunities(snapshot, limit = 3) {
   const opportunities = [];
 
   for (const item of inventory) {
+    // STRICT: Skip items with missing identity
+    if (item.hasValidIdentity === false) continue;
+
     const margin = item.pricing?.margin;
     const retail = item.pricing?.retail;
     const quantity = item.quantity || 0;
 
-    // Skip if missing data
-    if (margin === null || margin === undefined || retail === null || quantity < 5) continue;
+    // STRICT: Skip if any numeric value is NaN/Infinity
+    if (margin === null || margin === undefined || !isFinite(margin)) continue;
+    if (retail === null || retail === undefined || !isFinite(retail)) continue;
+    if (!isFinite(quantity) || quantity < 5) continue;
     if (margin < 50) continue; // Only high-margin items
 
     // Check velocity

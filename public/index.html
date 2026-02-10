@@ -836,13 +836,21 @@
     }
 
     /**
-     * Render value - ZERO vs NULL distinction
-     * Zero = fact (render as "0")
-     * Null = absence (render as refusal marker)
+     * Render value - STRICT VALIDATION
+     * - NULL/undefined = absence → refusal marker "—"
+     * - NaN/Infinity = invalid → refusal marker "—"
+     * - 0 = valid zero → render as "0"
+     * - Valid number → render formatted
      */
     function renderValue(value, format = 'number') {
-      // NULL = ABSENCE → Refusal marker
+      // NULL/UNDEFINED = ABSENCE → Refusal marker
       if (value === null || value === undefined) {
+        return '<span class="metric-value null">—</span>';
+      }
+
+      // NaN/Infinity = INVALID → Refusal marker (NEVER show NaN)
+      if (typeof value === 'number' && (!isFinite(value) || Number.isNaN(value))) {
+        console.warn('[UI] renderValue: Suppressed NaN/Infinity value');
         return '<span class="metric-value null">—</span>';
       }
 
@@ -868,7 +876,11 @@
     }
 
     function formatCurrency(value) {
-      if (typeof value !== 'number' || isNaN(value)) return '—';
+      // STRICT: Must be finite number
+      if (typeof value !== 'number' || !isFinite(value) || Number.isNaN(value)) {
+        console.warn('[UI] formatCurrency: Invalid value', value);
+        return '—';
+      }
       return new Intl.NumberFormat('en-US', {
         style: 'currency',
         currency: 'USD'
@@ -876,8 +888,12 @@
     }
 
     function formatPercent(value) {
+      // STRICT: Must be finite number
       if (value === null || value === undefined) return '—';
-      if (typeof value !== 'number' || Number.isNaN(value)) return '—';
+      if (typeof value !== 'number' || !isFinite(value) || Number.isNaN(value)) {
+        console.warn('[UI] formatPercent: Invalid value', value);
+        return '—';
+      }
       return `${value.toFixed(1)}%`;
     }
 
@@ -1529,22 +1545,41 @@
         `;
       }
 
-      // PROFIT POTENTIAL - Use order-driven metric (sellable SKUs only)
-      // inventoryProfitPotential = sum(availableQuantity * unitMargin) for visible+in-stock
-      const profitPotential = metrics.inventoryProfitPotential || metrics.totalProfit || 0;
-      if (profitPotential > 0) {
+      // ════════════════════════════════════════════════════════════════════════
+      // INVENTORY VALUE AT COST - Renamed per requirements
+      // This is COST BASIS only, NOT projected profit (which requires sales data)
+      // ════════════════════════════════════════════════════════════════════════
+      const inventoryCostBasis = metrics.inventoryCostBasis || metrics.totalCostBasis || null;
+      const profitAtRiskValidated = metrics.profitStats?.validated === true;
+      const profitAtRisk = profitAtRiskValidated ? metrics.inventoryProfitPotential : null;
+
+      // Only show if we have validated cost data
+      if (inventoryCostBasis !== null && isFinite(inventoryCostBasis) && inventoryCostBasis > 0) {
         html += `
-          <div class="metric-card" title="Sum of (quantity × unit margin) for all sellable inventory">
-            <div class="metric-label">Sell-Through Profit</div>
-            ${renderValue(profitPotential, 'currency')}
-            <div style="font-size: 0.7em; color: #888; margin-top: 4px;">If you sold everything at current pricing</div>
+          <div class="metric-card" title="Sum of (quantity × unit cost) for all sellable inventory">
+            <div class="metric-label">Inventory at Cost</div>
+            ${renderValue(inventoryCostBasis, 'currency')}
+            <div style="font-size: 0.7em; color: #888; margin-top: 4px;">Capital tied up in stock</div>
           </div>
         `;
-      } else if (metrics.totalRevenue && metrics.totalRevenue > 0) {
+      } else if (profitAtRisk !== null && isFinite(profitAtRisk) && profitAtRisk > 0) {
+        // Fallback to profit at risk if cost basis unavailable but profit is validated
+        html += `
+          <div class="metric-card" title="Sum of (quantity × unit margin) - validated">
+            <div class="metric-label">Profit Potential</div>
+            ${renderValue(profitAtRisk, 'currency')}
+            <div style="font-size: 0.7em; color: #888; margin-top: 4px;">If sold at current pricing</div>
+          </div>
+        `;
+      } else {
+        // No valid financial data for inventory
         html += `
           <div class="metric-card">
             <div class="metric-label">Inventory Value</div>
-            ${renderValue(metrics.totalRevenue, 'currency')}
+            <div class="metric-value" style="font-size: 0.9em; color: #888;">—</div>
+            <div style="font-size: 0.75em; color: #666; margin-top: 4px;">
+              Cost data incomplete
+            </div>
           </div>
         `;
       }
@@ -1615,7 +1650,7 @@
         `;
       }
 
-      // SUMMARY STATS (optional, collapsed)
+      // SUMMARY STATS
       if (briefSummary.total > 0) {
         html += `
           <div style="margin-top: 20px; padding: 15px; background: #1a1a1a; border-radius: 4px; font-size: 0.85em; color: #666;">
@@ -1626,6 +1661,43 @@
             ${briefSummary.deprioritize > 0 ? `<span style="margin-left: 10px;">${briefSummary.deprioritize} ignore</span>` : ''}
             <span style="margin-left: 15px;">(${briefSummary.total} SKUs classified)</span>
           </div>
+        `;
+      }
+
+      // ════════════════════════════════════════════════════════════════════════════
+      // DIAGNOSTIC: SUPPRESSED ITEMS
+      // Shows SKUs omitted from actions and WHY
+      // ════════════════════════════════════════════════════════════════════════════
+      const suppressedItems = actionBrief.suppressedItems || [];
+      const excludedForIdentity = snapshot.stats?.excludedForMissingIdentity || 0;
+
+      if (suppressedItems.length > 0 || excludedForIdentity > 0) {
+        html += `
+          <details style="margin-top: 20px; padding: 15px; background: #1a1a1a; border-radius: 4px; font-size: 0.85em; color: #666;">
+            <summary style="cursor: pointer; color: #888;">
+              📊 Data Quality: ${excludedForIdentity > 0 ? `${excludedForIdentity} SKUs excluded (missing identity)` : ''}
+              ${suppressedItems.length > 0 ? `${suppressedItems.length} actions suppressed` : ''}
+            </summary>
+            <div style="margin-top: 10px; border-top: 1px solid #333; padding-top: 10px;">
+              ${excludedForIdentity > 0 ? `
+                <div style="margin-bottom: 10px;">
+                  <strong style="color: #dc3545;">Missing Identity:</strong> ${excludedForIdentity} SKUs excluded
+                  <span style="color: #666;">(missing product_name or variant_name from Wix)</span>
+                </div>
+              ` : ''}
+              ${suppressedItems.length > 0 ? `
+                <div>
+                  <strong style="color: #ff9800;">Suppressed Actions:</strong>
+                  <ul style="margin: 5px 0 0 20px; padding: 0;">
+                    ${suppressedItems.slice(0, 10).map(item => `
+                      <li style="color: #888;">${item.sku || 'Unknown SKU'}: ${item.reason || 'Missing required data'}</li>
+                    `).join('')}
+                    ${suppressedItems.length > 10 ? `<li style="color: #666;">...and ${suppressedItems.length - 10} more</li>` : ''}
+                  </ul>
+                </div>
+              ` : ''}
+            </div>
+          </details>
         `;
       }
 
