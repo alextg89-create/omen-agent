@@ -132,6 +132,11 @@ import {
   enrichSnapshotWithIntelligence
 } from "./utils/snapshotIntelligence.js";
 import {
+  generateExecutiveActionBrief,
+  classifyAllSKUs,
+  DECISION_TYPES
+} from "./utils/decisionClassifier.js";
+import {
   parseWixCsv,
   validateItems
 } from "./utils/wixCsvParser.js";
@@ -3298,9 +3303,16 @@ app.post("/snapshot/generate", async (req, res) => {
     const enrichedSnapshot = enrichSnapshotWithIntelligence(snapshot, previousSnapshot);
     Object.assign(snapshot, enrichedSnapshot);
 
+    // 8.5️⃣ GENERATE EXECUTIVE ACTION BRIEF
+    // THE canonical decision output: SELL_NOW, REORDER_NOW, HOLD_LINE, DEPRIORITIZE
+    const actionBrief = generateExecutiveActionBrief(snapshot);
+    snapshot.actionBrief = actionBrief;
+
     console.log("📸 [OMEN] Intelligence layer added", {
       requestId,
       hasExecutiveSummary: !!snapshot.intelligence?.executiveSummary,
+      hasActionBrief: !!snapshot.actionBrief,
+      actionBriefSummary: snapshot.actionBrief?.summary || null,
       topSKUs: snapshot.intelligence?.topSKUs?.length || 0,
       anomalies: snapshot.intelligence?.anomalies?.length || 0
     });

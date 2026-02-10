@@ -277,7 +277,7 @@ export async function getAuthoritativeInventory() {
     // Prefer profitability table, fallback to cost table for cost
     const retail = profitData?.retail ?? item.retail ?? null;
     const cost = profitData?.cost ?? costData?.unit_cost ?? null;
-    const unitMargin = profitData?.unit_margin ?? null;
+    let unitMarginRaw = profitData?.unit_margin ?? null;
     const marginPercent = profitData?.margin_percent ?? null;
 
     // Compute margin if we have both retail and cost but no pre-computed margin
@@ -287,10 +287,63 @@ export async function getAuthoritativeInventory() {
     }
 
     // ======================================================================
+    // UNIT MARGIN VALIDATION & COMPUTATION
+    // ======================================================================
+    // Bug fix: unit_margin must be DOLLAR AMOUNT, not percentage
+    // Validate: unit_margin should be less than retail price
+    // If unit_margin > retail, it's likely storing percentage instead of dollars
+    // ======================================================================
+    let unitMargin = null;
+
+    if (unitMarginRaw !== null && retail !== null && retail > 0) {
+      // SANITY CHECK: unit_margin should be <= retail
+      if (unitMarginRaw <= retail) {
+        // Valid: unit_margin is a dollar amount
+        unitMargin = unitMarginRaw;
+      } else {
+        // INVALID: unit_margin is likely storing margin_percent
+        // Compute correct unit_margin from retail and percentage
+        console.warn(`[Authority] unit_margin sanity check FAILED for ${item.sku}: unit_margin=${unitMarginRaw}, retail=${retail}. Recomputing.`);
+        if (cost !== null) {
+          unitMargin = parseFloat((retail - cost).toFixed(2));
+        } else if (margin !== null) {
+          // Derive from margin percentage
+          unitMargin = parseFloat((retail * (margin / 100)).toFixed(2));
+        }
+      }
+    } else if (retail !== null && retail > 0 && cost !== null) {
+      // No unit_margin from profitability table - compute from retail - cost
+      unitMargin = parseFloat((retail - cost).toFixed(2));
+    } else if (retail !== null && retail > 0 && margin !== null) {
+      // Derive from margin percentage
+      unitMargin = parseFloat((retail * (margin / 100)).toFixed(2));
+    }
+
+    // ======================================================================
     // PROFIT AT RISK: available_quantity * unit_margin
     // ======================================================================
-    let profitAtRisk = profitData?.profit_at_risk ?? null;
-    if (profitAtRisk === null && unitMargin !== null && availableQuantity > 0) {
+    // GUARDRAIL: Only compute if unit_margin passes sanity check
+    // ======================================================================
+    let profitAtRisk = null;
+
+    // First try the pre-computed value from sku_profitability
+    const profitAtRiskRaw = profitData?.profit_at_risk ?? null;
+
+    if (profitAtRiskRaw !== null && unitMargin !== null && availableQuantity > 0) {
+      // SANITY CHECK: profit_at_risk should approximately equal qty * unitMargin
+      const expectedProfit = availableQuantity * unitMargin;
+      const ratio = profitAtRiskRaw / expectedProfit;
+
+      if (ratio >= 0.5 && ratio <= 2.0) {
+        // Within reasonable tolerance - use pre-computed value
+        profitAtRisk = profitAtRiskRaw;
+      } else {
+        // Pre-computed value is suspect - recompute
+        console.warn(`[Authority] profit_at_risk sanity check FAILED for ${item.sku}: stored=${profitAtRiskRaw}, expected=${expectedProfit.toFixed(2)}, ratio=${ratio.toFixed(2)}. Recomputing.`);
+        profitAtRisk = parseFloat((availableQuantity * unitMargin).toFixed(2));
+      }
+    } else if (unitMargin !== null && availableQuantity > 0) {
+      // Compute from scratch
       profitAtRisk = parseFloat((availableQuantity * unitMargin).toFixed(2));
     }
 
@@ -416,10 +469,64 @@ export async function getAuthoritativeInventory() {
     ? parseFloat(((visibleWithMargin / visibleSKUs.length) * 100).toFixed(1))
     : 100;
 
-  // Calculate total profit at risk
-  const totalProfitAtRisk = sellableSKUs.reduce((sum, i) =>
+  // ========================================================================
+  // CALCULATE TOTAL PROFIT AT RISK - WITH SANITY CHECKS
+  // ========================================================================
+  // Formula: SUM(availableQuantity * unitMargin) for sellable SKUs
+  // Sanity: Should not exceed (totalQuantity * maxReasonableMarginPerUnit)
+  // ========================================================================
+
+  const totalQuantity = sellableSKUs.reduce((sum, i) => sum + (i.availableQuantity || 0), 0);
+  const totalRetailValue = sellableSKUs.reduce((sum, i) => {
+    const qty = i.availableQuantity || 0;
+    const retail = i.pricing?.retail || 0;
+    return sum + (qty * retail);
+  }, 0);
+
+  // Sum profit at risk from individual SKUs
+  const rawTotalProfitAtRisk = sellableSKUs.reduce((sum, i) =>
     sum + (i.pricing.profitAtRisk || 0), 0
   );
+
+  // SANITY CHECK: profit_at_risk should not exceed total retail value
+  // Max possible profit = 100% margin on all items (which is impossible)
+  // Reasonable max = 80% of retail value (very high margins)
+  const maxReasonableProfit = totalRetailValue * 0.8;
+
+  let totalProfitAtRisk = rawTotalProfitAtRisk;
+  let profitAtRiskValidated = true;
+
+  if (rawTotalProfitAtRisk > maxReasonableProfit && maxReasonableProfit > 0) {
+    console.error(`[Authority] ⚠️ PROFIT AT RISK SANITY CHECK FAILED!`);
+    console.error(`[Authority]   Raw total: $${rawTotalProfitAtRisk.toFixed(2)}`);
+    console.error(`[Authority]   Max reasonable (80% of retail): $${maxReasonableProfit.toFixed(2)}`);
+    console.error(`[Authority]   Total retail value: $${totalRetailValue.toFixed(2)}`);
+    console.error(`[Authority]   Total quantity: ${totalQuantity}`);
+    console.error(`[Authority]   This suggests unit_margin values are storing percentages instead of dollars`);
+
+    // Recompute from scratch using safe method
+    totalProfitAtRisk = sellableSKUs.reduce((sum, i) => {
+      const qty = i.availableQuantity || 0;
+      const retail = i.pricing?.retail || 0;
+      const cost = i.pricing?.cost || null;
+      const margin = i.pricing?.margin || null;
+
+      let safeUnitMargin = 0;
+      if (cost !== null && retail > 0) {
+        safeUnitMargin = Math.max(0, retail - cost);
+      } else if (margin !== null && retail > 0) {
+        safeUnitMargin = retail * (margin / 100);
+      }
+
+      return sum + (qty * safeUnitMargin);
+    }, 0);
+
+    profitAtRiskValidated = false;
+    console.log(`[Authority]   Recomputed profit at risk: $${totalProfitAtRisk.toFixed(2)}`);
+  }
+
+  // Compute average profit per unit for logging
+  const avgProfitPerUnit = totalQuantity > 0 ? totalProfitAtRisk / totalQuantity : 0;
 
   // Log coverage summary
   console.log(`[Authority] ========================================`);
@@ -438,7 +545,11 @@ export async function getAuthoritativeInventory() {
   console.log(`[Authority] ----------------------------------------`);
   console.log(`[Authority] COST COVERAGE: ${visibleCostCoverage}% of visible SKUs`);
   console.log(`[Authority] MARGIN COVERAGE: ${visibleMarginCoverage}% of visible SKUs`);
-  console.log(`[Authority] PROFIT AT RISK: $${totalProfitAtRisk.toFixed(2)}`);
+  console.log(`[Authority] ----------------------------------------`);
+  console.log(`[Authority] PROFIT AT RISK: $${totalProfitAtRisk.toFixed(2)}${profitAtRiskValidated ? ' ✓' : ' (recomputed)'}`);
+  console.log(`[Authority] TOTAL RETAIL VALUE: $${totalRetailValue.toFixed(2)}`);
+  console.log(`[Authority] TOTAL UNITS: ${totalQuantity}`);
+  console.log(`[Authority] AVG PROFIT/UNIT: $${avgProfitPerUnit.toFixed(2)}`);
   console.log(`[Authority] ========================================`);
 
   return {
@@ -469,9 +580,17 @@ export async function getAuthoritativeInventory() {
     activeProductCount: sellableProductCount,
     activeVariantCount: sellableSKUs.length,
     // ========================================================================
-    // PROFIT INTELLIGENCE
+    // PROFIT INTELLIGENCE - VALIDATED
     // ========================================================================
     totalProfitAtRisk,
+    profitStats: {
+      validated: profitAtRiskValidated,
+      totalRetailValue,
+      totalQuantity,
+      avgProfitPerUnit: parseFloat(avgProfitPerUnit.toFixed(2)),
+      rawTotal: rawTotalProfitAtRisk,
+      wasRecomputed: !profitAtRiskValidated
+    },
     // ========================================================================
     // DETAILED STATS
     // ========================================================================

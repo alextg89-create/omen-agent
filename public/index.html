@@ -155,6 +155,160 @@
     .freshness-stale { background: #dc3545; }
     .freshness-unknown { background: #6c757d; }
 
+    /* ACTION CARDS - Executive Brief */
+    .action-brief {
+      margin-top: 30px;
+    }
+
+    .action-brief-headline {
+      font-size: 1.3em;
+      color: #fff;
+      padding: 20px;
+      background: linear-gradient(135deg, #1a2a3a 0%, #0a1a2a 100%);
+      border-radius: 8px;
+      margin-bottom: 25px;
+      border-left: 4px solid #4CAF50;
+    }
+
+    .action-brief-section {
+      margin-bottom: 25px;
+    }
+
+    .action-brief-section h4 {
+      font-size: 0.85em;
+      color: #888;
+      text-transform: uppercase;
+      letter-spacing: 1.5px;
+      margin-bottom: 15px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid #333;
+    }
+
+    .action-card {
+      background: #1e1e2e;
+      border-radius: 8px;
+      padding: 18px;
+      margin-bottom: 12px;
+      border-left: 4px solid #888;
+      transition: transform 0.2s, box-shadow 0.2s;
+    }
+
+    .action-card:hover {
+      transform: translateX(4px);
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    }
+
+    .action-card.reorder-now {
+      border-left-color: #f44336;
+      background: linear-gradient(135deg, #2a1a1a 0%, #1e1e2e 100%);
+    }
+
+    .action-card.sell-now {
+      border-left-color: #ff9800;
+      background: linear-gradient(135deg, #2a2a1a 0%, #1e1e2e 100%);
+    }
+
+    .action-card.hold-line {
+      border-left-color: #4CAF50;
+      background: linear-gradient(135deg, #1a2a1a 0%, #1e1e2e 100%);
+    }
+
+    .action-card.deprioritize {
+      border-left-color: #666;
+      opacity: 0.7;
+    }
+
+    .action-card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 10px;
+    }
+
+    .action-card-action {
+      font-size: 0.7em;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      padding: 4px 8px;
+      border-radius: 4px;
+    }
+
+    .action-card-action.reorder-now {
+      background: rgba(244, 67, 54, 0.2);
+      color: #f44336;
+    }
+
+    .action-card-action.sell-now {
+      background: rgba(255, 152, 0, 0.2);
+      color: #ff9800;
+    }
+
+    .action-card-action.hold-line {
+      background: rgba(76, 175, 80, 0.2);
+      color: #4CAF50;
+    }
+
+    .action-card-timeframe {
+      font-size: 0.75em;
+      color: #888;
+      text-transform: uppercase;
+    }
+
+    .action-card-sku {
+      font-size: 1.1em;
+      font-weight: 600;
+      color: #fff;
+      margin-bottom: 8px;
+    }
+
+    .action-card-why {
+      color: #aaa;
+      font-size: 0.9em;
+      margin-bottom: 10px;
+      line-height: 1.4;
+    }
+
+    .action-card-todo {
+      color: #4CAF50;
+      font-weight: 500;
+      margin-bottom: 10px;
+    }
+
+    .action-card-money {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 12px;
+      background: rgba(0,0,0,0.2);
+      border-radius: 4px;
+      font-size: 0.9em;
+    }
+
+    .action-card-money.at-risk {
+      border: 1px solid rgba(244, 67, 54, 0.3);
+      color: #f44336;
+    }
+
+    .action-card-money.opportunity {
+      border: 1px solid rgba(255, 152, 0, 0.3);
+      color: #ff9800;
+    }
+
+    .action-card-money.protect {
+      border: 1px solid rgba(76, 175, 80, 0.3);
+      color: #4CAF50;
+    }
+
+    .ignore-summary {
+      padding: 15px;
+      background: #1a1a1a;
+      border-radius: 4px;
+      color: #666;
+      font-size: 0.9em;
+      text-align: center;
+    }
+
     /* REFUSAL STATE */
     .refusal-state {
       background: rgba(220, 53, 69, 0.1);
@@ -728,6 +882,82 @@
     }
 
     /**
+     * Render an Action Card for the Executive Brief
+     *
+     * Action Card format:
+     * - ACTION: SELL NOW / REORDER NOW / HOLD LINE / DEPRIORITIZE
+     * - SKU: name
+     * - WHY: one sentence
+     * - WHAT TO DO: specific action
+     * - MONEY IMPACT: $ at risk or opportunity
+     * - TIMEFRAME: TODAY / THIS WEEK / SOON
+     */
+    function renderActionCard(card) {
+      const decision = card.decision || 'DEPRIORITIZE';
+      const cardClass = decision.toLowerCase().replace('_', '-');
+
+      // Determine money impact styling and label prefix
+      let moneyClass = 'opportunity';
+      let moneyPrefix = '';
+      if (decision === 'REORDER_NOW') {
+        moneyClass = 'at-risk';
+        moneyPrefix = '⚠️ At risk: ';
+      } else if (decision === 'HOLD_LINE') {
+        moneyClass = 'protect';
+        moneyPrefix = '✓ Protecting: ';
+      } else if (decision === 'SELL_NOW') {
+        moneyClass = 'opportunity';
+        moneyPrefix = '💰 Trapped: ';
+      }
+
+      // Format timeframe label
+      const timeframeLabels = {
+        'TODAY': 'Today',
+        'THIS_WEEK': 'This Week',
+        'SOON': 'Soon',
+        'ONGOING': 'Ongoing',
+        'NONE': ''
+      };
+      const timeframeLabel = timeframeLabels[card.timeframe] || card.timeframe || '';
+
+      // Format action label
+      const actionLabels = {
+        'REORDER_NOW': 'REORDER NOW',
+        'SELL_NOW': 'SELL NOW',
+        'HOLD_LINE': 'HOLD LINE',
+        'DEPRIORITIZE': 'DEPRIORITIZE'
+      };
+      const actionLabel = actionLabels[decision] || decision;
+
+      // Format money impact with context
+      let moneyDisplay = card.moneyImpact || '';
+      if (moneyDisplay && !moneyDisplay.includes('$')) {
+        // If it's just a number, format it
+        const numericValue = parseFloat(moneyDisplay.replace(/[^0-9.-]/g, ''));
+        if (!isNaN(numericValue)) {
+          moneyDisplay = `$${numericValue.toLocaleString()}`;
+        }
+      }
+
+      return `
+        <div class="action-card ${cardClass}">
+          <div class="action-card-header">
+            <span class="action-card-action ${cardClass}">${actionLabel}</span>
+            ${timeframeLabel ? `<span class="action-card-timeframe">${timeframeLabel}</span>` : ''}
+          </div>
+          <div class="action-card-sku">${card.name || card.sku || 'Unknown SKU'}</div>
+          <div class="action-card-why">${card.why || card.reason || ''}</div>
+          <div class="action-card-todo">→ ${card.whatToDo || 'Take action'}</div>
+          ${moneyDisplay ? `
+            <div class="action-card-money ${moneyClass}">
+              ${moneyDisplay}
+            </div>
+          ` : ''}
+        </div>
+      `;
+    }
+
+    /**
      * Validate snapshot freshness against inventory sync
      * Snapshot must be generated AFTER inventory sync
      */
@@ -933,6 +1163,14 @@
       const alternatives = executiveDecision.alternatives || [];
       const inactionCost = executiveDecision.inactionCost || {};
 
+      // Extract ACTION BRIEF - the new canonical decision model
+      const actionBrief = snapshot.actionBrief || {};
+      const actionBriefHeadline = actionBrief.headline || '';
+      const thisWeekCards = actionBrief.thisWeek?.cards || [];
+      const protectCards = actionBrief.protect?.cards || [];
+      const ignoreSummary = actionBrief.ignore || { count: 0 };
+      const briefSummary = actionBrief.summary || {};
+
       let html = `
         <h3 style="color: #fff; margin-bottom: 5px;">${timeframeLabel} Intelligence Brief</h3>
         ${dateRangeStr ? `<div style="color: #666; margin-bottom: 15px; font-size: 0.85em;">${dateRangeStr}</div>` : ''}
@@ -1056,10 +1294,10 @@
       const profitPotential = metrics.inventoryProfitPotential || metrics.totalProfit || 0;
       if (profitPotential > 0) {
         html += `
-          <div class="metric-card">
-            <div class="metric-label">Inventory Profit Potential</div>
+          <div class="metric-card" title="Sum of (quantity × unit margin) for all sellable inventory">
+            <div class="metric-label">Sell-Through Profit</div>
             ${renderValue(profitPotential, 'currency')}
-            ${metrics.profitModel === 'order_driven' ? '<div style="font-size: 0.7em; color: #4CAF50; margin-top: 4px;">Order-driven</div>' : ''}
+            <div style="font-size: 0.7em; color: #888; margin-top: 4px;">If you sold everything at current pricing</div>
           </div>
         `;
       } else if (metrics.totalRevenue && metrics.totalRevenue > 0) {
@@ -1096,120 +1334,106 @@
         html += `<div style="color: #4CAF50; margin-bottom: 15px; font-size: 0.9em;">${snapshot.statusMessage}</div>`;
       }
 
-      // DECISION INTELLIGENCE (not just recommendations)
-      // FILTER: Exclude 0-count items from prominent display
-      const hasStock = (rec) => {
-        const qty = rec.triggeringMetrics?.quantity;
-        // Include if quantity is positive OR if quantity is not specified (trust the recommendation)
-        return qty === undefined || qty === null || qty > 0;
-      };
+      // ═══════════════════════════════════════════════════════════════════════════
+      // ACTION BRIEF - THE canonical decision output
+      // ═══════════════════════════════════════════════════════════════════════════
+      // EXACTLY 4 decision types: SELL_NOW, REORDER_NOW, HOLD_LINE, DEPRIORITIZE
+      // One SKU = One decision. No ambiguity.
+      // ═══════════════════════════════════════════════════════════════════════════
 
-      const promotions = (recommendations.promotions || []).filter(hasStock);
-      const inventoryActions = (recommendations.inventory || []).filter(hasStock);
-      // Note: intelligence, wowInsights, executiveSummary already declared above
-
-      console.log('[UI] Filtered recommendations:', {
-        originalPromotions: (recommendations.promotions || []).length,
-        filteredPromotions: promotions.length,
-        originalInventory: (recommendations.inventory || []).length,
-        filteredInventory: inventoryActions.length
+      console.log('[UI] Action Brief:', {
+        hasActionBrief: !!actionBrief.headline,
+        thisWeekCards: thisWeekCards.length,
+        protectCards: protectCards.length,
+        ignoreCount: ignoreSummary.count,
+        summary: briefSummary
       });
 
-      html += '<div class="recommendations" style="margin-top: 30px;">';
-      html += '<h4 style="color: #fff;">Decision Intelligence</h4>';
+      html += '<div class="action-brief">';
 
-      // WOW INSIGHTS - The headline insights operators need
-      if (wowInsights.length > 0) {
+      // HEADLINE - The one-liner with total $ at stake
+      if (actionBriefHeadline) {
         html += `
-          <div class="recommendation-section" style="background: linear-gradient(135deg, #1a2a1a 0%, #0a1a0a 100%); border-left: 3px solid #4CAF50;">
-            <h4 style="color: #4CAF50;">Key Opportunities</h4>
-            ${wowInsights.slice(0, 3).map(wow => `
-              <div class="recommendation-item" style="padding: 15px; margin-bottom: 10px;">
-                <div style="font-size: 1.1em; color: #fff; margin-bottom: 8px;">
-                  <strong>${wow.headline || 'Opportunity Identified'}</strong>
+          <div class="action-brief-headline">
+            ${actionBriefHeadline}
+          </div>
+        `;
+      }
+
+      // SECTION 1: WHAT TO DO THIS WEEK (REORDER_NOW + SELL_NOW)
+      if (thisWeekCards.length > 0) {
+        html += `
+          <div class="action-brief-section">
+            <h4>WHAT TO DO THIS WEEK</h4>
+            ${thisWeekCards.map(card => renderActionCard(card)).join('')}
+          </div>
+        `;
+      }
+
+      // SECTION 2: PROTECT THESE (HOLD_LINE)
+      if (protectCards.length > 0) {
+        html += `
+          <div class="action-brief-section">
+            <h4>PROTECT THESE</h4>
+            <p style="color: #666; font-size: 0.85em; margin-bottom: 15px;">Do not discount. Maintain margin.</p>
+            ${protectCards.map(card => renderActionCard(card)).join('')}
+          </div>
+        `;
+      }
+
+      // SECTION 3: IGNORE FOR NOW (just a count)
+      if (ignoreSummary.count > 0) {
+        html += `
+          <div class="action-brief-section">
+            <h4>IGNORE FOR NOW</h4>
+            <div class="ignore-summary">
+              ${ignoreSummary.count} items with no urgent action needed
+            </div>
+          </div>
+        `;
+      }
+
+      // FALLBACK: If no action brief, show WOW insights or legacy recommendations
+      if (!actionBriefHeadline && thisWeekCards.length === 0 && protectCards.length === 0) {
+        // Fall back to WOW insights if available
+        if (wowInsights.length > 0) {
+          html += `
+            <div class="action-brief-section">
+              <h4>KEY OPPORTUNITIES</h4>
+              ${wowInsights.slice(0, 3).map(wow => `
+                <div class="action-card sell-now">
+                  <div class="action-card-header">
+                    <span class="action-card-action sell-now">OPPORTUNITY</span>
+                  </div>
+                  <div class="action-card-sku">${wow.headline || 'Opportunity Identified'}</div>
+                  <div class="action-card-why">${wow.insight || ''}</div>
+                  <div class="action-card-todo">→ ${wow.action || 'Take action'}</div>
+                  ${wow.dollarImpact ? `
+                    <div class="action-card-money opportunity">
+                      Potential: $${wow.dollarImpact.toLocaleString()}
+                    </div>
+                  ` : ''}
                 </div>
-                <div style="color: #ccc; margin-bottom: 8px;">${wow.insight || ''}</div>
-                <div style="color: #4CAF50; font-weight: 500;">→ ${wow.action || 'Take action'}</div>
-                ${wow.dollarImpact ? `<div style="color: #FFD700; margin-top: 5px;">Potential impact: $${wow.dollarImpact.toLocaleString()}</div>` : ''}
-              </div>
-            `).join('')}
-          </div>
-        `;
+              `).join('')}
+            </div>
+          `;
+        } else {
+          html += '<p style="color: #888; padding: 20px; background: #1a1a1a; border-radius: 4px; text-align: center;">Generate a snapshot to see action brief.</p>';
+        }
       }
 
-      // URGENT ACTIONS - Things that need immediate attention
-      const urgentActions = inventoryActions.filter(r => r.severity === 'high' || r.action === 'REORDER_URGENT');
-      if (urgentActions.length > 0) {
+      // SUMMARY STATS (optional, collapsed)
+      if (briefSummary.total > 0) {
         html += `
-          <div class="recommendation-section" style="background: linear-gradient(135deg, #2a1a1a 0%, #1a0a0a 100%); border-left: 3px solid #f44336;">
-            <h4 style="color: #f44336;">Urgent Actions Required</h4>
-            ${urgentActions.slice(0, 3).map(rec => {
-              const margin = rec.triggeringMetrics?.margin;
-              const quantity = rec.triggeringMetrics?.quantity || 0;
-              const dollarAtRisk = margin && quantity ? Math.round(quantity * (rec.triggeringMetrics?.retail || 0) * (margin / 100)) : null;
-              return `
-                <div class="recommendation-item" style="padding: 12px; margin-bottom: 8px;">
-                  <strong style="color: #fff;">${rec.name || 'Unknown'}</strong>
-                  <div style="color: #ccc; margin: 5px 0;">${rec.reason || 'Action needed'}</div>
-                  ${dollarAtRisk ? `<div style="color: #f44336;">$${dollarAtRisk.toLocaleString()} at risk</div>` : ''}
-                </div>
-              `;
-            }).join('')}
+          <div style="margin-top: 20px; padding: 15px; background: #1a1a1a; border-radius: 4px; font-size: 0.85em; color: #666;">
+            <strong>Summary:</strong>
+            ${briefSummary.reorderNow > 0 ? `<span style="color: #f44336; margin-left: 10px;">${briefSummary.reorderNow} reorder</span>` : ''}
+            ${briefSummary.sellNow > 0 ? `<span style="color: #ff9800; margin-left: 10px;">${briefSummary.sellNow} sell now</span>` : ''}
+            ${briefSummary.holdLine > 0 ? `<span style="color: #4CAF50; margin-left: 10px;">${briefSummary.holdLine} protect</span>` : ''}
+            ${briefSummary.deprioritize > 0 ? `<span style="margin-left: 10px;">${briefSummary.deprioritize} ignore</span>` : ''}
+            <span style="margin-left: 15px;">(${briefSummary.total} SKUs classified)</span>
           </div>
         `;
-      }
-
-      // PROMOTION OPPORTUNITIES - With dollar context
-      if (promotions.length > 0) {
-        html += `
-          <div class="recommendation-section">
-            <h4>Promotion Opportunities</h4>
-            ${promotions.slice(0, 5).map(rec => {
-              const margin = rec.triggeringMetrics?.margin;
-              const velocity = rec.triggeringMetrics?.velocity;
-              return `
-                <div class="recommendation-item" style="padding: 12px; margin-bottom: 8px;">
-                  <strong style="color: #fff;">${rec.name || 'Unknown'}</strong>
-                  ${margin ? `<span style="color: #4CAF50; margin-left: 10px;">${margin.toFixed(1)}% margin</span>` : ''}
-                  <div style="color: #ccc; margin: 5px 0;">${rec.reason || 'Good promotion candidate'}</div>
-                  ${velocity ? `<div style="color: #888; font-size: 0.9em;">Moving ${velocity} units/day</div>` : ''}
-                </div>
-              `;
-            }).join('')}
-          </div>
-        `;
-      }
-
-      // INVENTORY MONITORING - Non-urgent items
-      const monitorItems = inventoryActions.filter(r => r.severity !== 'high' && r.action !== 'REORDER_URGENT');
-      if (monitorItems.length > 0) {
-        html += `
-          <div class="recommendation-section">
-            <h4>Monitor These Items</h4>
-            ${monitorItems.slice(0, 3).map(rec => `
-              <div class="recommendation-item" style="padding: 10px; margin-bottom: 6px;">
-                <strong style="color: #fff;">${rec.name || 'Unknown'}</strong>
-                <div style="color: #888; font-size: 0.9em;">${rec.reason || 'Keep an eye on this'}</div>
-              </div>
-            `).join('')}
-          </div>
-        `;
-      }
-
-      // EXECUTIVE SUMMARY - If available
-      if (executiveSummary.verdict) {
-        html += `
-          <div class="recommendation-section" style="margin-top: 20px; background: #1a1a2e; padding: 15px; border-radius: 4px;">
-            <h4 style="color: #fff; margin-bottom: 10px;">Bottom Line</h4>
-            <div style="color: #ccc;">${executiveSummary.verdict}</div>
-            ${executiveSummary.topAction ? `<div style="color: #4CAF50; margin-top: 10px;">→ ${executiveSummary.topAction}</div>` : ''}
-          </div>
-        `;
-      }
-
-      // Fallback if nothing to show
-      if (wowInsights.length === 0 && promotions.length === 0 && inventoryActions.length === 0) {
-        html += '<p style="color: #888; padding: 15px; background: #1a1a1a; border-radius: 4px;">Generate a snapshot to see decision intelligence.</p>';
       }
 
       html += '</div>';
