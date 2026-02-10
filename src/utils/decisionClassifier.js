@@ -1,19 +1,36 @@
 /**
- * Decision Classifier - CANONICAL DECISION MODEL
+ * ════════════════════════════════════════════════════════════════════════════
+ * SKU FACT LAYER + DECISION CLASSIFIER
+ * ════════════════════════════════════════════════════════════════════════════
  *
- * Every SKU gets classified into EXACTLY one of 4 decision types:
+ * ARCHITECTURE:
+ * 1. SKU Fact Layer builds VALIDATED per-SKU facts BEFORE any decision logic
+ * 2. Decision logic ONLY consumes fact objects - NO direct raw data reads
+ * 3. SKUs without complete facts are EXCLUDED entirely - no partial cards
  *
- * 1. SELL_NOW     - Dead/slow inventory with profit trapped → promote/feature/discount
- * 2. REORDER_NOW  - High velocity SKUs at risk of stockout → reorder immediately
- * 3. HOLD_LINE    - Strong margin SKUs that should NOT be discounted
- * 4. DEPRIORITIZE - Low velocity + low margin items (no action needed)
+ * FACT OBJECT SCHEMA:
+ * {
+ *   sku: string,
+ *   product_name: string,
+ *   variant_name: string,
+ *   units_sold_in_period: number,
+ *   revenue_in_period: number,
+ *   unit_cost: number,
+ *   unit_margin: number,
+ *   available_quantity: number,
+ *   days_of_coverage: number | null,
+ *   velocity: number
+ * }
  *
- * This is THE single canonical model. No overlapping signals.
- * One SKU = One decision. No ambiguity.
+ * OUTPUT RULES:
+ * - Max 3 actions
+ * - Each action references specific SKU
+ * - Each action includes numeric upside/downside
+ * - Zero valid actions → "No high-confidence actions this period."
  */
 
 // ============================================================================
-// DECISION TYPES - The ONLY 4 types that exist
+// DECISION TYPES
 // ============================================================================
 export const DECISION_TYPES = {
   SELL_NOW: 'SELL_NOW',
@@ -23,244 +40,332 @@ export const DECISION_TYPES = {
 };
 
 // ============================================================================
-// THRESHOLDS - Tunable parameters for classification
+// THRESHOLDS
 // ============================================================================
 const THRESHOLDS = {
-  // Velocity thresholds (units per day)
-  HIGH_VELOCITY: 0.5,      // > 0.5/day = fast mover
-  LOW_VELOCITY: 0.2,       // < 0.2/day = slow mover
-
-  // Margin thresholds (percent)
-  HIGH_MARGIN: 50,         // >= 50% = protect margin
-  LOW_MARGIN: 35,          // < 35% = low margin
-
-  // Stock thresholds
-  LOW_STOCK_DAYS: 10,      // <= 10 days = stockout risk
-  CRITICAL_STOCK_DAYS: 5,  // <= 5 days = urgent reorder
-
-  // Minimum stock for action
-  MIN_STOCK_FOR_SELL: 3,   // Need at least 3 units to recommend sell action
+  HIGH_VELOCITY: 0.5,
+  LOW_VELOCITY: 0.2,
+  HIGH_MARGIN: 50,
+  LOW_MARGIN: 35,
+  LOW_STOCK_DAYS: 10,
+  CRITICAL_STOCK_DAYS: 5,
+  MIN_STOCK_FOR_SELL: 3
 };
 
+// ============================================================================
+// SKU FACT LAYER
+// ============================================================================
+
 /**
- * Classify a single SKU into one of 4 decision types
+ * Build a validated SKU fact object.
+ * Returns null if ANY required field cannot be validated.
  *
- * Priority order (first match wins):
- * 1. REORDER_NOW - High velocity + low stock (imminent stockout)
- * 2. SELL_NOW    - Slow velocity + has stock (trapped profit)
- * 3. HOLD_LINE   - High margin + good velocity (protect this)
- * 4. DEPRIORITIZE - Everything else (no urgent action)
- *
- * @param {object} item - Enriched inventory item
+ * @param {object} item - Raw inventory item
  * @param {object} velocityData - Velocity metrics for this SKU
- * @returns {object} Decision classification
+ * @param {object} periodSales - Sales data for the selected period
+ * @returns {object|null} Validated fact object or null if incomplete
  */
-export function classifySKU(item, velocityData = null) {
-  const sku = item.sku || item.strain || 'UNKNOWN';
-  const name = item.name || `${item.strain} (${item.unit})`;
-  const quantity = item.quantity || 0;
-  const margin = item.pricing?.margin ?? null;
-  const retail = item.pricing?.retail ?? null;
-  const cost = item.pricing?.cost ?? null;
-
-  // Get velocity data
-  const dailyVelocity = velocityData?.dailyVelocity || 0;
-  const daysUntilStockout = velocityData?.daysUntilStockout ?? null;
-
-  // Skip out-of-stock items (no decision possible)
-  if (quantity <= 0) {
-    return {
-      sku,
-      name,
-      decision: null,
-      reason: 'Out of stock - no action possible',
-      excluded: true
-    };
+export function buildSKUFact(item, velocityData = null, periodSales = null) {
+  // ════════════════════════════════════════════════════════════════════════
+  // REQUIRED: SKU identifier
+  // ════════════════════════════════════════════════════════════════════════
+  const sku = item.sku;
+  if (!sku || typeof sku !== 'string' || sku.trim() === '' || sku === 'UNKNOWN') {
+    return null; // EXCLUDE: No valid SKU
   }
 
-  // Calculate potential profit at stake
-  const profitPerUnit = (retail && margin) ? retail * (margin / 100) : null;
-  const totalProfitAtRisk = profitPerUnit ? quantity * profitPerUnit : null;
-
-  // ========================================================================
-  // RULE 1: REORDER_NOW - High velocity + stockout imminent
-  // ========================================================================
-  const isHighVelocity = dailyVelocity >= THRESHOLDS.HIGH_VELOCITY;
-  const isStockoutRisk = daysUntilStockout !== null && daysUntilStockout <= THRESHOLDS.LOW_STOCK_DAYS;
-  const isCriticalStock = daysUntilStockout !== null && daysUntilStockout <= THRESHOLDS.CRITICAL_STOCK_DAYS;
-
-  if (isHighVelocity && isStockoutRisk) {
-    const dailyProfit = profitPerUnit ? dailyVelocity * profitPerUnit : null;
-    const weeklyRisk = dailyProfit ? dailyProfit * 7 : null;
-
-    return {
-      sku,
-      name,
-      decision: DECISION_TYPES.REORDER_NOW,
-      reason: `Selling ${dailyVelocity.toFixed(1)}/day, only ${daysUntilStockout} days of stock left`,
-      whatToDo: isCriticalStock
-        ? `Reorder TODAY - you'll be out in ${daysUntilStockout} days`
-        : `Place reorder this week to avoid stockout`,
-      moneyImpact: weeklyRisk
-        ? `$${Math.round(weeklyRisk).toLocaleString()}/week at risk if stocked out`
-        : 'Revenue at risk - exact amount unknown',
-      timeframe: isCriticalStock ? 'TODAY' : 'THIS_WEEK',
-      urgency: isCriticalStock ? 3 : 2,
-      metrics: {
-        quantity,
-        dailyVelocity,
-        daysUntilStockout,
-        margin,
-        profitPerUnit,
-        weeklyProfit: dailyProfit ? dailyProfit * 7 : null
-      }
-    };
+  // ════════════════════════════════════════════════════════════════════════
+  // REQUIRED: Product name (non-empty, non-Unknown)
+  // ════════════════════════════════════════════════════════════════════════
+  const rawProductName = item.product_name || item.strain || item.name;
+  if (!rawProductName || typeof rawProductName !== 'string') {
+    return null; // EXCLUDE: No product name
+  }
+  const product_name = rawProductName.trim();
+  if (product_name === '' || product_name.toLowerCase() === 'unknown') {
+    return null; // EXCLUDE: Invalid product name
   }
 
-  // ========================================================================
-  // RULE 2: SELL_NOW - Slow velocity + has stock = trapped profit
-  // ========================================================================
-  const isSlowVelocity = dailyVelocity < THRESHOLDS.LOW_VELOCITY;
-  const hasStock = quantity >= THRESHOLDS.MIN_STOCK_FOR_SELL;
-  const hasMargin = margin !== null && margin > 0;
-
-  if (isSlowVelocity && hasStock && hasMargin) {
-    // Calculate how long it would take to sell at current pace
-    const daysToSellout = dailyVelocity > 0 ? Math.round(quantity / dailyVelocity) : 999;
-
-    return {
-      sku,
-      name,
-      decision: DECISION_TYPES.SELL_NOW,
-      reason: daysToSellout > 30
-        ? `Moving at ${dailyVelocity.toFixed(2)}/day - ${quantity} units will take ${daysToSellout}+ days to sell`
-        : `Slow velocity (${dailyVelocity.toFixed(2)}/day) - profit sitting idle`,
-      whatToDo: margin >= THRESHOLDS.HIGH_MARGIN
-        ? 'Feature prominently - high margin covers promotion cost'
-        : 'Consider 15-20% discount to move inventory',
-      moneyImpact: totalProfitAtRisk
-        ? `$${Math.round(totalProfitAtRisk).toLocaleString()} profit trapped in slow inventory`
-        : 'Profit trapped - exact amount unknown',
-      timeframe: 'THIS_WEEK',
-      urgency: 1,
-      metrics: {
-        quantity,
-        dailyVelocity,
-        daysToSellout,
-        margin,
-        profitPerUnit,
-        totalProfitAtRisk
-      }
-    };
+  // ════════════════════════════════════════════════════════════════════════
+  // REQUIRED: Variant name (non-empty, non-Unknown)
+  // ════════════════════════════════════════════════════════════════════════
+  const rawVariantName = item.variant_name || item.unit;
+  if (!rawVariantName || typeof rawVariantName !== 'string') {
+    return null; // EXCLUDE: No variant name
+  }
+  const variant_name = rawVariantName.trim();
+  if (variant_name === '' || variant_name.toLowerCase() === 'unknown') {
+    return null; // EXCLUDE: Invalid variant name
   }
 
-  // ========================================================================
-  // RULE 3: HOLD_LINE - High margin + reasonable velocity = protect
-  // ========================================================================
-  const isHighMargin = margin !== null && margin >= THRESHOLDS.HIGH_MARGIN;
-  const hasReasonableVelocity = dailyVelocity >= THRESHOLDS.LOW_VELOCITY;
+  // ════════════════════════════════════════════════════════════════════════
+  // REQUIRED: Available quantity (finite number >= 0)
+  // ════════════════════════════════════════════════════════════════════════
+  const rawQuantity = item.availableQuantity ?? item.quantity ?? item.quantity_on_hand;
+  if (typeof rawQuantity !== 'number' || !isFinite(rawQuantity) || rawQuantity < 0) {
+    return null; // EXCLUDE: Invalid quantity
+  }
+  const available_quantity = rawQuantity;
 
-  if (isHighMargin && hasReasonableVelocity) {
-    const weeklyProfit = profitPerUnit ? dailyVelocity * profitPerUnit * 7 : null;
+  // ════════════════════════════════════════════════════════════════════════
+  // REQUIRED: Unit cost (finite number > 0)
+  // ════════════════════════════════════════════════════════════════════════
+  const rawCost = item.pricing?.cost ?? item.unit_cost ?? item.cost;
+  if (typeof rawCost !== 'number' || !isFinite(rawCost) || rawCost <= 0) {
+    return null; // EXCLUDE: Invalid unit cost
+  }
+  const unit_cost = rawCost;
 
-    return {
-      sku,
-      name,
-      decision: DECISION_TYPES.HOLD_LINE,
-      reason: `${Math.round(margin)}% margin with steady ${dailyVelocity.toFixed(1)}/day velocity`,
-      whatToDo: 'Do NOT discount. Protect margin. Ensure stock levels.',
-      moneyImpact: weeklyProfit
-        ? `$${Math.round(weeklyProfit).toLocaleString()}/week profit at full margin`
-        : 'Strong margin contributor',
-      timeframe: 'ONGOING',
-      urgency: 0,
-      metrics: {
-        quantity,
-        dailyVelocity,
-        daysUntilStockout,
-        margin,
-        profitPerUnit,
-        weeklyProfit
-      }
-    };
+  // ════════════════════════════════════════════════════════════════════════
+  // REQUIRED: Retail price (finite number > cost)
+  // ════════════════════════════════════════════════════════════════════════
+  const rawRetail = item.pricing?.retail ?? item.retail ?? item.price;
+  if (typeof rawRetail !== 'number' || !isFinite(rawRetail) || rawRetail <= unit_cost) {
+    return null; // EXCLUDE: Invalid retail price
+  }
+  const retail = rawRetail;
+
+  // ════════════════════════════════════════════════════════════════════════
+  // DERIVED: Unit margin (retail - cost, must be > 0)
+  // ════════════════════════════════════════════════════════════════════════
+  const unit_margin = parseFloat((retail - unit_cost).toFixed(2));
+  if (!isFinite(unit_margin) || unit_margin <= 0) {
+    return null; // EXCLUDE: Invalid margin
   }
 
-  // ========================================================================
-  // RULE 4: DEPRIORITIZE - Low velocity + low margin = ignore for now
-  // ========================================================================
-  const isLowMargin = margin === null || margin < THRESHOLDS.LOW_MARGIN;
+  // ════════════════════════════════════════════════════════════════════════
+  // DERIVED: Margin percent
+  // ════════════════════════════════════════════════════════════════════════
+  const margin_percent = parseFloat(((unit_margin / retail) * 100).toFixed(2));
 
-  if (isSlowVelocity && isLowMargin) {
-    return {
-      sku,
-      name,
-      decision: DECISION_TYPES.DEPRIORITIZE,
-      reason: `Low velocity (${dailyVelocity.toFixed(2)}/day) + ${margin ? Math.round(margin) + '% margin' : 'unknown margin'}`,
-      whatToDo: 'No action needed. Let it sell naturally.',
-      moneyImpact: totalProfitAtRisk
-        ? `$${Math.round(totalProfitAtRisk).toLocaleString()} - not worth active promotion`
-        : 'Minimal profit impact',
-      timeframe: 'NONE',
-      urgency: -1,
-      metrics: {
-        quantity,
-        dailyVelocity,
-        margin,
-        totalProfitAtRisk
-      }
-    };
+  // ════════════════════════════════════════════════════════════════════════
+  // VELOCITY: Daily velocity (default 0 if no data, must be finite)
+  // ════════════════════════════════════════════════════════════════════════
+  const rawVelocity = velocityData?.dailyVelocity ?? velocityData?.avgDaily ?? velocityData?.avg_daily ?? 0;
+  if (typeof rawVelocity !== 'number' || !isFinite(rawVelocity)) {
+    return null; // EXCLUDE: Invalid velocity
+  }
+  const velocity = Math.max(0, rawVelocity);
+
+  // ════════════════════════════════════════════════════════════════════════
+  // DERIVED: Days of coverage (quantity / velocity, null if velocity = 0)
+  // ════════════════════════════════════════════════════════════════════════
+  let days_of_coverage = null;
+  if (velocity > 0 && available_quantity > 0) {
+    days_of_coverage = Math.round(available_quantity / velocity);
+    if (!isFinite(days_of_coverage)) {
+      days_of_coverage = null;
+    }
   }
 
-  // ========================================================================
-  // FALLBACK: DEPRIORITIZE - Default when no clear signal
-  // ========================================================================
+  // ════════════════════════════════════════════════════════════════════════
+  // PERIOD SALES: Units sold and revenue in period (default 0)
+  // ════════════════════════════════════════════════════════════════════════
+  const units_sold_in_period = periodSales?.units_sold ?? periodSales?.total_sold ?? velocityData?.total_sold ?? 0;
+  const revenue_in_period = periodSales?.revenue ?? periodSales?.total_revenue ?? velocityData?.total_revenue ?? 0;
+
+  // ════════════════════════════════════════════════════════════════════════
+  // FACT OBJECT: All fields validated
+  // ════════════════════════════════════════════════════════════════════════
   return {
     sku,
-    name,
-    decision: DECISION_TYPES.DEPRIORITIZE,
-    reason: 'No urgent signals detected',
-    whatToDo: 'Monitor. No immediate action required.',
-    moneyImpact: totalProfitAtRisk
-      ? `$${Math.round(totalProfitAtRisk).toLocaleString()} inventory value`
-      : 'Standard inventory',
-    timeframe: 'NONE',
-    urgency: -1,
-    metrics: {
-      quantity,
-      dailyVelocity,
-      margin,
-      totalProfitAtRisk
-    }
+    product_name,
+    variant_name,
+    display_name: `${product_name} (${variant_name})`,
+    available_quantity,
+    unit_cost,
+    retail,
+    unit_margin,
+    margin_percent,
+    velocity,
+    days_of_coverage,
+    units_sold_in_period: isFinite(units_sold_in_period) ? units_sold_in_period : 0,
+    revenue_in_period: isFinite(revenue_in_period) ? revenue_in_period : 0
   };
 }
 
 /**
- * Classify all SKUs in an inventory snapshot
+ * Build SKU Fact Table for entire inventory.
+ * EXCLUDES any SKU that cannot produce a complete fact object.
  *
- * @param {Array} inventory - Enriched inventory items
- * @param {Array} velocityMetrics - Velocity data for SKUs
- * @returns {object} Classified SKUs grouped by decision type
+ * @param {Array} inventory - Raw inventory items
+ * @param {Array} velocityMetrics - Velocity data array
+ * @param {object} periodSalesMap - Map of SKU → period sales
+ * @returns {object} { facts: Map<sku, fact>, excluded: number, reasons: object }
  */
-export function classifyAllSKUs(inventory, velocityMetrics = []) {
+export function buildSKUFactTable(inventory, velocityMetrics = [], periodSalesMap = {}) {
+  const facts = new Map();
+  let excluded = 0;
+  const reasons = {
+    no_sku: 0,
+    no_product_name: 0,
+    no_variant_name: 0,
+    invalid_quantity: 0,
+    invalid_cost: 0,
+    invalid_retail: 0,
+    invalid_margin: 0,
+    invalid_velocity: 0
+  };
+
   // Build velocity lookup
   const velocityMap = new Map();
   for (const v of velocityMetrics) {
-    velocityMap.set(v.sku, v);
-  }
-
-  // Classify each SKU
-  const classified = [];
-  for (const item of inventory) {
-    const sku = item.sku || item.strain;
-    const velocity = velocityMap.get(sku) || null;
-    const classification = classifySKU(item, velocity);
-
-    if (!classification.excluded) {
-      classified.push(classification);
+    if (v.sku) {
+      velocityMap.set(v.sku, v);
     }
   }
 
-  // Group by decision type
+  // Process each inventory item
+  for (const item of inventory) {
+    const sku = item.sku;
+    const velocityData = velocityMap.get(sku) || null;
+    const periodSales = periodSalesMap[sku] || null;
+
+    const fact = buildSKUFact(item, velocityData, periodSales);
+
+    if (fact) {
+      facts.set(sku, fact);
+    } else {
+      excluded++;
+      // Track reason (simplified)
+      if (!item.sku) reasons.no_sku++;
+      else if (!item.product_name && !item.strain && !item.name) reasons.no_product_name++;
+      else if (!item.variant_name && !item.unit) reasons.no_variant_name++;
+    }
+  }
+
+  console.log(`[FactLayer] Built ${facts.size} validated facts, excluded ${excluded} SKUs`);
+
+  return { facts, excluded, reasons };
+}
+
+// ============================================================================
+// DECISION LOGIC - CONSUMES ONLY FACT OBJECTS
+// ============================================================================
+
+/**
+ * Classify a SKU based on its fact object.
+ * ONLY reads from the validated fact - NO raw data access.
+ *
+ * @param {object} fact - Validated SKU fact object
+ * @returns {object} Decision classification
+ */
+export function classifyFromFact(fact) {
+  const {
+    sku,
+    display_name,
+    available_quantity,
+    unit_margin,
+    margin_percent,
+    velocity,
+    days_of_coverage
+  } = fact;
+
+  // Skip out-of-stock items
+  if (available_quantity <= 0) {
+    return { sku, decision: null, excluded: true };
+  }
+
+  // Calculate profit values from FACT data only
+  const profit_at_risk = parseFloat((available_quantity * unit_margin).toFixed(2));
+  const daily_profit = parseFloat((velocity * unit_margin).toFixed(2));
+  const weekly_profit = parseFloat((daily_profit * 7).toFixed(2));
+
+  // ════════════════════════════════════════════════════════════════════════
+  // RULE 1: REORDER_NOW - High velocity + low stock coverage
+  // ════════════════════════════════════════════════════════════════════════
+  const isHighVelocity = velocity >= THRESHOLDS.HIGH_VELOCITY;
+  const isLowCoverage = days_of_coverage !== null && days_of_coverage <= THRESHOLDS.LOW_STOCK_DAYS;
+  const isCriticalCoverage = days_of_coverage !== null && days_of_coverage <= THRESHOLDS.CRITICAL_STOCK_DAYS;
+
+  if (isHighVelocity && isLowCoverage) {
+    return {
+      sku,
+      name: display_name,
+      decision: DECISION_TYPES.REORDER_NOW,
+      reason: `Selling ${velocity.toFixed(1)}/day with only ${days_of_coverage} days of stock`,
+      whatToDo: isCriticalCoverage
+        ? `Reorder immediately - stockout in ${days_of_coverage} days`
+        : `Place reorder this week`,
+      dollarImpact: weekly_profit,
+      impactLabel: `$${weekly_profit.toLocaleString()}/week at risk`,
+      timeframe: isCriticalCoverage ? 'TODAY' : 'THIS_WEEK',
+      urgency: isCriticalCoverage ? 3 : 2,
+      fact // Include fact for transparency
+    };
+  }
+
+  // ════════════════════════════════════════════════════════════════════════
+  // RULE 2: SELL_NOW - Slow velocity + has stock = trapped profit
+  // ════════════════════════════════════════════════════════════════════════
+  const isSlowVelocity = velocity < THRESHOLDS.LOW_VELOCITY;
+  const hasStock = available_quantity >= THRESHOLDS.MIN_STOCK_FOR_SELL;
+  const hasMargin = margin_percent > 0;
+
+  if (isSlowVelocity && hasStock && hasMargin) {
+    const daysToSellout = velocity > 0 ? Math.round(available_quantity / velocity) : 999;
+
+    return {
+      sku,
+      name: display_name,
+      decision: DECISION_TYPES.SELL_NOW,
+      reason: `${available_quantity} units moving at ${velocity.toFixed(2)}/day (${daysToSellout}+ days to sell)`,
+      whatToDo: margin_percent >= THRESHOLDS.HIGH_MARGIN
+        ? 'Feature prominently - high margin covers promotion cost'
+        : 'Consider 15-20% discount to accelerate',
+      dollarImpact: profit_at_risk,
+      impactLabel: `$${profit_at_risk.toLocaleString()} trapped`,
+      timeframe: 'THIS_WEEK',
+      urgency: 1,
+      fact
+    };
+  }
+
+  // ════════════════════════════════════════════════════════════════════════
+  // RULE 3: HOLD_LINE - High margin + reasonable velocity
+  // ════════════════════════════════════════════════════════════════════════
+  const isHighMargin = margin_percent >= THRESHOLDS.HIGH_MARGIN;
+  const hasReasonableVelocity = velocity >= THRESHOLDS.LOW_VELOCITY;
+
+  if (isHighMargin && hasReasonableVelocity) {
+    return {
+      sku,
+      name: display_name,
+      decision: DECISION_TYPES.HOLD_LINE,
+      reason: `${margin_percent.toFixed(0)}% margin with ${velocity.toFixed(1)}/day velocity`,
+      whatToDo: 'Do NOT discount - protect margin',
+      dollarImpact: weekly_profit,
+      impactLabel: `$${weekly_profit.toLocaleString()}/week at full margin`,
+      timeframe: 'ONGOING',
+      urgency: 0,
+      fact
+    };
+  }
+
+  // ════════════════════════════════════════════════════════════════════════
+  // RULE 4: DEPRIORITIZE - Default (no urgent action)
+  // ════════════════════════════════════════════════════════════════════════
+  return {
+    sku,
+    name: display_name,
+    decision: DECISION_TYPES.DEPRIORITIZE,
+    reason: 'No urgent signals',
+    whatToDo: 'Monitor - no action needed',
+    dollarImpact: 0,
+    impactLabel: null,
+    timeframe: 'NONE',
+    urgency: -1,
+    fact
+  };
+}
+
+/**
+ * Classify all SKUs from fact table.
+ *
+ * @param {Map} factTable - Map of SKU → validated fact
+ * @returns {object} Classified decisions grouped by type
+ */
+export function classifyAllFromFacts(factTable) {
   const grouped = {
     [DECISION_TYPES.REORDER_NOW]: [],
     [DECISION_TYPES.SELL_NOW]: [],
@@ -268,228 +373,181 @@ export function classifyAllSKUs(inventory, velocityMetrics = []) {
     [DECISION_TYPES.DEPRIORITIZE]: []
   };
 
-  for (const c of classified) {
-    if (c.decision && grouped[c.decision]) {
-      grouped[c.decision].push(c);
+  for (const [sku, fact] of factTable) {
+    const decision = classifyFromFact(fact);
+
+    if (!decision.excluded && decision.decision && grouped[decision.decision]) {
+      grouped[decision.decision].push(decision);
     }
   }
 
-  // Sort each group by urgency (highest first)
-  for (const key of Object.keys(grouped)) {
-    grouped[key].sort((a, b) => (b.urgency || 0) - (a.urgency || 0));
+  // Sort by urgency (highest first), then by dollar impact
+  for (const type of Object.keys(grouped)) {
+    grouped[type].sort((a, b) => {
+      if (b.urgency !== a.urgency) return b.urgency - a.urgency;
+      return (b.dollarImpact || 0) - (a.dollarImpact || 0);
+    });
   }
 
   return {
     byType: grouped,
-    all: classified,
     summary: {
       reorderNow: grouped[DECISION_TYPES.REORDER_NOW].length,
       sellNow: grouped[DECISION_TYPES.SELL_NOW].length,
       holdLine: grouped[DECISION_TYPES.HOLD_LINE].length,
       deprioritize: grouped[DECISION_TYPES.DEPRIORITIZE].length,
-      total: classified.length
+      total: factTable.size
     }
   };
 }
 
-/**
- * Generate Action Cards for the UI
- *
- * Each card has:
- * - ACTION: SELL NOW / REORDER NOW / HOLD LINE / DEPRIORITIZE
- * - SKU: name/unit
- * - WHY: one sentence
- * - WHAT TO DO: specific action
- * - MONEY IMPACT: $ at risk or opportunity
- * - TIMEFRAME: TODAY / THIS WEEK / SOON
- *
- * @param {Array} classified - Classified SKUs
- * @param {object} options - Options for card generation
- * @returns {Array} Action cards
- */
-export function generateActionCards(classified, options = {}) {
-  const {
-    maxCards = 10,
-    includeDeprioritize = false
-  } = options;
-
-  const cards = [];
-
-  // REORDER_NOW cards first (most urgent)
-  for (const item of classified.byType[DECISION_TYPES.REORDER_NOW].slice(0, 5)) {
-    cards.push(formatActionCard(item, {
-      actionLabel: 'REORDER NOW',
-      actionColor: 'red',
-      icon: '🔴'
-    }));
-  }
-
-  // SELL_NOW cards next
-  for (const item of classified.byType[DECISION_TYPES.SELL_NOW].slice(0, 3)) {
-    cards.push(formatActionCard(item, {
-      actionLabel: 'SELL NOW',
-      actionColor: 'orange',
-      icon: '🟠'
-    }));
-  }
-
-  // HOLD_LINE cards (protection reminders)
-  for (const item of classified.byType[DECISION_TYPES.HOLD_LINE].slice(0, 2)) {
-    cards.push(formatActionCard(item, {
-      actionLabel: 'HOLD LINE',
-      actionColor: 'green',
-      icon: '🟢'
-    }));
-  }
-
-  // DEPRIORITIZE only if requested
-  if (includeDeprioritize) {
-    for (const item of classified.byType[DECISION_TYPES.DEPRIORITIZE].slice(0, 2)) {
-      cards.push(formatActionCard(item, {
-        actionLabel: 'DEPRIORITIZE',
-        actionColor: 'gray',
-        icon: '⚪'
-      }));
-    }
-  }
-
-  return cards.slice(0, maxCards);
-}
+// ============================================================================
+// EXECUTIVE ACTION BRIEF - MAX 3 ACTIONS
+// ============================================================================
 
 /**
- * Format a single action card
- */
-function formatActionCard(item, display) {
-  return {
-    // Display properties
-    action: display.actionLabel,
-    actionColor: display.actionColor,
-    icon: display.icon,
-
-    // Core content
-    sku: item.sku,
-    name: item.name,
-    why: item.reason,
-    whatToDo: item.whatToDo,
-    moneyImpact: item.moneyImpact,
-    timeframe: item.timeframe,
-
-    // Raw data for UI logic
-    decision: item.decision,
-    urgency: item.urgency,
-    metrics: item.metrics
-  };
-}
-
-/**
- * Generate Executive Action Brief
+ * Generate Executive Action Brief.
  *
- * This is THE output for the snapshot page:
- * - Section 1: "WHAT TO DO THIS WEEK" (REORDER_NOW + SELL_NOW)
- * - Section 2: "PROTECT THESE" (HOLD_LINE)
- * - Section 3: "IGNORE FOR NOW" (DEPRIORITIZE count only)
+ * OUTPUT RULES:
+ * - Max 3 actions total
+ * - Each action references specific SKU with numeric impact
+ * - Zero valid actions → "No high-confidence actions this period."
  *
- * @param {object} snapshot - Full snapshot with intelligence
- * @returns {object} Executive action brief
+ * @param {object} snapshot - Snapshot with enrichedInventory and velocity
+ * @returns {object} Action brief for UI
  */
 export function generateExecutiveActionBrief(snapshot) {
   const inventory = snapshot.enrichedInventory || [];
   const velocityMetrics = snapshot.velocity?.velocityMetrics || [];
 
-  // Classify all SKUs
-  const classified = classifyAllSKUs(inventory, velocityMetrics);
+  // ════════════════════════════════════════════════════════════════════════
+  // STEP 1: BUILD SKU FACT TABLE
+  // ════════════════════════════════════════════════════════════════════════
+  const { facts, excluded, reasons } = buildSKUFactTable(inventory, velocityMetrics, {});
 
-  // Generate action cards
-  const actionCards = generateActionCards(classified, {
-    maxCards: 10,
-    includeDeprioritize: false
-  });
+  console.log(`[ActionBrief] Fact table: ${facts.size} valid, ${excluded} excluded`);
 
-  // Calculate total money at risk/opportunity
-  const reorderRisk = classified.byType[DECISION_TYPES.REORDER_NOW].reduce((sum, item) => {
-    return sum + (item.metrics?.weeklyProfit || 0);
-  }, 0);
+  // ════════════════════════════════════════════════════════════════════════
+  // STEP 2: CLASSIFY FROM FACTS ONLY
+  // ════════════════════════════════════════════════════════════════════════
+  const classified = classifyAllFromFacts(facts);
 
-  const sellOpportunity = classified.byType[DECISION_TYPES.SELL_NOW].reduce((sum, item) => {
-    return sum + (item.metrics?.totalProfitAtRisk || 0);
-  }, 0);
+  // ════════════════════════════════════════════════════════════════════════
+  // STEP 3: SELECT TOP 3 ACTIONS (priority: REORDER > SELL > HOLD)
+  // ════════════════════════════════════════════════════════════════════════
+  const MAX_ACTIONS = 3;
+  const actions = [];
 
-  const holdValue = classified.byType[DECISION_TYPES.HOLD_LINE].reduce((sum, item) => {
-    return sum + (item.metrics?.weeklyProfit || 0);
-  }, 0);
+  // Priority 1: REORDER_NOW (most urgent)
+  for (const d of classified.byType[DECISION_TYPES.REORDER_NOW]) {
+    if (actions.length >= MAX_ACTIONS) break;
+    if (d.dollarImpact > 0) {
+      actions.push(formatAction(d));
+    }
+  }
 
-  // Build the brief
+  // Priority 2: SELL_NOW
+  for (const d of classified.byType[DECISION_TYPES.SELL_NOW]) {
+    if (actions.length >= MAX_ACTIONS) break;
+    if (d.dollarImpact > 0) {
+      actions.push(formatAction(d));
+    }
+  }
+
+  // Priority 3: HOLD_LINE (only if space remains)
+  for (const d of classified.byType[DECISION_TYPES.HOLD_LINE]) {
+    if (actions.length >= MAX_ACTIONS) break;
+    if (d.dollarImpact > 0) {
+      actions.push(formatAction(d));
+    }
+  }
+
+  // ════════════════════════════════════════════════════════════════════════
+  // STEP 4: GENERATE HEADLINE
+  // ════════════════════════════════════════════════════════════════════════
+  let headline;
+  if (actions.length === 0) {
+    headline = 'No high-confidence actions this period.';
+  } else if (actions.length === 1) {
+    const top = actions[0];
+    headline = `${top.name}: ${top.impactLabel}`;
+  } else {
+    const totalImpact = actions.reduce((sum, a) => sum + (a.dollarImpact || 0), 0);
+    headline = `${actions.length} actions identified. $${totalImpact.toLocaleString()} at stake.`;
+  }
+
+  // ════════════════════════════════════════════════════════════════════════
+  // STEP 5: BUILD OUTPUT
+  // ════════════════════════════════════════════════════════════════════════
   return {
-    // THE HEADLINE
-    headline: generateHeadline(classified, reorderRisk, sellOpportunity),
-
-    // SECTION 1: What to do this week
+    headline,
+    actions, // Max 3, each grounded in fact
     thisWeek: {
-      title: 'WHAT TO DO THIS WEEK',
-      cards: actionCards.filter(c =>
-        c.decision === DECISION_TYPES.REORDER_NOW ||
-        c.decision === DECISION_TYPES.SELL_NOW
-      ),
-      summary: {
-        reorderCount: classified.summary.reorderNow,
-        sellCount: classified.summary.sellNow,
-        totalMoneyAtStake: reorderRisk + sellOpportunity
-      }
+      title: 'ACTIONS',
+      cards: actions
     },
-
-    // SECTION 2: Protect these
     protect: {
-      title: 'PROTECT THESE',
-      subtitle: 'Do not discount. Maintain margin.',
-      cards: actionCards.filter(c => c.decision === DECISION_TYPES.HOLD_LINE),
-      summary: {
-        count: classified.summary.holdLine,
-        weeklyValue: holdValue
-      }
+      title: 'PROTECT',
+      cards: [] // Removed - only show in actions if space
     },
-
-    // SECTION 3: Ignore for now
     ignore: {
-      title: 'IGNORE FOR NOW',
-      subtitle: `${classified.summary.deprioritize} items with no urgent action`,
       count: classified.summary.deprioritize
-      // No cards - just a count
     },
-
-    // Raw classification data
-    classified,
-
-    // Summary stats
     summary: classified.summary,
-
-    // Metadata
+    factLayerStats: {
+      validFacts: facts.size,
+      excluded,
+      reasons
+    },
     generatedAt: new Date().toISOString()
   };
 }
 
 /**
- * Generate a compelling headline for the brief
+ * Format a decision into an action card.
  */
-function generateHeadline(classified, reorderRisk, sellOpportunity) {
-  const reorderCount = classified.summary.reorderNow;
-  const sellCount = classified.summary.sellNow;
-  const totalMoney = reorderRisk + sellOpportunity;
+function formatAction(decision) {
+  return {
+    sku: decision.sku,
+    name: decision.name,
+    decision: decision.decision,
+    why: decision.reason,
+    whatToDo: decision.whatToDo,
+    dollarImpact: decision.dollarImpact,
+    impactLabel: decision.impactLabel,
+    moneyImpact: decision.impactLabel, // Alias for UI compatibility
+    timeframe: decision.timeframe,
+    urgency: decision.urgency,
+    // Fact data for transparency
+    metrics: decision.fact ? {
+      quantity: decision.fact.available_quantity,
+      velocity: decision.fact.velocity,
+      margin: decision.fact.margin_percent,
+      profitPerUnit: decision.fact.unit_margin,
+      daysOfCoverage: decision.fact.days_of_coverage
+    } : null
+  };
+}
 
-  if (reorderCount > 0 && totalMoney > 0) {
-    return `${reorderCount} SKU${reorderCount > 1 ? 's' : ''} need reorder. $${Math.round(totalMoney).toLocaleString()} at stake this week.`;
+// ============================================================================
+// LEGACY EXPORTS (for backwards compatibility)
+// ============================================================================
+
+export function classifySKU(item, velocityData = null) {
+  const fact = buildSKUFact(item, velocityData, null);
+  if (!fact) {
+    return {
+      sku: item.sku || 'UNKNOWN',
+      name: 'Unknown',
+      decision: null,
+      excluded: true,
+      reason: 'Incomplete fact data'
+    };
   }
+  return classifyFromFact(fact);
+}
 
-  if (sellCount > 0 && sellOpportunity > 0) {
-    return `$${Math.round(sellOpportunity).toLocaleString()} in profit sitting idle. ${sellCount} items need promotion.`;
-  }
-
-  if (reorderCount > 0) {
-    return `${reorderCount} SKU${reorderCount > 1 ? 's' : ''} need reorder to avoid stockout.`;
-  }
-
-  if (sellCount > 0) {
-    return `${sellCount} slow-moving items need attention.`;
-  }
-
-  return 'Inventory is stable. Focus on optimization.';
+export function classifyAllSKUs(inventory, velocityMetrics = []) {
+  const { facts } = buildSKUFactTable(inventory, velocityMetrics, {});
+  return classifyAllFromFacts(facts);
 }

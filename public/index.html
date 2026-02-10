@@ -1077,6 +1077,68 @@
     }
 
     /**
+     * ════════════════════════════════════════════════════════════════════════════
+     * RENDER FACT-BASED ACTION
+     * ════════════════════════════════════════════════════════════════════════════
+     * Actions from the SKU Fact Layer are pre-validated.
+     * This renderer trusts the data and displays it directly.
+     */
+    function renderFactBasedAction(action) {
+      const decision = action.decision || 'DEPRIORITIZE';
+      const cardClass = decision.toLowerCase().replace('_', '-');
+
+      const actionLabels = {
+        'REORDER_NOW': 'REORDER NOW',
+        'SELL_NOW': 'SELL NOW',
+        'HOLD_LINE': 'HOLD LINE',
+        'DEPRIORITIZE': 'DEPRIORITIZE'
+      };
+      const actionLabel = actionLabels[decision] || decision;
+
+      const timeframeLabels = {
+        'TODAY': 'Today',
+        'THIS_WEEK': 'This Week',
+        'ONGOING': 'Ongoing',
+        'NONE': ''
+      };
+      const timeframeLabel = timeframeLabels[action.timeframe] || '';
+
+      // Money styling based on decision type
+      let moneyClass = 'opportunity';
+      if (decision === 'REORDER_NOW') moneyClass = 'at-risk';
+      else if (decision === 'HOLD_LINE') moneyClass = 'protect';
+
+      // Metrics from fact object
+      const metrics = action.metrics || {};
+      const metricsLine = [];
+      if (metrics.quantity) metricsLine.push(`${metrics.quantity} units`);
+      if (metrics.velocity) metricsLine.push(`${metrics.velocity.toFixed(1)}/day`);
+      if (metrics.margin) metricsLine.push(`${metrics.margin.toFixed(0)}% margin`);
+
+      return `
+        <div class="action-card ${cardClass}">
+          <div class="action-card-header">
+            <span class="action-card-action ${cardClass}">${actionLabel}</span>
+            ${timeframeLabel ? `<span class="action-card-timeframe">${timeframeLabel}</span>` : ''}
+          </div>
+          <div class="action-card-sku">${action.name}</div>
+          <div class="action-card-why">${action.why}</div>
+          <div class="action-card-todo">→ ${action.whatToDo}</div>
+          ${action.impactLabel ? `
+            <div class="action-card-money ${moneyClass}">
+              ${action.impactLabel}
+            </div>
+          ` : ''}
+          ${metricsLine.length > 0 ? `
+            <div style="font-size: 0.75em; color: #666; margin-top: 8px;">
+              ${metricsLine.join(' · ')}
+            </div>
+          ` : ''}
+        </div>
+      `;
+    }
+
+    /**
      * Validate snapshot freshness against inventory sync
      * Snapshot must be generated AFTER inventory sync
      */
@@ -1282,11 +1344,16 @@
       const alternatives = executiveDecision.alternatives || [];
       const inactionCost = executiveDecision.inactionCost || {};
 
-      // Extract ACTION BRIEF - the new canonical decision model
+      // ════════════════════════════════════════════════════════════════════════════
+      // ACTION BRIEF - Built from SKU Fact Layer (pre-validated)
+      // ════════════════════════════════════════════════════════════════════════════
+      // Actions are validated at source - only grounded SKU-specific actions render
+      // Max 3 actions, each with numeric impact
+      // ════════════════════════════════════════════════════════════════════════════
       const actionBrief = snapshot.actionBrief || {};
-      const actionBriefHeadline = actionBrief.headline || '';
-      const thisWeekCards = actionBrief.thisWeek?.cards || [];
-      const protectCards = actionBrief.protect?.cards || [];
+      const actionBriefHeadline = actionBrief.headline || 'No high-confidence actions this period.';
+      const actionBriefActions = actionBrief.actions || []; // Pre-validated, max 3
+      const factLayerStats = actionBrief.factLayerStats || {};
       const ignoreSummary = actionBrief.ignore || { count: 0 };
       const briefSummary = actionBrief.summary || {};
 
@@ -1497,154 +1564,44 @@
       }
 
       // ═══════════════════════════════════════════════════════════════════════════
-      // ACTION BRIEF - THE canonical decision output
+      // ACTION BRIEF - Grounded in SKU Fact Layer
       // ═══════════════════════════════════════════════════════════════════════════
-      // EXACTLY 4 decision types: SELL_NOW, REORDER_NOW, HOLD_LINE, DEPRIORITIZE
-      // One SKU = One decision. No ambiguity.
-      // ═══════════════════════════════════════════════════════════════════════════
-      // PART E: Filter cards BEFORE rendering to determine true action count
+      // Actions are pre-validated by fact layer. Max 3, each with numeric impact.
+      // Zero actions → "No high-confidence actions this period."
       // ═══════════════════════════════════════════════════════════════════════════
 
-      // VALIDATE CARDS: Only count cards that will actually render
-      const validatedThisWeekCards = thisWeekCards.filter(card => isValidActionCard(card));
-      const validatedProtectCards = protectCards.filter(card => isValidActionCard(card));
-      const totalValidatedActions = validatedThisWeekCards.length + validatedProtectCards.length;
-
-      console.log('[UI] Action Brief (VALIDATED):', {
-        rawThisWeek: thisWeekCards.length,
-        validatedThisWeek: validatedThisWeekCards.length,
-        rawProtect: protectCards.length,
-        validatedProtect: validatedProtectCards.length,
-        totalValidated: totalValidatedActions,
-        suppressedCards: (thisWeekCards.length + protectCards.length) - totalValidatedActions
+      console.log('[UI] Action Brief from Fact Layer:', {
+        headline: actionBriefHeadline,
+        actionsCount: actionBriefActions.length,
+        factLayerStats
       });
 
       html += '<div class="action-brief">';
 
-      // ════════════════════════════════════════════════════════════════════════════
-      // HEADLINE - PART E: Show "stable" ONLY if no validated actions
-      // Otherwise summarize TOP ACTION in 1 sentence
-      // ════════════════════════════════════════════════════════════════════════════
-      if (totalValidatedActions === 0) {
-        // NO VALID ACTIONS: Deliberate silence or stable message
-        html += `
-          <div class="action-brief-headline" style="color: #888;">
-            Inventory is stable. No urgent actions identified.
-          </div>
-        `;
-      } else if (validatedThisWeekCards.length > 0) {
-        // HAS URGENT ACTIONS: Summarize top action
-        const topCard = validatedThisWeekCards[0];
-        const topCardName = topCard.name || topCard.sku;
-        const actionType = topCard.decision === 'REORDER_NOW' ? 'needs reorder' : 'needs attention';
+      // HEADLINE - Computed from fact layer, reflects true action count
+      html += `
+        <div class="action-brief-headline" ${actionBriefActions.length === 0 ? 'style="color: #888;"' : ''}>
+          ${actionBriefHeadline}
+        </div>
+      `;
 
-        // Generate dynamic headline based on validated count
-        let dynamicHeadline = '';
-        if (validatedThisWeekCards.length === 1) {
-          dynamicHeadline = `${topCardName} ${actionType}.`;
-        } else {
-          dynamicHeadline = `${validatedThisWeekCards.length} items need action this week. Top priority: ${topCardName}.`;
-        }
-
-        html += `
-          <div class="action-brief-headline">
-            ${dynamicHeadline}
-          </div>
-        `;
-      } else if (validatedProtectCards.length > 0) {
-        // ONLY PROTECT ACTIONS
-        html += `
-          <div class="action-brief-headline">
-            ${validatedProtectCards.length} high-margin item${validatedProtectCards.length > 1 ? 's' : ''} to protect.
-          </div>
-        `;
-      }
-
-      // SECTION 1: WHAT TO DO THIS WEEK (REORDER_NOW + SELL_NOW)
-      // Only render if we have validated cards
-      if (validatedThisWeekCards.length > 0) {
+      // ACTIONS - Max 3, each grounded in validated SKU fact
+      if (actionBriefActions.length > 0) {
         html += `
           <div class="action-brief-section">
-            <h4>WHAT TO DO THIS WEEK</h4>
-            ${validatedThisWeekCards.map(card => renderActionCard(card)).join('')}
+            <h4>ACTIONS</h4>
+            ${actionBriefActions.map(action => renderFactBasedAction(action)).join('')}
           </div>
         `;
       }
 
-      // SECTION 2: PROTECT THESE (HOLD_LINE)
-      // Only render if we have validated cards
-      if (validatedProtectCards.length > 0) {
+      // FACT LAYER STATS - Debug info (can be hidden in production)
+      if (factLayerStats.validFacts !== undefined) {
         html += `
-          <div class="action-brief-section">
-            <h4>PROTECT THESE</h4>
-            <p style="color: #666; font-size: 0.85em; margin-bottom: 15px;">Do not discount. Maintain margin.</p>
-            ${validatedProtectCards.map(card => renderActionCard(card)).join('')}
+          <div style="margin-top: 15px; padding: 10px; background: #1a1a1a; border-radius: 4px; font-size: 0.75em; color: #666;">
+            Fact layer: ${factLayerStats.validFacts} SKUs with complete data, ${factLayerStats.excluded || 0} excluded
           </div>
         `;
-      }
-
-      // SECTION 3: IGNORE FOR NOW (just a count) - only show if we have other actions
-      if (ignoreSummary.count > 0 && totalValidatedActions > 0) {
-        html += `
-          <div class="action-brief-section">
-            <h4>IGNORE FOR NOW</h4>
-            <div class="ignore-summary">
-              ${ignoreSummary.count} items with no urgent action needed
-            </div>
-          </div>
-        `;
-      }
-
-      // FALLBACK: If no action brief, show WOW insights or legacy recommendations
-      if (!actionBriefHeadline && thisWeekCards.length === 0 && protectCards.length === 0) {
-        // Fall back to WOW insights if available
-        // ════════════════════════════════════════════════════════════════════════
-        // PART D (extended): WOW insights must also meet validation criteria
-        // No "Opportunity Identified", no "Take action", no generic advice
-        // ════════════════════════════════════════════════════════════════════════
-        const validatedWowInsights = wowInsights.filter(wow => {
-          // Must have specific headline (not generic)
-          const headline = wow.headline || '';
-          if (!headline || headline === 'Opportunity Identified' || headline.toLowerCase().includes('unknown')) {
-            return false;
-          }
-          // Must have specific action (not generic)
-          const action = wow.action || '';
-          if (!action || action === 'Take action' || action.toLowerCase().includes('take action')) {
-            return false;
-          }
-          // Should have quantified impact
-          const hasImpact = wow.dollarImpact && isFinite(wow.dollarImpact) && wow.dollarImpact > 0;
-          const hasInsight = wow.insight && typeof wow.insight === 'string' && wow.insight.trim();
-
-          return hasInsight || hasImpact; // Need at least one
-        });
-
-        if (validatedWowInsights.length > 0) {
-          html += `
-            <div class="action-brief-section">
-              <h4>KEY OPPORTUNITIES</h4>
-              ${validatedWowInsights.slice(0, 3).map(wow => `
-                <div class="action-card sell-now">
-                  <div class="action-card-header">
-                    <span class="action-card-action sell-now">OPPORTUNITY</span>
-                  </div>
-                  <div class="action-card-sku">${wow.headline}</div>
-                  <div class="action-card-why">${wow.insight || ''}</div>
-                  <div class="action-card-todo">→ ${wow.action}</div>
-                  ${wow.dollarImpact && isFinite(wow.dollarImpact) ? `
-                    <div class="action-card-money opportunity">
-                      Potential: $${wow.dollarImpact.toLocaleString()}
-                    </div>
-                  ` : ''}
-                </div>
-              `).join('')}
-            </div>
-          `;
-        } else {
-          // SILENCE: No generic fallback message. Prefer silence over low-confidence output.
-          html += '';
-        }
       }
 
       // SUMMARY STATS (optional, collapsed)
