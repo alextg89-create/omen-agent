@@ -1080,20 +1080,23 @@
      * ════════════════════════════════════════════════════════════════════════════
      * RENDER FACT-BASED ACTION
      * ════════════════════════════════════════════════════════════════════════════
-     * Actions from the SKU Fact Layer are pre-validated.
-     * This renderer trusts the data and displays it directly.
+     * Actions from split fact layer (SALES_FACTS + INVENTORY_FACTS).
+     * Trusts data - no additional validation needed.
      */
     function renderFactBasedAction(action) {
+      if (!action || !action.name) return '';
+
       const decision = action.decision || 'DEPRIORITIZE';
-      const cardClass = decision.toLowerCase().replace('_', '-');
+      const cardClass = decision.toLowerCase().replace(/_/g, '-');
 
       const actionLabels = {
         'REORDER_NOW': 'REORDER NOW',
         'SELL_NOW': 'SELL NOW',
-        'HOLD_LINE': 'HOLD LINE',
-        'DEPRIORITIZE': 'DEPRIORITIZE'
+        'HOLD_LINE': 'PROTECT MARGIN',
+        'DISCOUNT_SLOW': 'DISCOUNT',
+        'DEPRIORITIZE': 'MONITOR'
       };
-      const actionLabel = actionLabels[decision] || decision;
+      const actionLabel = actionLabels[decision] || decision.replace(/_/g, ' ');
 
       const timeframeLabels = {
         'TODAY': 'Today',
@@ -1107,13 +1110,16 @@
       let moneyClass = 'opportunity';
       if (decision === 'REORDER_NOW') moneyClass = 'at-risk';
       else if (decision === 'HOLD_LINE') moneyClass = 'protect';
+      else if (decision === 'DISCOUNT_SLOW') moneyClass = 'opportunity';
 
-      // Metrics from fact object
+      // Build metrics line from available data
       const metrics = action.metrics || {};
       const metricsLine = [];
-      if (metrics.quantity) metricsLine.push(`${metrics.quantity} units`);
-      if (metrics.velocity) metricsLine.push(`${metrics.velocity.toFixed(1)}/day`);
-      if (metrics.margin) metricsLine.push(`${metrics.margin.toFixed(0)}% margin`);
+      if (metrics.quantity !== undefined) metricsLine.push(`${metrics.quantity} units`);
+      if (metrics.velocity !== undefined && metrics.velocity > 0) metricsLine.push(`${metrics.velocity.toFixed(1)}/day`);
+      if (metrics.margin !== undefined) metricsLine.push(`${metrics.margin.toFixed(0)}% margin`);
+      if (metrics.unitsSold !== undefined) metricsLine.push(`${metrics.unitsSold} sold`);
+      if (metrics.daysSinceLastSale !== undefined) metricsLine.push(`${metrics.daysSinceLastSale}d since sale`);
 
       return `
         <div class="action-card ${cardClass}">
@@ -1490,9 +1496,10 @@
       }
 
       // ════════════════════════════════════════════════════════════════════════
-      // AVG MARGIN - PART C: Explicit text when margin unavailable
+      // AVG MARGIN - Computed from SALES_FACTS only (via marginData)
       // ════════════════════════════════════════════════════════════════════════
-      const avgMarginValue = metrics.averageMargin;
+      const marginData = actionBrief.marginData || {};
+      const avgMarginValue = marginData.averageMargin ?? metrics.averageMargin;
       const marginIsValid = avgMarginValue !== null && avgMarginValue !== undefined && isFinite(avgMarginValue);
 
       if (marginIsValid) {
@@ -1500,19 +1507,23 @@
           <div class="metric-card">
             <div class="metric-label">Avg Margin</div>
             ${renderValue(avgMarginValue, 'percent')}
+            ${marginData.skusWithMargin ? `
+              <div style="font-size: 0.7em; color: #666; margin-top: 4px;">
+                From ${marginData.skusWithMargin} SKUs sold
+              </div>
+            ` : ''}
           </div>
         `;
       } else {
-        // EXPLICIT EXPLANATION instead of "—"
-        const orderCountForContext = timeframeOrders || last30DaysOrders || allTimeOrders || 0;
+        // EXPLICIT EXPLANATION - margin requires sales data
         html += `
           <div class="metric-card">
             <div class="metric-label">Avg Margin</div>
             <div class="metric-value" style="font-size: 0.9em; color: #888;">
-              Insufficient data
+              No sales data
             </div>
             <div style="font-size: 0.75em; color: #666; margin-top: 4px;">
-              ${orderCountForContext > 0 ? `${orderCountForContext} orders tracked` : 'No orders this period'}
+              ${marginData.reason || 'Margin requires sales in period'}
             </div>
           </div>
         `;
