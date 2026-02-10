@@ -882,32 +882,145 @@
     }
 
     /**
-     * Render an Action Card for the Executive Brief
+     * ════════════════════════════════════════════════════════════════════════════
+     * ACTION CARD VALIDATION - PART A
+     * ════════════════════════════════════════════════════════════════════════════
      *
-     * Action Card format:
+     * MANDATORY: Cards are ONLY rendered when ALL required fields are valid.
+     * Invalid cards are SILENTLY SUPPRESSED - no "Unknown", no NaN, no fallbacks.
+     *
+     * Snapshot prefers SILENCE over LOW-CONFIDENCE OUTPUT.
+     */
+    function isValidActionCard(card) {
+      if (!card) return false;
+
+      // REQUIRED: Product identification (non-empty string)
+      const name = card.name || card.sku;
+      if (!name || typeof name !== 'string' || name.trim() === '') {
+        console.debug('[UI] Suppressed card: missing name/sku');
+        return false;
+      }
+
+      // REJECT: "Unknown" placeholders
+      const nameLower = name.toLowerCase();
+      if (nameLower.includes('unknown') || nameLower === 'unknown sku') {
+        console.debug('[UI] Suppressed card: contains "Unknown"', name);
+        return false;
+      }
+
+      // REQUIRED: Actionable instruction (non-generic)
+      const action = card.whatToDo || '';
+      if (!action || typeof action !== 'string' || action.trim() === '') {
+        console.debug('[UI] Suppressed card: missing whatToDo', name);
+        return false;
+      }
+
+      // REJECT: Generic advice without specifics
+      const actionLower = action.toLowerCase();
+      const genericPatterns = [
+        'take action',
+        'discount slow movers',
+        'consider discounting',
+        'review inventory'
+      ];
+      if (genericPatterns.some(p => actionLower.includes(p)) && !card.sku) {
+        console.debug('[UI] Suppressed card: generic advice without SKU', action);
+        return false;
+      }
+
+      // REQUIRED: Reason/why (non-empty)
+      const reason = card.why || card.reason;
+      if (!reason || typeof reason !== 'string' || reason.trim() === '') {
+        console.debug('[UI] Suppressed card: missing reason', name);
+        return false;
+      }
+
+      // REQUIRED: Valid numeric in moneyImpact OR metrics
+      if (!validateMoneyField(card)) {
+        console.debug('[UI] Suppressed card: invalid/NaN money values', name);
+        return false;
+      }
+
+      // REQUIRED: Valid quantity data (if present, must be finite)
+      const metrics = card.metrics || {};
+      if (metrics.quantity !== undefined) {
+        if (typeof metrics.quantity !== 'number' || !isFinite(metrics.quantity)) {
+          console.debug('[UI] Suppressed card: invalid quantity', name, metrics.quantity);
+          return false;
+        }
+      }
+
+      return true;
+    }
+
+    /**
+     * Validate money fields - must be finite numbers or properly formatted strings
+     */
+    function validateMoneyField(card) {
+      const metrics = card.metrics || {};
+
+      // If profitPerUnit exists, it must be finite
+      if (metrics.profitPerUnit !== undefined && metrics.profitPerUnit !== null) {
+        if (typeof metrics.profitPerUnit !== 'number' || !isFinite(metrics.profitPerUnit)) {
+          return false;
+        }
+      }
+
+      // If totalProfitAtRisk exists, it must be finite
+      if (metrics.totalProfitAtRisk !== undefined && metrics.totalProfitAtRisk !== null) {
+        if (typeof metrics.totalProfitAtRisk !== 'number' || !isFinite(metrics.totalProfitAtRisk)) {
+          return false;
+        }
+      }
+
+      // If moneyImpact string contains NaN, reject
+      const moneyImpact = card.moneyImpact || '';
+      if (typeof moneyImpact === 'string' && moneyImpact.toLowerCase().includes('nan')) {
+        return false;
+      }
+
+      // If moneyImpact is numeric, must be finite
+      if (typeof moneyImpact === 'number' && !isFinite(moneyImpact)) {
+        return false;
+      }
+
+      return true;
+    }
+
+    /**
+     * ════════════════════════════════════════════════════════════════════════════
+     * ACTION CARD RENDERING - PART B
+     * ════════════════════════════════════════════════════════════════════════════
+     *
+     * Each card has:
      * - ACTION: SELL NOW / REORDER NOW / HOLD LINE / DEPRIORITIZE
-     * - SKU: name
-     * - WHY: one sentence
-     * - WHAT TO DO: specific action
-     * - MONEY IMPACT: $ at risk or opportunity
+     * - SKU: name (REQUIRED - no fallbacks)
+     * - WHY: one sentence (REQUIRED)
+     * - WHAT TO DO: specific action (REQUIRED - no generic)
+     * - MONEY IMPACT: $ at risk or opportunity (finite number)
      * - TIMEFRAME: TODAY / THIS WEEK / SOON
+     *
+     * Returns EMPTY STRING if validation fails - card is silently suppressed.
      */
     function renderActionCard(card) {
+      // ════════════════════════════════════════════════════════════════════════
+      // VALIDATION GATE: Reject invalid cards silently
+      // ════════════════════════════════════════════════════════════════════════
+      if (!isValidActionCard(card)) {
+        return ''; // SILENT SUPPRESSION - no placeholder, no "Unknown"
+      }
+
       const decision = card.decision || 'DEPRIORITIZE';
       const cardClass = decision.toLowerCase().replace('_', '-');
 
-      // Determine money impact styling and label prefix
+      // Determine money impact styling
       let moneyClass = 'opportunity';
-      let moneyPrefix = '';
       if (decision === 'REORDER_NOW') {
         moneyClass = 'at-risk';
-        moneyPrefix = '⚠️ At risk: ';
       } else if (decision === 'HOLD_LINE') {
         moneyClass = 'protect';
-        moneyPrefix = '✓ Protecting: ';
       } else if (decision === 'SELL_NOW') {
         moneyClass = 'opportunity';
-        moneyPrefix = '💰 Trapped: ';
       }
 
       // Format timeframe label
@@ -929,15 +1042,21 @@
       };
       const actionLabel = actionLabels[decision] || decision;
 
-      // Format money impact with context
+      // Format money impact - VALIDATED, safe to render
       let moneyDisplay = card.moneyImpact || '';
       if (moneyDisplay && !moneyDisplay.includes('$')) {
-        // If it's just a number, format it
-        const numericValue = parseFloat(moneyDisplay.replace(/[^0-9.-]/g, ''));
-        if (!isNaN(numericValue)) {
+        const numericValue = parseFloat(String(moneyDisplay).replace(/[^0-9.-]/g, ''));
+        if (!isNaN(numericValue) && isFinite(numericValue)) {
           moneyDisplay = `$${numericValue.toLocaleString()}`;
+        } else {
+          moneyDisplay = ''; // Suppress invalid money display
         }
       }
+
+      // Use validated name - NO FALLBACK to "Unknown"
+      const displayName = card.name || card.sku;
+      const displayReason = card.why || card.reason;
+      const displayAction = card.whatToDo;
 
       return `
         <div class="action-card ${cardClass}">
@@ -945,9 +1064,9 @@
             <span class="action-card-action ${cardClass}">${actionLabel}</span>
             ${timeframeLabel ? `<span class="action-card-timeframe">${timeframeLabel}</span>` : ''}
           </div>
-          <div class="action-card-sku">${card.name || card.sku || 'Unknown SKU'}</div>
-          <div class="action-card-why">${card.why || card.reason || ''}</div>
-          <div class="action-card-todo">→ ${card.whatToDo || 'Take action'}</div>
+          <div class="action-card-sku">${displayName}</div>
+          <div class="action-card-why">${displayReason}</div>
+          <div class="action-card-todo">→ ${displayAction}</div>
           ${moneyDisplay ? `
             <div class="action-card-money ${moneyClass}">
               ${moneyDisplay}
@@ -1210,17 +1329,39 @@
               ${inactionCost.explanation ? `<div style="color: #888; font-size: 0.85em; margin-top: 5px;">${inactionCost.explanation}</div>` : ''}
             </div>
           ` : ''}
-          ${alternatives.length > 0 ? `
+          ${(() => {
+            // ════════════════════════════════════════════════════════════════
+            // ALTERNATIVES - PART D: SKU-specific with quantified impact only
+            // ════════════════════════════════════════════════════════════════
+            // Filter: Must have SKU reference AND finite dollar impact
+            const validAlternatives = alternatives.filter(alt => {
+              // Must have SKU/item reference
+              const hasSKU = alt.item || alt.sku || alt.skuName;
+              // Must have quantified impact (finite number > 0)
+              const hasQuantifiedImpact = alt.dollarImpact && isFinite(alt.dollarImpact) && alt.dollarImpact > 0;
+              // Must have action text
+              const hasAction = alt.action && typeof alt.action === 'string' && alt.action.trim();
+
+              if (!hasAction) return false;
+              if (!hasSKU && !hasQuantifiedImpact) return false; // Need at least one
+
+              return true;
+            });
+
+            if (validAlternatives.length === 0) return '';
+
+            return `
             <div style="border-top: 1px solid rgba(255,255,255,0.1); padding-top: 12px;">
               <div style="color: #888; font-size: 0.8em; text-transform: uppercase; margin-bottom: 8px;">ALTERNATIVES</div>
-              ${alternatives.slice(0, 2).map(alt => `
+              ${validAlternatives.slice(0, 2).map(alt => `
                 <div style="color: #ccc; padding: 6px 0; display: flex; justify-content: space-between; align-items: center;">
-                  <span>→ ${alt.action}</span>
-                  ${alt.dollarImpact > 0 ? `<span style="color: #888;">($${alt.dollarImpact.toLocaleString()})</span>` : ''}
+                  <span>→ ${alt.action}${alt.item ? ` (${alt.item})` : ''}</span>
+                  ${alt.dollarImpact > 0 ? `<span style="color: #888;">$${alt.dollarImpact.toLocaleString()}</span>` : ''}
                 </div>
               `).join('')}
             </div>
-          ` : ''}
+          `;
+          })()}
           ${executiveDecision.confidence && executiveDecision.confidence !== 'high' ? `
             <div style="color: #888; font-size: 0.85em; margin-top: 10px;">
               (${executiveDecision.confidence.charAt(0).toUpperCase() + executiveDecision.confidence.slice(1)} confidence${executiveDecision.confidenceExplanation ? `: ${executiveDecision.confidenceExplanation}` : ''})
@@ -1281,13 +1422,34 @@
         `;
       }
 
-      // Margin (always useful)
-      html += `
-        <div class="metric-card">
-          <div class="metric-label">Avg Margin</div>
-          ${renderValue(metrics.averageMargin, 'percent')}
-        </div>
-      `;
+      // ════════════════════════════════════════════════════════════════════════
+      // AVG MARGIN - PART C: Explicit text when margin unavailable
+      // ════════════════════════════════════════════════════════════════════════
+      const avgMarginValue = metrics.averageMargin;
+      const marginIsValid = avgMarginValue !== null && avgMarginValue !== undefined && isFinite(avgMarginValue);
+
+      if (marginIsValid) {
+        html += `
+          <div class="metric-card">
+            <div class="metric-label">Avg Margin</div>
+            ${renderValue(avgMarginValue, 'percent')}
+          </div>
+        `;
+      } else {
+        // EXPLICIT EXPLANATION instead of "—"
+        const orderCountForContext = timeframeOrders || last30DaysOrders || allTimeOrders || 0;
+        html += `
+          <div class="metric-card">
+            <div class="metric-label">Avg Margin</div>
+            <div class="metric-value" style="font-size: 0.9em; color: #888;">
+              Insufficient data
+            </div>
+            <div style="font-size: 0.75em; color: #666; margin-top: 4px;">
+              ${orderCountForContext > 0 ? `${orderCountForContext} orders tracked` : 'No orders this period'}
+            </div>
+          </div>
+        `;
+      }
 
       // PROFIT POTENTIAL - Use order-driven metric (sellable SKUs only)
       // inventoryProfitPotential = sum(availableQuantity * unitMargin) for visible+in-stock
@@ -1340,49 +1502,89 @@
       // EXACTLY 4 decision types: SELL_NOW, REORDER_NOW, HOLD_LINE, DEPRIORITIZE
       // One SKU = One decision. No ambiguity.
       // ═══════════════════════════════════════════════════════════════════════════
+      // PART E: Filter cards BEFORE rendering to determine true action count
+      // ═══════════════════════════════════════════════════════════════════════════
 
-      console.log('[UI] Action Brief:', {
-        hasActionBrief: !!actionBrief.headline,
-        thisWeekCards: thisWeekCards.length,
-        protectCards: protectCards.length,
-        ignoreCount: ignoreSummary.count,
-        summary: briefSummary
+      // VALIDATE CARDS: Only count cards that will actually render
+      const validatedThisWeekCards = thisWeekCards.filter(card => isValidActionCard(card));
+      const validatedProtectCards = protectCards.filter(card => isValidActionCard(card));
+      const totalValidatedActions = validatedThisWeekCards.length + validatedProtectCards.length;
+
+      console.log('[UI] Action Brief (VALIDATED):', {
+        rawThisWeek: thisWeekCards.length,
+        validatedThisWeek: validatedThisWeekCards.length,
+        rawProtect: protectCards.length,
+        validatedProtect: validatedProtectCards.length,
+        totalValidated: totalValidatedActions,
+        suppressedCards: (thisWeekCards.length + protectCards.length) - totalValidatedActions
       });
 
       html += '<div class="action-brief">';
 
-      // HEADLINE - The one-liner with total $ at stake
-      if (actionBriefHeadline) {
+      // ════════════════════════════════════════════════════════════════════════════
+      // HEADLINE - PART E: Show "stable" ONLY if no validated actions
+      // Otherwise summarize TOP ACTION in 1 sentence
+      // ════════════════════════════════════════════════════════════════════════════
+      if (totalValidatedActions === 0) {
+        // NO VALID ACTIONS: Deliberate silence or stable message
+        html += `
+          <div class="action-brief-headline" style="color: #888;">
+            Inventory is stable. No urgent actions identified.
+          </div>
+        `;
+      } else if (validatedThisWeekCards.length > 0) {
+        // HAS URGENT ACTIONS: Summarize top action
+        const topCard = validatedThisWeekCards[0];
+        const topCardName = topCard.name || topCard.sku;
+        const actionType = topCard.decision === 'REORDER_NOW' ? 'needs reorder' : 'needs attention';
+
+        // Generate dynamic headline based on validated count
+        let dynamicHeadline = '';
+        if (validatedThisWeekCards.length === 1) {
+          dynamicHeadline = `${topCardName} ${actionType}.`;
+        } else {
+          dynamicHeadline = `${validatedThisWeekCards.length} items need action this week. Top priority: ${topCardName}.`;
+        }
+
         html += `
           <div class="action-brief-headline">
-            ${actionBriefHeadline}
+            ${dynamicHeadline}
+          </div>
+        `;
+      } else if (validatedProtectCards.length > 0) {
+        // ONLY PROTECT ACTIONS
+        html += `
+          <div class="action-brief-headline">
+            ${validatedProtectCards.length} high-margin item${validatedProtectCards.length > 1 ? 's' : ''} to protect.
           </div>
         `;
       }
 
       // SECTION 1: WHAT TO DO THIS WEEK (REORDER_NOW + SELL_NOW)
-      if (thisWeekCards.length > 0) {
+      // Only render if we have validated cards
+      if (validatedThisWeekCards.length > 0) {
         html += `
           <div class="action-brief-section">
             <h4>WHAT TO DO THIS WEEK</h4>
-            ${thisWeekCards.map(card => renderActionCard(card)).join('')}
+            ${validatedThisWeekCards.map(card => renderActionCard(card)).join('')}
           </div>
         `;
       }
 
       // SECTION 2: PROTECT THESE (HOLD_LINE)
-      if (protectCards.length > 0) {
+      // Only render if we have validated cards
+      if (validatedProtectCards.length > 0) {
         html += `
           <div class="action-brief-section">
             <h4>PROTECT THESE</h4>
             <p style="color: #666; font-size: 0.85em; margin-bottom: 15px;">Do not discount. Maintain margin.</p>
-            ${protectCards.map(card => renderActionCard(card)).join('')}
+            ${validatedProtectCards.map(card => renderActionCard(card)).join('')}
           </div>
         `;
       }
 
-      // SECTION 3: IGNORE FOR NOW (just a count)
-      if (ignoreSummary.count > 0) {
+      // SECTION 3: IGNORE FOR NOW (just a count) - only show if we have other actions
+      if (ignoreSummary.count > 0 && totalValidatedActions > 0) {
         html += `
           <div class="action-brief-section">
             <h4>IGNORE FOR NOW</h4>
@@ -1396,19 +1598,41 @@
       // FALLBACK: If no action brief, show WOW insights or legacy recommendations
       if (!actionBriefHeadline && thisWeekCards.length === 0 && protectCards.length === 0) {
         // Fall back to WOW insights if available
-        if (wowInsights.length > 0) {
+        // ════════════════════════════════════════════════════════════════════════
+        // PART D (extended): WOW insights must also meet validation criteria
+        // No "Opportunity Identified", no "Take action", no generic advice
+        // ════════════════════════════════════════════════════════════════════════
+        const validatedWowInsights = wowInsights.filter(wow => {
+          // Must have specific headline (not generic)
+          const headline = wow.headline || '';
+          if (!headline || headline === 'Opportunity Identified' || headline.toLowerCase().includes('unknown')) {
+            return false;
+          }
+          // Must have specific action (not generic)
+          const action = wow.action || '';
+          if (!action || action === 'Take action' || action.toLowerCase().includes('take action')) {
+            return false;
+          }
+          // Should have quantified impact
+          const hasImpact = wow.dollarImpact && isFinite(wow.dollarImpact) && wow.dollarImpact > 0;
+          const hasInsight = wow.insight && typeof wow.insight === 'string' && wow.insight.trim();
+
+          return hasInsight || hasImpact; // Need at least one
+        });
+
+        if (validatedWowInsights.length > 0) {
           html += `
             <div class="action-brief-section">
               <h4>KEY OPPORTUNITIES</h4>
-              ${wowInsights.slice(0, 3).map(wow => `
+              ${validatedWowInsights.slice(0, 3).map(wow => `
                 <div class="action-card sell-now">
                   <div class="action-card-header">
                     <span class="action-card-action sell-now">OPPORTUNITY</span>
                   </div>
-                  <div class="action-card-sku">${wow.headline || 'Opportunity Identified'}</div>
+                  <div class="action-card-sku">${wow.headline}</div>
                   <div class="action-card-why">${wow.insight || ''}</div>
-                  <div class="action-card-todo">→ ${wow.action || 'Take action'}</div>
-                  ${wow.dollarImpact ? `
+                  <div class="action-card-todo">→ ${wow.action}</div>
+                  ${wow.dollarImpact && isFinite(wow.dollarImpact) ? `
                     <div class="action-card-money opportunity">
                       Potential: $${wow.dollarImpact.toLocaleString()}
                     </div>
@@ -1418,7 +1642,8 @@
             </div>
           `;
         } else {
-          html += '<p style="color: #888; padding: 20px; background: #1a1a1a; border-radius: 4px; text-align: center;">Generate a snapshot to see action brief.</p>';
+          // SILENCE: No generic fallback message. Prefer silence over low-confidence output.
+          html += '';
         }
       }
 
