@@ -280,19 +280,37 @@ export function buildFactTables(inventory, velocityMetrics = [], periodSalesMap 
 // WEIGHTED AVERAGE MARGIN (from SALES_FACTS only)
 // ============================================================================
 
+// TIERED THRESHOLDS (Recovery Mode)
+const MARGIN_THRESHOLDS = {
+  MIN_REVENUE_COVERAGE: 0.60,  // 60% of revenue must have valid cost
+  MIN_SKUS_ALTERNATIVE: 3,     // OR at least 3 SKUs with valid cost + sales
+  PARTIAL_COVERAGE_MIN: 0.30   // Below 30% = too unreliable to show
+};
+
 /**
  * Compute weighted average margin from SALES_FACTS only.
  * Weighted by revenue (more accurate than unit count).
  *
- * STRICT: All values must be finite. NaN propagation is blocked.
+ * RECOVERY MODE: Show margin with coverage labels instead of blocking.
+ * - Full confidence: >= 60% revenue coverage
+ * - Partial confidence: >= 3 SKUs OR >= 30% coverage
+ * - No margin: < 30% coverage AND < 3 SKUs
  */
 export function computeWeightedMargin(salesFacts) {
-  let totalRevenue = 0;
+  let totalPeriodRevenue = 0;
+  let revenueWithMargin = 0;
   let totalMarginDollars = 0;
   let skusWithValidMargin = 0;
+  let skusWithSales = 0;
 
   for (const [sku, fact] of salesFacts) {
-    // STRICT: All values must be finite
+    // Count all SKUs with sales
+    if (fact.revenue !== null && isFinite(fact.revenue) && fact.revenue > 0) {
+      totalPeriodRevenue += fact.revenue;
+      skusWithSales++;
+    }
+
+    // Count SKUs with valid margin data
     if (fact.unit_margin === null || !isFinite(fact.unit_margin)) continue;
     if (fact.revenue === null || !isFinite(fact.revenue) || fact.revenue <= 0) continue;
     if (fact.units_sold === null || !isFinite(fact.units_sold) || fact.units_sold <= 0) continue;
@@ -300,44 +318,73 @@ export function computeWeightedMargin(salesFacts) {
     const marginContribution = fact.unit_margin * fact.units_sold;
     if (!isFinite(marginContribution)) continue;
 
-    totalRevenue += fact.revenue;
+    revenueWithMargin += fact.revenue;
     totalMarginDollars += marginContribution;
     skusWithValidMargin++;
   }
 
-  // STRICT: Require minimum threshold for valid margin computation
-  const MIN_SKUS_FOR_MARGIN = 5;
-  if (totalRevenue <= 0 || skusWithValidMargin < MIN_SKUS_FOR_MARGIN) {
+  // Calculate coverage percentage
+  const revenueCoverage = totalPeriodRevenue > 0
+    ? revenueWithMargin / totalPeriodRevenue
+    : 0;
+  const coveragePercent = Math.round(revenueCoverage * 100);
+
+  // TIERED DECISION LOGIC
+  const hasFullCoverage = revenueCoverage >= MARGIN_THRESHOLDS.MIN_REVENUE_COVERAGE;
+  const hasPartialCoverage = skusWithValidMargin >= MARGIN_THRESHOLDS.MIN_SKUS_ALTERNATIVE ||
+                              revenueCoverage >= MARGIN_THRESHOLDS.PARTIAL_COVERAGE_MIN;
+  const hasSufficientData = hasFullCoverage || hasPartialCoverage;
+
+  // No usable data
+  if (!hasSufficientData || revenueWithMargin <= 0) {
     return {
       averageMargin: null,
-      totalRevenue: totalRevenue || 0,
-      totalMarginDollars: totalMarginDollars || 0,
+      totalRevenue: totalPeriodRevenue || 0,
+      revenueWithMargin: 0,
+      totalMarginDollars: 0,
       skusWithMargin: skusWithValidMargin,
-      reason: skusWithValidMargin < MIN_SKUS_FOR_MARGIN
-        ? `Insufficient data (${skusWithValidMargin} SKUs with valid margin, need ${MIN_SKUS_FOR_MARGIN})`
-        : 'No sales with margin data in period'
+      skusWithSales,
+      coveragePercent: 0,
+      confidence: 'none',
+      reason: skusWithValidMargin === 0
+        ? 'No cost data available for sold items'
+        : `Coverage too low (${coveragePercent}% of revenue, ${skusWithValidMargin} SKUs)`
     };
   }
 
-  const avgMarginPercent = (totalMarginDollars / totalRevenue) * 100;
+  const avgMarginPercent = (totalMarginDollars / revenueWithMargin) * 100;
 
-  // STRICT: Final NaN guard
+  // NaN guard
   if (!isFinite(avgMarginPercent)) {
     return {
       averageMargin: null,
-      totalRevenue,
+      totalRevenue: totalPeriodRevenue,
+      revenueWithMargin,
       totalMarginDollars,
       skusWithMargin: skusWithValidMargin,
+      skusWithSales,
+      coveragePercent,
+      confidence: 'none',
       reason: 'Margin calculation resulted in invalid value'
     };
   }
 
+  // Determine confidence level
+  const confidence = hasFullCoverage ? 'high' : 'partial';
+  const reason = hasFullCoverage
+    ? null
+    : `Based on ${coveragePercent}% of revenue (${skusWithValidMargin} of ${skusWithSales} SKUs)`;
+
   return {
     averageMargin: parseFloat(avgMarginPercent.toFixed(2)),
-    totalRevenue,
+    totalRevenue: totalPeriodRevenue,
+    revenueWithMargin: parseFloat(revenueWithMargin.toFixed(2)),
     totalMarginDollars: parseFloat(totalMarginDollars.toFixed(2)),
     skusWithMargin: skusWithValidMargin,
-    reason: null
+    skusWithSales,
+    coveragePercent,
+    confidence,
+    reason
   };
 }
 
@@ -553,24 +600,56 @@ export function generateExecutiveActionBrief(snapshot) {
     }));
 
   // ════════════════════════════════════════════════════════════════════════
-  // STEP 5: GENERATE HEADLINE
+  // STEP 5: COMPUTE IMPACT BUCKETS (Quantified vs Unquantified)
   // ════════════════════════════════════════════════════════════════════════
-  let headline;
-  if (actions.length === 0) {
-    headline = 'No high-confidence actions this period.';
-  } else if (actions.length === 1) {
-    headline = `${actions[0].name}: ${actions[0].impactLabel || actions[0].why}`;
-  } else {
-    const totalImpact = actions.reduce((sum, a) => sum + (a.dollarImpact || 0), 0);
-    if (totalImpact > 0) {
-      headline = `${actions.length} actions identified. $${totalImpact.toLocaleString()} at stake.`;
+  let quantifiedImpact = 0;
+  let unquantifiedUnits = 0;
+  let actionsWithCost = 0;
+  let actionsWithoutCost = 0;
+
+  for (const action of actions) {
+    if (action.dollarImpact && action.dollarImpact > 0) {
+      quantifiedImpact += action.dollarImpact;
+      actionsWithCost++;
     } else {
-      headline = `${actions.length} actions identified.`;
+      unquantifiedUnits += action.metrics?.quantity || 0;
+      actionsWithoutCost++;
+    }
+  }
+
+  // Also count unquantified from full decision set
+  for (const d of allDecisions) {
+    if (!d.hasFinancialData && d.metrics?.quantity) {
+      unquantifiedUnits += d.metrics.quantity;
     }
   }
 
   // ════════════════════════════════════════════════════════════════════════
-  // STEP 6: BUILD OUTPUT
+  // STEP 6: GENERATE HEADLINE (Scoped Language)
+  // ════════════════════════════════════════════════════════════════════════
+  let headline;
+  if (actions.length === 0) {
+    headline = 'Signals detected but financial coverage incomplete';
+  } else if (actions.length === 1) {
+    headline = `${actions[0].name}: ${actions[0].impactLabel || actions[0].why}`;
+  } else {
+    // Build scoped headline with quantified and unquantified parts
+    const parts = [];
+    if (quantifiedImpact > 0) {
+      parts.push(`$${quantifiedImpact.toLocaleString()} quantified impact`);
+    }
+    if (unquantifiedUnits > 0) {
+      parts.push(`${unquantifiedUnits} units unpriced`);
+    }
+    if (parts.length > 0) {
+      headline = `${actions.length} actions: ${parts.join(' + ')}`;
+    } else {
+      headline = `${actions.length} actions identified`;
+    }
+  }
+
+  // ════════════════════════════════════════════════════════════════════════
+  // STEP 7: BUILD OUTPUT
   // ════════════════════════════════════════════════════════════════════════
   return {
     headline,
@@ -587,14 +666,26 @@ export function generateExecutiveActionBrief(snapshot) {
       reorderNow: allDecisions.filter(d => d.type === DECISION_TYPES.REORDER_NOW).length,
       sellNow: allDecisions.filter(d => d.type === DECISION_TYPES.HOLD_LINE).length,
       discountSlow: allDecisions.filter(d => d.type === DECISION_TYPES.DISCOUNT_SLOW).length,
+      holdLine: allDecisions.filter(d => d.type === DECISION_TYPES.HOLD_LINE).length,
       total: inventoryFacts.size
+    },
+    // IMPACT BUCKETS (Recovery Mode)
+    impactBuckets: {
+      quantifiedImpact,
+      unquantifiedUnits,
+      actionsWithCost,
+      actionsWithoutCost,
+      coverageLabel: actionsWithCost === actions.length
+        ? 'Full cost coverage'
+        : `${actionsWithCost} of ${actions.length} actions have cost data`
     },
     // MARGIN DATA - from SALES_FACTS only
     marginData: marginResult,
     factLayerStats: {
       salesFacts: salesFacts.size,
       inventoryFacts: inventoryFacts.size,
-      excluded: suppressedItems.length
+      excluded: suppressedItems.length,
+      validFacts: inventoryFacts.size
     },
     // DIAGNOSTIC: Suppressed items and why
     suppressedItems,

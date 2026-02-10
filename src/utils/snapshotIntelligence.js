@@ -1186,6 +1186,9 @@ export function generateExecutiveBrief(snapshot, previousSnapshot = null) {
 
 /**
  * Collect all actionable signals with quantified impact
+ *
+ * RECOVERY MODE: Use soft gates - generate signals even without full cost data.
+ * Signals without cost are labeled, not blocked.
  */
 function collectActionableSignals(snapshot, previousSnapshot) {
   const signals = [];
@@ -1195,12 +1198,12 @@ function collectActionableSignals(snapshot, previousSnapshot) {
   const metrics = snapshot.metrics || {};
 
   // SIGNAL: Stockout risk (MOST URGENT)
-  // HARD GATE: Must have valid name (not MISSING/Unknown)
+  // SOFT GATE: Must have valid name, allow signals without margin data
   const stockoutRisks = velocityMetrics.filter(v => {
     if (v.daysUntilStockout === null || !isFinite(v.daysUntilStockout)) return false;
     if (v.daysUntilStockout > 10) return false;
     if (!isFinite(v.dailyVelocity) || v.dailyVelocity < 0.3) return false;
-    // Check name validity
+    // Check name validity (HARD GATE - names must be valid)
     const name = v.name || '';
     if (!name || name.toLowerCase().includes('missing') || name.toLowerCase().includes('unknown')) return false;
     return true;
@@ -1209,122 +1212,207 @@ function collectActionableSignals(snapshot, previousSnapshot) {
   for (const risk of stockoutRisks) {
     const item = inventory.find(i => i.sku === risk.sku);
 
-    // STRICT: Skip if item has invalid identity
+    // HARD GATE: Skip if item has invalid identity
     if (item && item.hasValidIdentity === false) continue;
 
     const retail = item?.pricing?.retail || risk.revenue || 0;
     const margin = item?.pricing?.margin;
-
-    // STRICT: Skip if we can't compute valid financials
-    if (!isFinite(retail) || retail <= 0) continue;
-    if (margin === null || margin === undefined || !isFinite(margin)) continue;
-
-    const dailyRevenue = risk.dailyVelocity * retail;
-    const dailyProfit = dailyRevenue * (margin / 100);
     const daysOut = risk.daysUntilStockout;
+    const quantity = item?.quantity || risk.quantity || 0;
 
-    // STRICT: Skip if profit calculation results in NaN
-    if (!isFinite(dailyProfit) || dailyProfit <= 0) continue;
+    // SOFT GATE: Calculate impact if possible, else show units
+    const hasMargin = margin !== null && margin !== undefined && isFinite(margin);
+    const hasRetail = isFinite(retail) && retail > 0;
 
-    const dollarImpact = Math.round(dailyProfit * Math.min(daysOut, 14));
-    if (!isFinite(dollarImpact)) continue;
+    let dollarImpact = 0;
+    let hasFinancialData = false;
+    let inactionCost, upside, tradeOff;
+
+    if (hasRetail && hasMargin) {
+      const dailyRevenue = risk.dailyVelocity * retail;
+      const dailyProfit = dailyRevenue * (margin / 100);
+
+      if (isFinite(dailyProfit) && dailyProfit > 0) {
+        dollarImpact = Math.round(dailyProfit * Math.min(daysOut, 14));
+        hasFinancialData = isFinite(dollarImpact) && dollarImpact > 0;
+      }
+    }
+
+    if (hasFinancialData) {
+      const dailyProfit = dollarImpact / Math.min(daysOut, 14);
+      inactionCost = `$${Math.round(dailyProfit * 7).toLocaleString()} lost profit per week of stockout`;
+      upside = `Continuous sales = $${Math.round(dailyProfit * 30).toLocaleString()}/month profit`;
+      tradeOff = {
+        doIt: `Spend ~$${Math.round((item?.pricing?.cost || 20) * 20).toLocaleString()} on reorder, secure $${Math.round(dailyProfit * 30).toLocaleString()}/month`,
+        skipIt: `Save reorder cost, risk $${Math.round(dailyProfit * 7).toLocaleString()}/week loss + customer churn`
+      };
+    } else {
+      // No cost data - use scoped language
+      inactionCost = `Stockout risk in ${daysOut} days (impact estimate unavailable)`;
+      upside = `Maintain ${risk.dailyVelocity.toFixed(1)}/day sales velocity`;
+      tradeOff = {
+        doIt: `Reorder to maintain sales velocity`,
+        skipIt: `Risk stockout and lost sales`
+      };
+    }
 
     signals.push({
       type: 'RESTOCK_NOW',
       item: risk.name,
       action: `Reorder ${risk.name}`,
       dollarImpact,
+      hasFinancialData,
+      unquantifiedUnits: hasFinancialData ? 0 : quantity,
       timeframe: `${daysOut} days until stockout`,
       urgency: daysOut <= 3 ? 'TODAY' : daysOut <= 7 ? 'THIS_WEEK' : 'SOON',
-      inactionCost: `$${Math.round(dailyProfit * 7).toLocaleString()} lost profit per week of stockout`,
-      upside: `Continuous sales = $${Math.round(dailyProfit * 30).toLocaleString()}/month profit`,
+      inactionCost,
+      upside,
       risk: 'None if reordered. Stockout loses customers permanently.',
-      tradeOff: {
-        doIt: `Spend ~$${Math.round((item?.pricing?.cost || 20) * 20).toLocaleString()} on reorder, secure $${Math.round(dailyProfit * 30).toLocaleString()}/month`,
-        skipIt: `Save reorder cost, risk $${Math.round(dailyProfit * 7).toLocaleString()}/week loss + customer churn`
-      }
+      tradeOff
     });
   }
 
   // SIGNAL: Under-promoted high-margin (PROFIT OPPORTUNITY)
-  // HARD GATE: Must have valid identity, finite margin, finite retail
+  // SOFT GATE: Prefer margin data, but allow promotion signals for high-stock items
   const highMarginSlow = inventory.filter(item => {
-    // IDENTITY CHECK: Skip items without valid name
+    // HARD GATE: Must have valid identity
     if (item.hasValidIdentity === false) return false;
     if (!item.name || item.name.toLowerCase().includes('missing')) return false;
 
-    const margin = item.pricing?.margin;
-    const retail = item.pricing?.retail;
-    // STRICT: Both must be finite and positive
-    if (margin === null || margin === undefined || !isFinite(margin) || margin < 50) return false;
-    if (retail === null || retail === undefined || !isFinite(retail) || retail <= 0) return false;
+    // Require minimum stock
     if (!isFinite(item.quantity) || item.quantity < 5) return false;
 
+    const margin = item.pricing?.margin;
+    const retail = item.pricing?.retail;
+
+    // Check velocity - only slow movers
     const vel = velocityMetrics.find(v => v.sku === item.sku);
     const dailyVel = vel?.dailyVelocity || 0;
-    return dailyVel < 0.5;
+    if (dailyVel >= 0.5) return false;
+
+    // SOFT GATE: Prefer high margin, but also consider high-stock low-velocity items
+    const hasHighMargin = margin !== null && isFinite(margin) && margin >= 50;
+    const hasRetail = retail !== null && isFinite(retail) && retail > 0;
+    const hasGoodStock = item.quantity >= 10;
+
+    // Accept if: high margin OR (high stock with retail price)
+    return hasHighMargin || (hasGoodStock && hasRetail);
   });
 
   for (const item of highMarginSlow.slice(0, 3)) {
-    const margin = item.pricing.margin;
-    const retail = item.pricing.retail;
-    const potentialProfit = item.quantity * retail * (margin / 100);
+    const margin = item.pricing?.margin;
+    const retail = item.pricing?.retail;
+    const quantity = item.quantity;
 
-    // STRICT: Skip if any calculation results in NaN
-    if (!isFinite(potentialProfit) || potentialProfit <= 0) continue;
+    // SOFT GATE: Calculate profit if possible, else show units
+    const hasMargin = margin !== null && isFinite(margin);
+    const hasRetail = retail !== null && isFinite(retail) && retail > 0;
+    const hasFinancialData = hasMargin && hasRetail;
 
-    const weeklyPotential = Math.round(potentialProfit * 0.3);
-    if (!isFinite(weeklyPotential)) continue;
+    let dollarImpact = 0;
+    let potentialProfit = 0;
+    let weeklyPotential = 0;
+    let inactionCost, upside, tradeOff;
+
+    if (hasFinancialData) {
+      potentialProfit = quantity * retail * (margin / 100);
+      if (isFinite(potentialProfit) && potentialProfit > 0) {
+        weeklyPotential = Math.round(potentialProfit * 0.3);
+        dollarImpact = weeklyPotential;
+      }
+    }
+
+    if (dollarImpact > 0 && isFinite(dollarImpact)) {
+      inactionCost = `$${Math.round(potentialProfit).toLocaleString()} capital tied up in slow-moving inventory`;
+      upside = `Move 30% of stock = $${weeklyPotential.toLocaleString()} profit this week`;
+      tradeOff = {
+        doIt: `Feature prominently, capture $${weeklyPotential.toLocaleString()} in 1-2 weeks`,
+        skipIt: `Capital stays locked in slow inventory.`
+      };
+    } else {
+      // No cost data - use scoped language
+      inactionCost = `${quantity} units sitting (impact estimate unavailable)`;
+      upside = `Increase visibility to move slow-moving stock`;
+      tradeOff = {
+        doIt: `Feature prominently to drive sales`,
+        skipIt: `Stock continues to sit`
+      };
+    }
 
     signals.push({
       type: 'PROMOTE_HIGH_MARGIN',
       item: item.name,
       action: `Feature ${item.name}`,
-      dollarImpact: weeklyPotential,
+      dollarImpact,
+      hasFinancialData: dollarImpact > 0,
+      unquantifiedUnits: dollarImpact > 0 ? 0 : quantity,
       timeframe: '1-2 weeks to see results',
       urgency: 'THIS_WEEK',
-      inactionCost: `$${Math.round(potentialProfit).toLocaleString()} capital tied up in slow-moving inventory`,
-      upside: `Move 30% of stock = $${weeklyPotential.toLocaleString()} profit this week`,
+      inactionCost,
+      upside,
       risk: 'Low - already have the inventory. Just needs visibility.',
-      tradeOff: {
-        doIt: `Feature prominently, capture $${weeklyPotential.toLocaleString()} in 1-2 weeks`,
-        skipIt: `Capital stays locked in slow inventory.`
-      }
+      tradeOff
     });
   }
 
   // SIGNAL: Dead stock (CASH RECOVERY)
+  // SOFT GATE: Show signal even without full cost data
   const slowMovers = getSlowMovers(snapshot, 5);
 
-  // STRICT: Filter to items with valid names and valid capital amounts
+  // SOFT GATE: Filter to items with valid names, allow items without cost
   const validSlowMovers = slowMovers.filter(s => {
     if (!s.name) return false;
     const nameLower = s.name.toLowerCase();
     if (nameLower.includes('missing') || nameLower.includes('unknown')) return false;
-    if (s.capitalTiedUp === null || !isFinite(s.capitalTiedUp) || s.capitalTiedUp <= 0) return false;
     return true;
   });
 
-  const totalCapitalTiedUp = validSlowMovers.reduce((sum, s) => sum + s.capitalTiedUp, 0);
+  // Separate into quantified (has cost) and unquantified (no cost)
+  const quantifiedMovers = validSlowMovers.filter(s => s.capitalTiedUp !== null && isFinite(s.capitalTiedUp) && s.capitalTiedUp > 0);
+  const unquantifiedMovers = validSlowMovers.filter(s => s.capitalTiedUp === null || !isFinite(s.capitalTiedUp) || s.capitalTiedUp <= 0);
 
-  if (isFinite(totalCapitalTiedUp) && totalCapitalTiedUp >= 500 && validSlowMovers.length >= 2) {
-    const recoverable = Math.round(totalCapitalTiedUp * 0.7); // 70% recovery with discount
+  const totalCapitalTiedUp = quantifiedMovers.reduce((sum, s) => sum + s.capitalTiedUp, 0);
+  const totalUnquantifiedUnits = unquantifiedMovers.reduce((sum, s) => sum + (s.quantity || 0), 0);
+
+  // Show signal if we have slow movers (with or without cost data)
+  if (validSlowMovers.length >= 2) {
+    const hasFinancialData = isFinite(totalCapitalTiedUp) && totalCapitalTiedUp > 0;
+    const recoverable = hasFinancialData ? Math.round(totalCapitalTiedUp * 0.7) : 0;
     const itemNames = validSlowMovers.map(s => s.name).slice(0, 3).join(', ');
+
+    let inactionCost, upside, tradeOff;
+
+    if (hasFinancialData) {
+      inactionCost = `$${Math.round(totalCapitalTiedUp).toLocaleString()} capital frozen indefinitely`;
+      upside = `Free up $${recoverable.toLocaleString()} cash for better inventory`;
+      tradeOff = {
+        doIt: `Lose ~$${Math.round(totalCapitalTiedUp * 0.3).toLocaleString()} on discounts, recover $${recoverable.toLocaleString()} cash`,
+        skipIt: `Keep full margin on paper, but capital stays trapped`
+      };
+    } else {
+      // No cost data - use scoped language
+      const totalUnits = validSlowMovers.reduce((sum, s) => sum + (s.quantity || 0), 0);
+      inactionCost = `${totalUnits} units sitting (cost data unavailable)`;
+      upside = `Clear shelf space and free up capital`;
+      tradeOff = {
+        doIt: `Discount to move stagnant inventory`,
+        skipIt: `Stock continues to occupy shelf space`
+      };
+    }
 
     signals.push({
       type: 'CLEAR_DEAD_STOCK',
       item: itemNames,
       action: 'Discount slow movers 20-30%',
       dollarImpact: recoverable,
+      hasFinancialData,
+      unquantifiedUnits: totalUnquantifiedUnits,
       timeframe: '2-4 weeks to clear',
       urgency: 'SOON',
-      inactionCost: `$${Math.round(totalCapitalTiedUp).toLocaleString()} capital frozen indefinitely`,
-      upside: `Free up $${recoverable.toLocaleString()} cash for better inventory`,
+      inactionCost,
+      upside,
       risk: 'Margin loss on discounted items (offset by freed capital)',
-      tradeOff: {
-        doIt: `Lose ~$${Math.round(totalCapitalTiedUp * 0.3).toLocaleString()} on discounts, recover $${recoverable.toLocaleString()} cash`,
-        skipIt: `Keep full margin on paper, but capital stays trapped`
-      }
+      tradeOff
     });
   }
 

@@ -1152,6 +1152,11 @@
       else if (decision === 'HOLD_LINE') moneyClass = 'protect';
       else if (decision === 'DISCOUNT_SLOW') moneyClass = 'opportunity';
 
+      // RECOVERY MODE: Check if action has cost data
+      const hasFinancialData = action.hasFinancialData !== false &&
+                                action.dollarImpact !== undefined &&
+                                action.dollarImpact > 0;
+
       // Build metrics line from available data (STRICT: only finite values)
       const metrics = action.metrics || {};
       const metricsLine = [];
@@ -1172,6 +1177,23 @@
         metricsLine.push(`${metrics.daysSinceLastSale}d since sale`);
       }
 
+      // Impact label with coverage indicator
+      let impactDisplay = '';
+      if (hasFinancialData && action.impactLabel) {
+        impactDisplay = `
+          <div class="action-card-money ${moneyClass}">
+            ${action.impactLabel}
+          </div>
+        `;
+      } else if (!hasFinancialData && metrics.quantity) {
+        // No cost data - show scoped language
+        impactDisplay = `
+          <div class="action-card-money" style="color: #ff9800; font-size: 0.85em;">
+            ${metrics.quantity} units · cost unavailable
+          </div>
+        `;
+      }
+
       return `
         <div class="action-card ${cardClass}">
           <div class="action-card-header">
@@ -1181,11 +1203,7 @@
           <div class="action-card-sku">${action.name}</div>
           <div class="action-card-why">${action.why}</div>
           <div class="action-card-todo">→ ${action.whatToDo}</div>
-          ${action.impactLabel ? `
-            <div class="action-card-money ${moneyClass}">
-              ${action.impactLabel}
-            </div>
-          ` : ''}
+          ${impactDisplay}
           ${metricsLine.length > 0 ? `
             <div style="font-size: 0.75em; color: #666; margin-top: 8px;">
               ${metricsLine.join(' · ')}
@@ -1547,22 +1565,28 @@
       }
 
       // ════════════════════════════════════════════════════════════════════════
-      // AVG MARGIN - Computed from SALES_FACTS only (via marginData)
+      // AVG MARGIN - Computed from SALES_FACTS with coverage labels
+      // RECOVERY MODE: Show margin with confidence indicator
       // ════════════════════════════════════════════════════════════════════════
       const marginData = actionBrief.marginData || {};
       const avgMarginValue = marginData.averageMargin ?? metrics.averageMargin;
       const marginIsValid = avgMarginValue !== null && avgMarginValue !== undefined && isFinite(avgMarginValue);
+      const marginConfidence = marginData.confidence || 'none';
+      const marginCoverage = marginData.coveragePercent || 0;
 
       if (marginIsValid) {
+        // Show margin with coverage label
+        const coverageLabel = marginConfidence === 'high'
+          ? `From ${marginData.skusWithMargin || 0} SKUs`
+          : `${marginCoverage}% coverage (${marginData.skusWithMargin || 0} of ${marginData.skusWithSales || 0} SKUs)`;
+
         html += `
           <div class="metric-card">
-            <div class="metric-label">Avg Margin</div>
+            <div class="metric-label">Avg Margin${marginConfidence === 'partial' ? ' (partial)' : ''}</div>
             ${renderValue(avgMarginValue, 'percent')}
-            ${marginData.skusWithMargin ? `
-              <div style="font-size: 0.7em; color: #666; margin-top: 4px;">
-                From ${marginData.skusWithMargin} SKUs sold
-              </div>
-            ` : ''}
+            <div style="font-size: 0.7em; color: ${marginConfidence === 'high' ? '#666' : '#ff9800'}; margin-top: 4px;">
+              ${coverageLabel}
+            </div>
           </div>
         `;
       } else {
@@ -1571,28 +1595,32 @@
           <div class="metric-card">
             <div class="metric-label">Avg Margin</div>
             <div class="metric-value" style="font-size: 0.9em; color: #888;">
-              No sales data
+              —
             </div>
             <div style="font-size: 0.75em; color: #666; margin-top: 4px;">
-              ${marginData.reason || 'Margin requires sales in period'}
+              ${marginData.reason || 'Margin requires sales with cost data'}
             </div>
           </div>
         `;
       }
 
       // ════════════════════════════════════════════════════════════════════════
-      // INVENTORY VALUE AT COST - Renamed per requirements
-      // This is COST BASIS only, NOT projected profit (which requires sales data)
+      // INVENTORY VALUE AT COST - With partial coverage support
+      // RECOVERY MODE: Show partial cost data with coverage label
       // ════════════════════════════════════════════════════════════════════════
       const inventoryCostBasis = metrics.inventoryCostBasis || metrics.totalCostBasis || null;
       const profitAtRiskValidated = metrics.profitStats?.validated === true;
       const profitAtRisk = profitAtRiskValidated ? metrics.inventoryProfitPotential : null;
+      const costCoverage = metrics.costCoverage || metrics.profitStats?.coverage || null;
 
-      // Only show if we have validated cost data
+      // Show inventory value even with partial coverage
       if (inventoryCostBasis !== null && isFinite(inventoryCostBasis) && inventoryCostBasis > 0) {
+        const coverageLabel = costCoverage && costCoverage < 100
+          ? `(${costCoverage}% coverage)`
+          : '';
         html += `
-          <div class="metric-card" title="Sum of (quantity × unit cost) for all sellable inventory">
-            <div class="metric-label">Inventory at Cost</div>
+          <div class="metric-card" title="Sum of (quantity × unit cost) for sellable inventory with cost data">
+            <div class="metric-label">Inventory at Cost ${coverageLabel ? '<span style="color: #ff9800;">' + coverageLabel + '</span>' : ''}</div>
             ${renderValue(inventoryCostBasis, 'currency')}
             <div style="font-size: 0.7em; color: #888; margin-top: 4px;">Capital tied up in stock</div>
           </div>
@@ -1607,11 +1635,12 @@
           </div>
         `;
       } else {
-        // No valid financial data for inventory
+        // Show unit count when no cost data
+        const totalUnits = metrics.totalUnits || metrics.totalQuantity || 0;
         html += `
           <div class="metric-card">
-            <div class="metric-label">Inventory Value</div>
-            <div class="metric-value" style="font-size: 0.9em; color: #888;">—</div>
+            <div class="metric-label">Inventory</div>
+            <div class="metric-value" style="font-size: 1.1em;">${totalUnits > 0 ? totalUnits + ' units' : '—'}</div>
             <div style="font-size: 0.75em; color: #666; margin-top: 4px;">
               Cost data incomplete
             </div>
@@ -1651,10 +1680,18 @@
       // Zero actions → "No high-confidence actions this period."
       // ═══════════════════════════════════════════════════════════════════════════
 
+      // ═══════════════════════════════════════════════════════════════════════════
+      // IMPACT BUCKETS - Quantified vs Unquantified (Recovery Mode)
+      // ═══════════════════════════════════════════════════════════════════════════
+      const impactBuckets = actionBrief.impactBuckets || {};
+      const quantifiedImpact = impactBuckets.quantifiedImpact || 0;
+      const unquantifiedUnits = impactBuckets.unquantifiedUnits || 0;
+
       console.log('[UI] Action Brief from Fact Layer:', {
         headline: actionBriefHeadline,
         actionsCount: actionBriefActions.length,
-        factLayerStats
+        factLayerStats,
+        impactBuckets
       });
 
       html += '<div class="action-brief">';
@@ -1665,6 +1702,26 @@
           ${actionBriefHeadline}
         </div>
       `;
+
+      // IMPACT BUCKETS BAR - Show quantified vs unquantified
+      if (quantifiedImpact > 0 || unquantifiedUnits > 0) {
+        html += `
+          <div style="display: flex; gap: 15px; margin: 10px 0 15px; padding: 10px; background: #1a1a1a; border-radius: 4px; font-size: 0.85em;">
+            ${quantifiedImpact > 0 ? `
+              <div>
+                <span style="color: #4CAF50; font-weight: 600;">$${quantifiedImpact.toLocaleString()}</span>
+                <span style="color: #888; margin-left: 5px;">quantified impact</span>
+              </div>
+            ` : ''}
+            ${unquantifiedUnits > 0 ? `
+              <div>
+                <span style="color: #ff9800; font-weight: 600;">${unquantifiedUnits} units</span>
+                <span style="color: #888; margin-left: 5px;">unpriced exposure</span>
+              </div>
+            ` : ''}
+          </div>
+        `;
+      }
 
       // ACTIONS - Max 3, each grounded in validated SKU fact
       if (actionBriefActions.length > 0) {
