@@ -1097,10 +1097,34 @@
      * RENDER FACT-BASED ACTION
      * ════════════════════════════════════════════════════════════════════════════
      * Actions from split fact layer (SALES_FACTS + INVENTORY_FACTS).
-     * Trusts data - no additional validation needed.
+     *
+     * HARD GATE: Actions without valid identity are BLOCKED.
      */
     function renderFactBasedAction(action) {
-      if (!action || !action.name) return '';
+      // ════════════════════════════════════════════════════════════════════════
+      // VALIDATION GATE: Block actions without valid name
+      // ════════════════════════════════════════════════════════════════════════
+      if (!action || !action.name) {
+        console.warn('[UI] Blocked action: missing name');
+        return '';
+      }
+
+      // BLOCK: Names containing 'MISSING' or 'Unknown'
+      const nameLower = action.name.toLowerCase();
+      if (nameLower.includes('missing') || nameLower.includes('unknown')) {
+        console.warn('[UI] Blocked action: invalid name', action.name);
+        return '';
+      }
+
+      // BLOCK: Actions with NaN in why/impactLabel
+      if (action.why && action.why.includes('NaN')) {
+        console.warn('[UI] Blocked action: NaN in reason', action.why);
+        return '';
+      }
+      if (action.impactLabel && action.impactLabel.includes('NaN')) {
+        console.warn('[UI] Blocked action: NaN in impact', action.impactLabel);
+        return '';
+      }
 
       const decision = action.decision || 'DEPRIORITIZE';
       const cardClass = decision.toLowerCase().replace(/_/g, '-');
@@ -1128,14 +1152,25 @@
       else if (decision === 'HOLD_LINE') moneyClass = 'protect';
       else if (decision === 'DISCOUNT_SLOW') moneyClass = 'opportunity';
 
-      // Build metrics line from available data
+      // Build metrics line from available data (STRICT: only finite values)
       const metrics = action.metrics || {};
       const metricsLine = [];
-      if (metrics.quantity !== undefined) metricsLine.push(`${metrics.quantity} units`);
-      if (metrics.velocity !== undefined && metrics.velocity > 0) metricsLine.push(`${metrics.velocity.toFixed(1)}/day`);
-      if (metrics.margin !== undefined) metricsLine.push(`${metrics.margin.toFixed(0)}% margin`);
-      if (metrics.unitsSold !== undefined) metricsLine.push(`${metrics.unitsSold} sold`);
-      if (metrics.daysSinceLastSale !== undefined) metricsLine.push(`${metrics.daysSinceLastSale}d since sale`);
+      if (metrics.quantity !== undefined && metrics.quantity !== null && isFinite(metrics.quantity)) {
+        metricsLine.push(`${metrics.quantity} units`);
+      }
+      if (metrics.velocity !== undefined && metrics.velocity !== null && isFinite(metrics.velocity) && metrics.velocity > 0) {
+        metricsLine.push(`${metrics.velocity.toFixed(1)}/day`);
+      }
+      if (metrics.margin !== undefined && metrics.margin !== null && isFinite(metrics.margin)) {
+        metricsLine.push(`${metrics.margin.toFixed(0)}% margin`);
+      }
+      if (metrics.unitsSold !== undefined && metrics.unitsSold !== null && isFinite(metrics.unitsSold)) {
+        metricsLine.push(`${metrics.unitsSold} sold`);
+      }
+      // STRICT: Only show days since sale if it's a valid finite number
+      if (metrics.daysSinceLastSale !== undefined && metrics.daysSinceLastSale !== null && isFinite(metrics.daysSinceLastSale)) {
+        metricsLine.push(`${metrics.daysSinceLastSale}d since sale`);
+      }
 
       return `
         <div class="action-card ${cardClass}">

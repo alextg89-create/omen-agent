@@ -59,8 +59,17 @@ const THRESHOLDS = {
 /**
  * Build a SALES_FACT for a SKU that sold in the period.
  * Returns null if missing required sales data.
+ *
+ * HARD GATE: Items without valid identity are BLOCKED.
  */
 function buildSalesFact(item, salesData) {
+  // ════════════════════════════════════════════════════════════════════════
+  // IDENTITY GATE: Block items with invalid identity
+  // ════════════════════════════════════════════════════════════════════════
+  if (item.hasValidIdentity === false) {
+    return null;
+  }
+
   // Must have sales in period
   const units_sold = salesData?.units_sold ?? salesData?.total_sold ?? salesData?.quantity_sold ?? 0;
   if (units_sold <= 0) {
@@ -77,6 +86,12 @@ function buildSalesFact(item, salesData) {
   const product_name = item.product_name || item.strain || item.name || null;
   const variant_name = item.variant_name || item.unit || null;
   if (!product_name || !variant_name) {
+    return null;
+  }
+
+  // REJECT: Names containing 'MISSING' or 'Unknown' (case-insensitive)
+  const nameLower = (product_name + variant_name).toLowerCase();
+  if (nameLower.includes('missing') || nameLower.includes('unknown')) {
     return null;
   }
 
@@ -114,9 +129,17 @@ function buildSalesFact(item, salesData) {
 
 /**
  * Build an INVENTORY_FACT for any sellable SKU.
- * More lenient - only requires SKU, name, and quantity.
+ *
+ * HARD GATE: Items without valid identity are BLOCKED.
  */
 function buildInventoryFact(item, velocityData) {
+  // ════════════════════════════════════════════════════════════════════════
+  // IDENTITY GATE: Block items with invalid identity
+  // ════════════════════════════════════════════════════════════════════════
+  if (item.hasValidIdentity === false) {
+    return null;
+  }
+
   // Required: SKU
   const sku = item.sku;
   if (!sku || typeof sku !== 'string' || sku.trim() === '') {
@@ -127,6 +150,12 @@ function buildInventoryFact(item, velocityData) {
   const product_name = item.product_name || item.strain || item.name || null;
   const variant_name = item.variant_name || item.unit || null;
   if (!product_name || !variant_name) {
+    return null;
+  }
+
+  // REJECT: Names containing 'MISSING' or 'Unknown' (case-insensitive)
+  const nameLower = (product_name + variant_name).toLowerCase();
+  if (nameLower.includes('missing') || nameLower.includes('unknown')) {
     return null;
   }
 

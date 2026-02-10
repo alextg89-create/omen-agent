@@ -345,6 +345,15 @@ export function getSlowMovers(snapshot, limit = 5) {
   const slowMovers = [];
 
   for (const item of inventory) {
+    // IDENTITY GATE: Skip items with invalid identity
+    if (item.hasValidIdentity === false) continue;
+
+    const itemName = item.name || `${item.strain} (${item.unit})`;
+
+    // STRICT: Skip names containing 'MISSING' or 'Unknown'
+    const nameLower = itemName.toLowerCase();
+    if (nameLower.includes('missing') || nameLower.includes('unknown')) continue;
+
     const velocity = velocityMetrics.find(v =>
       v.sku === item.sku || v.sku === item.strain
     );
@@ -356,7 +365,7 @@ export function getSlowMovers(snapshot, limit = 5) {
       const cost = item.pricing?.cost ?? null;
       slowMovers.push({
         sku: item.sku || item.strain,
-        name: item.name || `${item.strain} (${item.unit})`,
+        name: itemName,
         unit: item.unit,
         quantity,
         dailyVelocity,
@@ -1186,86 +1195,134 @@ function collectActionableSignals(snapshot, previousSnapshot) {
   const metrics = snapshot.metrics || {};
 
   // SIGNAL: Stockout risk (MOST URGENT)
-  const stockoutRisks = velocityMetrics.filter(v =>
-    v.daysUntilStockout !== null &&
-    v.daysUntilStockout <= 10 &&
-    v.dailyVelocity >= 0.3
-  );
+  // HARD GATE: Must have valid name (not MISSING/Unknown)
+  const stockoutRisks = velocityMetrics.filter(v => {
+    if (v.daysUntilStockout === null || !isFinite(v.daysUntilStockout)) return false;
+    if (v.daysUntilStockout > 10) return false;
+    if (!isFinite(v.dailyVelocity) || v.dailyVelocity < 0.3) return false;
+    // Check name validity
+    const name = v.name || '';
+    if (!name || name.toLowerCase().includes('missing') || name.toLowerCase().includes('unknown')) return false;
+    return true;
+  });
 
   for (const risk of stockoutRisks) {
     const item = inventory.find(i => i.sku === risk.sku);
-    const dailyRevenue = risk.dailyVelocity * (item?.pricing?.retail || risk.revenue || 0);
-    const dailyProfit = dailyRevenue * ((item?.pricing?.margin || 50) / 100);
+
+    // STRICT: Skip if item has invalid identity
+    if (item && item.hasValidIdentity === false) continue;
+
+    const retail = item?.pricing?.retail || risk.revenue || 0;
+    const margin = item?.pricing?.margin;
+
+    // STRICT: Skip if we can't compute valid financials
+    if (!isFinite(retail) || retail <= 0) continue;
+    if (margin === null || margin === undefined || !isFinite(margin)) continue;
+
+    const dailyRevenue = risk.dailyVelocity * retail;
+    const dailyProfit = dailyRevenue * (margin / 100);
     const daysOut = risk.daysUntilStockout;
+
+    // STRICT: Skip if profit calculation results in NaN
+    if (!isFinite(dailyProfit) || dailyProfit <= 0) continue;
+
+    const dollarImpact = Math.round(dailyProfit * Math.min(daysOut, 14));
+    if (!isFinite(dollarImpact)) continue;
 
     signals.push({
       type: 'RESTOCK_NOW',
-      item: risk.name || risk.sku,
-      action: `Reorder ${risk.name || risk.sku}`,
-      dollarImpact: Math.round(dailyProfit * Math.min(daysOut, 14)),
+      item: risk.name,
+      action: `Reorder ${risk.name}`,
+      dollarImpact,
       timeframe: `${daysOut} days until stockout`,
       urgency: daysOut <= 3 ? 'TODAY' : daysOut <= 7 ? 'THIS_WEEK' : 'SOON',
-      inactionCost: `$${Math.round(dailyProfit * 7)} lost profit per week of stockout`,
-      upside: `Continuous sales = $${Math.round(dailyProfit * 30)}/month profit`,
+      inactionCost: `$${Math.round(dailyProfit * 7).toLocaleString()} lost profit per week of stockout`,
+      upside: `Continuous sales = $${Math.round(dailyProfit * 30).toLocaleString()}/month profit`,
       risk: 'None if reordered. Stockout loses customers permanently.',
       tradeOff: {
-        doIt: `Spend ~$${Math.round((item?.pricing?.cost || 20) * 20)} on reorder, secure $${Math.round(dailyProfit * 30)}/month`,
-        skipIt: `Save reorder cost, risk $${Math.round(dailyProfit * 7)}/week loss + customer churn`
+        doIt: `Spend ~$${Math.round((item?.pricing?.cost || 20) * 20).toLocaleString()} on reorder, secure $${Math.round(dailyProfit * 30).toLocaleString()}/month`,
+        skipIt: `Save reorder cost, risk $${Math.round(dailyProfit * 7).toLocaleString()}/week loss + customer churn`
       }
     });
   }
 
   // SIGNAL: Under-promoted high-margin (PROFIT OPPORTUNITY)
+  // HARD GATE: Must have valid identity, finite margin, finite retail
   const highMarginSlow = inventory.filter(item => {
+    // IDENTITY CHECK: Skip items without valid name
+    if (item.hasValidIdentity === false) return false;
+    if (!item.name || item.name.toLowerCase().includes('missing')) return false;
+
     const margin = item.pricing?.margin;
-    if (margin === null || margin === undefined || margin < 50) return false;
+    const retail = item.pricing?.retail;
+    // STRICT: Both must be finite and positive
+    if (margin === null || margin === undefined || !isFinite(margin) || margin < 50) return false;
+    if (retail === null || retail === undefined || !isFinite(retail) || retail <= 0) return false;
+    if (!isFinite(item.quantity) || item.quantity < 5) return false;
+
     const vel = velocityMetrics.find(v => v.sku === item.sku);
     const dailyVel = vel?.dailyVelocity || 0;
-    return dailyVel < 0.5 && item.quantity >= 5;
+    return dailyVel < 0.5;
   });
 
   for (const item of highMarginSlow.slice(0, 3)) {
     const margin = item.pricing.margin;
-    const retail = item.pricing?.retail || 0;
+    const retail = item.pricing.retail;
     const potentialProfit = item.quantity * retail * (margin / 100);
-    const weeklyPotential = Math.round(potentialProfit * 0.3); // Assume we can move 30% with promotion
+
+    // STRICT: Skip if any calculation results in NaN
+    if (!isFinite(potentialProfit) || potentialProfit <= 0) continue;
+
+    const weeklyPotential = Math.round(potentialProfit * 0.3);
+    if (!isFinite(weeklyPotential)) continue;
 
     signals.push({
       type: 'PROMOTE_HIGH_MARGIN',
-      item: item.name || item.sku,
-      action: `Feature ${item.name || item.sku}`,
+      item: item.name,
+      action: `Feature ${item.name}`,
       dollarImpact: weeklyPotential,
       timeframe: '1-2 weeks to see results',
       urgency: 'THIS_WEEK',
-      inactionCost: `$${Math.round(potentialProfit)} profit sits idle on shelf`,
-      upside: `Move 30% of stock = $${weeklyPotential} profit this week`,
+      inactionCost: `$${Math.round(potentialProfit).toLocaleString()} capital tied up in slow-moving inventory`,
+      upside: `Move 30% of stock = $${weeklyPotential.toLocaleString()} profit this week`,
       risk: 'Low - already have the inventory. Just needs visibility.',
       tradeOff: {
-        doIt: `Feature prominently, capture $${weeklyPotential} in 1-2 weeks`,
-        skipIt: `Profit stays locked. Capital tied up in slow inventory.`
+        doIt: `Feature prominently, capture $${weeklyPotential.toLocaleString()} in 1-2 weeks`,
+        skipIt: `Capital stays locked in slow inventory.`
       }
     });
   }
 
   // SIGNAL: Dead stock (CASH RECOVERY)
   const slowMovers = getSlowMovers(snapshot, 5);
-  const totalCapitalTiedUp = slowMovers.reduce((sum, s) => sum + (s.capitalTiedUp || 0), 0);
 
-  if (totalCapitalTiedUp >= 500 && slowMovers.length >= 2) {
+  // STRICT: Filter to items with valid names and valid capital amounts
+  const validSlowMovers = slowMovers.filter(s => {
+    if (!s.name) return false;
+    const nameLower = s.name.toLowerCase();
+    if (nameLower.includes('missing') || nameLower.includes('unknown')) return false;
+    if (s.capitalTiedUp === null || !isFinite(s.capitalTiedUp) || s.capitalTiedUp <= 0) return false;
+    return true;
+  });
+
+  const totalCapitalTiedUp = validSlowMovers.reduce((sum, s) => sum + s.capitalTiedUp, 0);
+
+  if (isFinite(totalCapitalTiedUp) && totalCapitalTiedUp >= 500 && validSlowMovers.length >= 2) {
     const recoverable = Math.round(totalCapitalTiedUp * 0.7); // 70% recovery with discount
+    const itemNames = validSlowMovers.map(s => s.name).slice(0, 3).join(', ');
 
     signals.push({
       type: 'CLEAR_DEAD_STOCK',
-      item: slowMovers.map(s => s.name).slice(0, 3).join(', '),
+      item: itemNames,
       action: 'Discount slow movers 20-30%',
       dollarImpact: recoverable,
       timeframe: '2-4 weeks to clear',
       urgency: 'SOON',
-      inactionCost: `$${Math.round(totalCapitalTiedUp)} capital frozen indefinitely`,
-      upside: `Free up $${recoverable} cash for better inventory`,
+      inactionCost: `$${Math.round(totalCapitalTiedUp).toLocaleString()} capital frozen indefinitely`,
+      upside: `Free up $${recoverable.toLocaleString()} cash for better inventory`,
       risk: 'Margin loss on discounted items (offset by freed capital)',
       tradeOff: {
-        doIt: `Lose ~${Math.round(totalCapitalTiedUp * 0.3)} on discounts, recover $${recoverable} cash`,
+        doIt: `Lose ~$${Math.round(totalCapitalTiedUp * 0.3).toLocaleString()} on discounts, recover $${recoverable.toLocaleString()} cash`,
         skipIt: `Keep full margin on paper, but capital stays trapped`
       }
     });
@@ -1275,25 +1332,29 @@ function collectActionableSignals(snapshot, previousSnapshot) {
   if (previousSnapshot) {
     const currentRev = metrics.totalRevenue;
     const prevRev = previousSnapshot?.metrics?.totalRevenue;
-    if (currentRev !== null && prevRev !== null && prevRev > 0 && currentRev < prevRev * 0.9) {
+    // STRICT: All values must be finite numbers
+    if (isFinite(currentRev) && isFinite(prevRev) && prevRev > 0 && currentRev < prevRev * 0.9) {
       const decline = prevRev - currentRev;
       const monthlyImpact = decline * 4;
 
-      signals.push({
-        type: 'REVENUE_DECLINE',
-        item: null,
-        action: 'Investigate revenue drop',
-        dollarImpact: Math.round(monthlyImpact),
-        timeframe: 'Diagnose within 48 hours',
-        urgency: 'TODAY',
-        inactionCost: `$${Math.round(monthlyImpact)}/month if trend continues`,
-        upside: `Identify and fix the leak before it compounds`,
-        risk: 'None - investigation has no downside',
-        tradeOff: {
-          doIt: `Spend 1 hour diagnosing, potentially save $${Math.round(monthlyImpact)}/month`,
-          skipIt: `Bleed $${Math.round(decline)}/week while hoping it fixes itself`
-        }
-      });
+      // STRICT: Only push if calculated values are finite
+      if (isFinite(decline) && isFinite(monthlyImpact)) {
+        signals.push({
+          type: 'REVENUE_DECLINE',
+          item: null,
+          action: 'Investigate revenue drop',
+          dollarImpact: Math.round(monthlyImpact),
+          timeframe: 'Diagnose within 48 hours',
+          urgency: 'TODAY',
+          inactionCost: `$${Math.round(monthlyImpact).toLocaleString()}/month if trend continues`,
+          upside: `Identify and fix the leak before it compounds`,
+          risk: 'None - investigation has no downside',
+          tradeOff: {
+            doIt: `Spend 1 hour diagnosing, potentially save $${Math.round(monthlyImpact).toLocaleString()}/month`,
+            skipIt: `Bleed $${Math.round(decline).toLocaleString()}/week while hoping it fixes itself`
+          }
+        });
+      }
     }
   }
 
@@ -1301,26 +1362,30 @@ function collectActionableSignals(snapshot, previousSnapshot) {
   if (previousSnapshot) {
     const currentMargin = metrics.averageMargin;
     const prevMargin = previousSnapshot?.metrics?.averageMargin;
-    if (currentMargin !== null && prevMargin !== null && prevMargin > 0 && currentMargin < prevMargin - 3) {
+    // STRICT: All values must be finite numbers
+    if (isFinite(currentMargin) && isFinite(prevMargin) && prevMargin > 0 && currentMargin < prevMargin - 3) {
       const marginDrop = prevMargin - currentMargin;
       const revenue = metrics.totalRevenue || 0;
       const profitLost = (marginDrop / 100) * revenue;
 
-      signals.push({
-        type: 'MARGIN_SQUEEZE',
-        item: null,
-        action: 'Review pricing strategy',
-        dollarImpact: Math.round(profitLost * 4),
-        timeframe: 'Review within 1 week',
-        urgency: 'THIS_WEEK',
-        inactionCost: `${marginDrop.toFixed(1)} points of margin = $${Math.round(profitLost)}/week lost`,
-        upside: `Restore margins = +$${Math.round(profitLost)}/week profit`,
-        risk: 'Price increases may slow velocity (test carefully)',
-        tradeOff: {
-          doIt: `Raise prices 5%, risk 10% velocity drop, net gain if margin lift > velocity loss`,
-          skipIt: `Keep prices, accept margin erosion eating profit`
-        }
-      });
+      // STRICT: Only push if calculated values are finite
+      if (isFinite(marginDrop) && isFinite(profitLost) && profitLost > 0) {
+        signals.push({
+          type: 'MARGIN_SQUEEZE',
+          item: null,
+          action: 'Review pricing strategy',
+          dollarImpact: Math.round(profitLost * 4),
+          timeframe: 'Review within 1 week',
+          urgency: 'THIS_WEEK',
+          inactionCost: `${marginDrop.toFixed(1)} points of margin = $${Math.round(profitLost).toLocaleString()}/week lost`,
+          upside: `Restore margins = +$${Math.round(profitLost).toLocaleString()}/week profit`,
+          risk: 'Price increases may slow velocity (test carefully)',
+          tradeOff: {
+            doIt: `Raise prices 5%, risk 10% velocity drop, net gain if margin lift > velocity loss`,
+            skipIt: `Keep prices, accept margin erosion eating profit`
+          }
+        });
+      }
     }
   }
 
