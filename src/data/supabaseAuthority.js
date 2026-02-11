@@ -367,17 +367,31 @@ export async function getAuthoritativeInventory() {
     if (margin !== null) skusWithMargin++;
 
     // ======================================================================
-    // EXTRACT PRODUCT INFO - NO FALLBACK TO 'Unknown'
-    // SKUs missing identity are EXCLUDED, not rendered with placeholders
+    // EXTRACT PRODUCT INFO - WITH VARIANT EXTRACTION FROM NAME
+    // If variant is "Unknown", try to extract from name like "Mai Tai (28 G)"
     // ======================================================================
-    const productName = item.product_name || item.strain || item.name || null;
-    const variantName = item.variant_name || item.unit || null;
+    let productName = item.product_name || item.strain || null;
+    let variantName = item.variant_name || item.unit || null;
+    const fullName = item.name || productName || '';
     const category = item.category || item.quality || item.tier || 'STANDARD';
+
+    // CRITICAL FIX: Extract variant from name when unit is "Unknown"
+    if (!productName && fullName) {
+      productName = fullName.split('(')[0].trim() || null;
+    }
+    if (!variantName || variantName.toLowerCase() === 'unknown') {
+      const match = fullName.match(/\(([^)]+)\)/);
+      if (match) {
+        variantName = match[1];
+      }
+    }
 
     // VALIDATION GATE: Exclude SKUs with missing identity
     const hasValidIdentity = productName && variantName &&
       productName.toLowerCase() !== 'unknown' &&
-      variantName.toLowerCase() !== 'unknown';
+      productName.toLowerCase() !== 'missing' &&
+      variantName.toLowerCase() !== 'unknown' &&
+      variantName.toLowerCase() !== 'missing';
     const identityStatus = hasValidIdentity ? 'VALID' : 'EXCLUDED_MISSING_IDENTITY';
 
     return {
