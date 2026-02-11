@@ -1727,6 +1727,7 @@
       const actionBriefActions = actionBrief.actions || [];
       const factLayerStats = actionBrief.factLayerStats || {};
       const briefSummary = actionBrief.summary || {};
+      const marginData = actionBrief.marginData || {};
 
       const hasRealData = temporal.hasRealData === true || velocity.orderCount > 0;
       const timeframeOrders = orderContext.timeframe?.orderCount || velocity.orderCount || 0;
@@ -1970,7 +1971,15 @@
               <div class="performance-stat-label">SKUs Sold</div>
             </div>
             <div class="performance-stat">
-              <div class="performance-stat-value">${metrics.averageMargin && isFinite(metrics.averageMargin) ? metrics.averageMargin.toFixed(0) + '%' : '—'}</div>
+              <div class="performance-stat-value">${
+                // Prefer sales-based margin from actionBrief (computed from order line items)
+                marginData.averageMargin && isFinite(marginData.averageMargin)
+                  ? marginData.averageMargin.toFixed(0) + '%'
+                  // Fallback to inventory-based margin
+                  : metrics.averageMargin && isFinite(metrics.averageMargin)
+                    ? metrics.averageMargin.toFixed(0) + '%'
+                    : 'N/A'
+              }</div>
               <div class="performance-stat-label">Avg Margin</div>
             </div>
           </div>

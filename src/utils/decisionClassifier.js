@@ -341,21 +341,12 @@ export function buildFactTables(inventory, velocityMetrics = [], periodSalesMap 
 // WEIGHTED AVERAGE MARGIN (from SALES_FACTS only)
 // ============================================================================
 
-// TIERED THRESHOLDS (Recovery Mode)
-const MARGIN_THRESHOLDS = {
-  MIN_REVENUE_COVERAGE: 0.60,  // 60% of revenue must have valid cost
-  MIN_SKUS_ALTERNATIVE: 3,     // OR at least 3 SKUs with valid cost + sales
-  PARTIAL_COVERAGE_MIN: 0.30   // Below 30% = too unreliable to show
-};
-
 /**
  * Compute weighted average margin from SALES_FACTS only.
  * Weighted by revenue (more accurate than unit count).
  *
- * RECOVERY MODE: Show margin with coverage labels instead of blocking.
- * - Full confidence: >= 60% revenue coverage
- * - Partial confidence: >= 3 SKUs OR >= 30% coverage
- * - No margin: < 30% coverage AND < 3 SKUs
+ * SIMPLE RULE: If ANY SKU has cost data, compute and display margin.
+ * Only return null if ZERO line items have cost.
  */
 export function computeWeightedMargin(salesFacts) {
   let totalPeriodRevenue = 0;
@@ -390,26 +381,18 @@ export function computeWeightedMargin(salesFacts) {
     : 0;
   const coveragePercent = Math.round(revenueCoverage * 100);
 
-  // TIERED DECISION LOGIC
-  const hasFullCoverage = revenueCoverage >= MARGIN_THRESHOLDS.MIN_REVENUE_COVERAGE;
-  const hasPartialCoverage = skusWithValidMargin >= MARGIN_THRESHOLDS.MIN_SKUS_ALTERNATIVE ||
-                              revenueCoverage >= MARGIN_THRESHOLDS.PARTIAL_COVERAGE_MIN;
-  const hasSufficientData = hasFullCoverage || hasPartialCoverage;
-
-  // No usable data
-  if (!hasSufficientData || revenueWithMargin <= 0) {
+  // SIMPLE RULE: Only block if ZERO SKUs have cost data
+  if (skusWithValidMargin === 0 || revenueWithMargin <= 0) {
     return {
       averageMargin: null,
       totalRevenue: totalPeriodRevenue || 0,
       revenueWithMargin: 0,
       totalMarginDollars: 0,
-      skusWithMargin: skusWithValidMargin,
+      skusWithMargin: 0,
       skusWithSales,
       coveragePercent: 0,
       confidence: 'none',
-      reason: skusWithValidMargin === 0
-        ? 'No cost data available for sold items'
-        : `Coverage too low (${coveragePercent}% of revenue, ${skusWithValidMargin} SKUs)`
+      reason: 'No cost data available for sold items in this period'
     };
   }
 
@@ -430,11 +413,11 @@ export function computeWeightedMargin(salesFacts) {
     };
   }
 
-  // Determine confidence level
-  const confidence = hasFullCoverage ? 'high' : 'partial';
-  const reason = hasFullCoverage
-    ? null
-    : `Based on ${coveragePercent}% of revenue (${skusWithValidMargin} of ${skusWithSales} SKUs)`;
+  // Confidence is informational only - does NOT block display
+  const confidence = coveragePercent >= 60 ? 'high' : 'partial';
+  const reason = coveragePercent < 100
+    ? `Based on ${coveragePercent}% of revenue (${skusWithValidMargin} of ${skusWithSales} SKUs with cost data)`
+    : null;
 
   return {
     averageMargin: parseFloat(avgMarginPercent.toFixed(2)),
