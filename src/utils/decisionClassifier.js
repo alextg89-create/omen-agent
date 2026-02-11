@@ -786,8 +786,10 @@ export function generateExecutiveActionBrief(snapshot) {
         ? 'Full cost coverage'
         : `${actionsWithCost} of ${actions.length} actions have cost data`
     },
-    // MARGIN DATA - from SALES_FACTS only
-    marginData: marginResult,
+    // MARGIN DATA - ORDER-DERIVED (primary), inventory-based (fallback)
+    // Order-based margin comes from snapshot.velocity.orderBasedMargin
+    // This is computed directly from order line items + sku_costs, NO inventory dependency
+    marginData: snapshot.velocity?.orderBasedMargin || marginResult,
     factLayerStats: {
       salesFacts: salesFacts.size,
       inventoryFacts: inventoryFacts.size,

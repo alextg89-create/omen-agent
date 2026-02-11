@@ -9,6 +9,109 @@
 
 import { queryOrderEvents, queryLineItemOrders } from '../db/supabaseQueries.js';
 import { calculateDateRange } from '../utils/dateCalculations.js';
+import { getSupabaseClient, isSupabaseAvailable } from '../db/supabaseClient.js';
+
+/**
+ * Compute margin DIRECTLY from order line items + sku_costs table.
+ * NO inventory dependency. NO SKU classification dependency.
+ *
+ * Logic:
+ * - revenue = price_per_unit * quantity (from order line items)
+ * - profit = (price_per_unit - unit_cost) * quantity
+ * - avgMargin = profit / revenue (as percentage)
+ *
+ * @param {Array} orders - Raw order line items with price_per_unit
+ * @returns {Object} { averageMargin, revenue, profit, coverage }
+ */
+async function computeOrderBasedMargin(orders) {
+  if (!orders || orders.length === 0) {
+    return {
+      averageMargin: null,
+      revenue: 0,
+      profit: 0,
+      lineItemsWithCost: 0,
+      lineItemsTotal: 0,
+      coveragePercent: 0,
+      reason: 'No order line items in this period'
+    };
+  }
+
+  // Load cost data from sku_costs table
+  let costMap = new Map();
+  if (isSupabaseAvailable()) {
+    try {
+      const client = getSupabaseClient();
+      const { data: costs, error } = await client
+        .from('sku_costs')
+        .select('sku, unit_cost');
+
+      if (!error && costs) {
+        for (const row of costs) {
+          if (row.sku && row.unit_cost !== null) {
+            costMap.set(row.sku, parseFloat(row.unit_cost));
+          }
+        }
+      }
+      console.log(`[TemporalAnalyzer] Loaded ${costMap.size} SKU costs for margin calculation`);
+    } catch (err) {
+      console.warn(`[TemporalAnalyzer] Failed to load sku_costs: ${err.message}`);
+    }
+  }
+
+  let totalRevenue = 0;
+  let totalProfit = 0;
+  let lineItemsWithCost = 0;
+  let lineItemsTotal = 0;
+
+  for (const order of orders) {
+    const sku = order.sku || order.product_sku || order.item_sku;
+    const quantity = Number(order.quantity) || 0;
+    const price = Number(order.price_per_unit) || 0;
+
+    if (!sku || quantity <= 0 || price <= 0) continue;
+
+    lineItemsTotal++;
+    const lineRevenue = price * quantity;
+    totalRevenue += lineRevenue;
+
+    // Get cost from sku_costs table
+    const cost = costMap.get(sku);
+    if (cost !== undefined && cost !== null) {
+      const lineProfit = (price - cost) * quantity;
+      totalProfit += lineProfit;
+      lineItemsWithCost++;
+    }
+  }
+
+  // Compute margin
+  if (lineItemsWithCost === 0 || totalRevenue <= 0) {
+    return {
+      averageMargin: null,
+      revenue: totalRevenue,
+      profit: 0,
+      lineItemsWithCost: 0,
+      lineItemsTotal,
+      coveragePercent: 0,
+      reason: 'No cost data available for sold items in this period'
+    };
+  }
+
+  // avgMargin = profit / revenue * 100 (as percentage)
+  const avgMarginPercent = (totalProfit / totalRevenue) * 100;
+  const coveragePercent = Math.round((lineItemsWithCost / lineItemsTotal) * 100);
+
+  return {
+    averageMargin: parseFloat(avgMarginPercent.toFixed(2)),
+    revenue: parseFloat(totalRevenue.toFixed(2)),
+    profit: parseFloat(totalProfit.toFixed(2)),
+    lineItemsWithCost,
+    lineItemsTotal,
+    coveragePercent,
+    reason: coveragePercent < 100
+      ? `Based on ${coveragePercent}% of line items (${lineItemsWithCost} of ${lineItemsTotal} have cost data)`
+      : null
+  };
+}
 
 /**
  * Analyze inventory movement from real order data
@@ -78,6 +181,9 @@ export async function analyzeInventoryVelocity(currentInventory, timeframe = 'we
   // Generate actionable insights
   const insights = generateActionableInsights(velocityMetrics, currentInventory);
 
+  // CRITICAL: Compute margin directly from orders + sku_costs (NO inventory dependency)
+  const orderBasedMargin = await computeOrderBasedMargin(orders);
+
   return {
     ok: true,
     hasData: true,
@@ -87,7 +193,9 @@ export async function analyzeInventoryVelocity(currentInventory, timeframe = 'we
     lineItemCount: orders.length,
     uniqueSKUs: ordersBySkU.size,
     insights,
-    velocityMetrics
+    velocityMetrics,
+    // ORDER-DERIVED MARGIN - independent of inventory
+    orderBasedMargin
   };
 }
 

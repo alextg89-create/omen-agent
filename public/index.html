@@ -1971,14 +1971,15 @@
               <div class="performance-stat-label">SKUs Sold</div>
             </div>
             <div class="performance-stat">
-              <div class="performance-stat-value">${
-                // Prefer sales-based margin from actionBrief (computed from order line items)
+              <div class="performance-stat-value" style="${!marginData.averageMargin && !metrics.averageMargin ? 'font-size: 0.7em; color: #888;' : ''}">${
+                // ORDER-DERIVED margin (primary) - computed directly from order line items + sku_costs
                 marginData.averageMargin && isFinite(marginData.averageMargin)
                   ? marginData.averageMargin.toFixed(0) + '%'
                   // Fallback to inventory-based margin
                   : metrics.averageMargin && isFinite(metrics.averageMargin)
                     ? metrics.averageMargin.toFixed(0) + '%'
-                    : 'N/A'
+                    // No cost data available
+                    : 'no cost data'
               }</div>
               <div class="performance-stat-label">Avg Margin</div>
             </div>
