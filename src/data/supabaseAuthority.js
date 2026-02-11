@@ -387,11 +387,44 @@ export async function getAuthoritativeInventory() {
     }
 
     // VALIDATION GATE: Exclude SKUs with missing identity
-    const hasValidIdentity = productName && variantName &&
+    let hasValidIdentity = productName && variantName &&
       productName.toLowerCase() !== 'unknown' &&
       productName.toLowerCase() !== 'missing' &&
       variantName.toLowerCase() !== 'unknown' &&
       variantName.toLowerCase() !== 'missing';
+
+    // ======================================================================
+    // IDENTITY INFERENCE LAYER (STRICT_MODE safe)
+    // Activates ONLY when identity fields are missing.
+    // Deterministic. Logged. Flagged as identitySource: "inferred".
+    // If inference fails, SKU remains excluded — no relaxation.
+    // ======================================================================
+    let identitySource = hasValidIdentity ? 'authority' : null;
+
+    if (!hasValidIdentity && item.sku) {
+      const inferred = inferIdentityFromSku(item.sku);
+      if (inferred.product_name && inferred.variant_name) {
+        productName = inferred.product_name;
+        variantName = inferred.variant_name;
+        hasValidIdentity = true;
+        identitySource = 'inferred';
+        console.log(JSON.stringify({
+          event: 'IDENTITY_INFERRED',
+          sku: item.sku,
+          product_name: inferred.product_name,
+          variant_name: inferred.variant_name,
+          unit: inferred.unit
+        }));
+      } else {
+        console.log(JSON.stringify({
+          event: 'IDENTITY_INFERENCE_FAILED',
+          sku: item.sku,
+          original_product_name: productName,
+          original_variant_name: variantName
+        }));
+      }
+    }
+
     const identityStatus = hasValidIdentity ? 'VALID' : 'EXCLUDED_MISSING_IDENTITY';
 
     return {
@@ -401,6 +434,7 @@ export async function getAuthoritativeInventory() {
       unit: variantName || 'MISSING',
       quality: category,
       identityStatus,
+      identitySource,
       hasValidIdentity,
       // ======================================================================
       // QUANTITY FIELDS - Order-driven, real-time
@@ -672,6 +706,103 @@ export async function getAuthoritativeInventory() {
       visibleCount: visibleSKUs.length
     }
   };
+}
+
+// ============================================================================
+// DETERMINISTIC IDENTITY INFERENCE
+// Activates ONLY when identity fields are missing/invalid.
+// Does NOT relax STRICT_MODE. If inference fails, SKU stays excluded.
+// ============================================================================
+
+// Size suffix with G/g (3.5G, 28G), bare decimal (3.5), or OZ
+const SIZE_PATTERN = /^(.+?)[_-](\d+\.\d+[Gg]?|\d+[Gg]|[Oo][Zz])$/;
+// Numeric-only suffix — no decimal, no G (e.g., FADED-GUMMIES-01)
+const NUMERIC_SUFFIX_PATTERN = /^(.+?)[_-](\d{1,3})$/;
+
+// Unit classification from variant token
+const UNIT_RULES = [
+  { test: /^\d+(\.\d+)?[Gg]$/,  unit: 'grams' },    // 3.5G, 7G, 14G, 28G
+  { test: /^\d+\.\d+$/,         unit: 'grams' },     // 3.5 (bare decimal → grams)
+  { test: /^[Oo][Zz]$/,         unit: 'grams' },     // OZ
+];
+
+// Product-name tokens that signal unit = 'pieces'
+const PIECE_TOKENS = ['gummies', 'gummy', 'edibles', 'edible', 'capsules', 'tabs'];
+
+/**
+ * Pure function: infer identity fields from a SKU string.
+ * Deterministic — same input always produces same output.
+ * Returns null for ALL fields if any required field cannot be inferred.
+ *
+ * @param {string} sku - Raw SKU string (e.g. "BLOOPIEZ-3.5G")
+ * @returns {{ product_name: string|null, variant_name: string|null, unit: string|null }}
+ */
+function inferIdentityFromSku(sku) {
+  const FAIL = { product_name: null, variant_name: null, unit: null };
+
+  if (!sku || typeof sku !== 'string' || sku.trim() === '') return FAIL;
+
+  const trimmed = sku.trim();
+
+  // Attempt 1: size suffix  (BLOOPIEZ-3.5G → BLOOPIEZ / 3.5G)
+  let match = trimmed.match(SIZE_PATTERN);
+  if (match) {
+    const rawProduct = match[1];
+    const rawVariant = match[2];
+    const productName = formatProductName(rawProduct);
+    const variantName = rawVariant.toUpperCase();
+    const unit = inferUnit(rawVariant, rawProduct);
+    if (productName && variantName) {
+      return { product_name: productName, variant_name: variantName, unit };
+    }
+  }
+
+  // Attempt 2: numeric suffix  (FADED-GUMMIES-01 → FADED GUMMIES / 01)
+  match = trimmed.match(NUMERIC_SUFFIX_PATTERN);
+  if (match) {
+    const rawProduct = match[1];
+    const rawVariant = match[2];
+    const productName = formatProductName(rawProduct);
+    const variantName = rawVariant;
+    const unit = inferUnit(rawVariant, rawProduct);
+    if (productName && variantName) {
+      return { product_name: productName, variant_name: variantName, unit };
+    }
+  }
+
+  // Attempt 3: no separator — entire SKU is alpha (e.g. "ZOAP")
+  // Cannot infer variant → fail
+  return FAIL;
+}
+
+/**
+ * Convert raw SKU product segment to human-readable name.
+ * "FADED-GUMMIES" → "Faded Gummies"
+ */
+function formatProductName(raw) {
+  if (!raw) return null;
+  return raw
+    .replace(/[-_]+/g, ' ')
+    .trim()
+    .split(/\s+/)
+    .map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+    .join(' ') || null;
+}
+
+/**
+ * Infer unit from variant token and product name tokens.
+ */
+function inferUnit(variantToken, productSegment) {
+  // Check variant token against size rules
+  for (const rule of UNIT_RULES) {
+    if (rule.test.test(variantToken)) return rule.unit;
+  }
+  // Check product segment for piece-type keywords
+  const lower = (productSegment || '').toLowerCase();
+  for (const token of PIECE_TOKENS) {
+    if (lower.includes(token)) return 'pieces';
+  }
+  return null;
 }
 
 /**
