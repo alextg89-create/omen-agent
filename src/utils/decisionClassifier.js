@@ -309,10 +309,45 @@ export function buildFactTables(inventory, velocityMetrics = [], periodSalesMap 
     return item;
   });
 
+  // DIAGNOSTIC: Log input sizes
+  console.log(`[FactLayer] INPUT: ${inventory.length} inventory items, ${velocityMetrics.length} velocity items, ${salesMap.size} with sales`);
+
+  // DIAGNOSTIC: Sample first item
+  if (enhancedInventory.length > 0) {
+    const sample = enhancedInventory[0];
+    console.log(`[FactLayer] SAMPLE inventory item:`, {
+      sku: sample.sku,
+      name: sample.name,
+      product_name: sample.product_name,
+      strain: sample.strain,
+      variant_name: sample.variant_name,
+      unit: sample.unit,
+      hasValidIdentity: sample.hasValidIdentity,
+      availableQuantity: sample.availableQuantity
+    });
+  }
+
+  // DIAGNOSTIC: Sample velocity item
+  if (velocityMetrics.length > 0) {
+    const vSample = velocityMetrics[0];
+    console.log(`[FactLayer] SAMPLE velocity item:`, {
+      sku: vSample.sku,
+      name: vSample.name,
+      unit: vSample.unit,
+      totalSold: vSample.totalSold
+    });
+  }
+
+  let invFactFailures = { noSku: 0, noName: 0, noQuantity: 0 };
+  let salesFactFailures = { noSku: 0, noName: 0, noSales: 0 };
+
   // Process each enhanced inventory item
   for (const item of enhancedInventory) {
     const sku = item.sku;
-    if (!sku) continue;
+    if (!sku) {
+      invFactFailures.noSku++;
+      continue;
+    }
 
     const velocityData = velocityMap.get(sku);
     const salesData = salesMap.get(sku);
