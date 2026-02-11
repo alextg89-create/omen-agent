@@ -627,6 +627,10 @@ export function generateExecutiveActionBrief(snapshot) {
   const velocityMetrics = snapshot.velocity?.velocityMetrics || [];
   const suppressedItems = [];
 
+  // DIAGNOSTIC: Entry point logging
+  console.log(`[ActionBrief] INPUT: enrichedInventory=${inventory.length}, velocityMetrics=${velocityMetrics.length}`);
+  console.log(`[ActionBrief] snapshot.velocity exists: ${!!snapshot.velocity}, has velocityMetrics: ${!!snapshot.velocity?.velocityMetrics}`);
+
   // ════════════════════════════════════════════════════════════════════════
   // STEP 0: TRACK EXCLUDED ITEMS
   // ════════════════════════════════════════════════════════════════════════
