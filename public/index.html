@@ -2012,10 +2012,21 @@
       // ═══════════════════════════════════════════════════════════════════════════
       // FACT LAYER STATS - Small footer for debugging
       // ═══════════════════════════════════════════════════════════════════════════
+      const dataStatus = actionBrief.dataStatus || {};
       if (factLayerStats.validFacts !== undefined || factLayerStats.salesFacts !== undefined) {
+        // Check for data issues
+        let statusMessage = '';
+        if (dataStatus.issue === 'INVENTORY_EMPTY') {
+          statusMessage = `<span style="color: #ff6b6b;">⚠️ No inventory data - sync inventory first</span>`;
+        } else if (dataStatus.issue === 'SKU_MISMATCH') {
+          statusMessage = `<span style="color: #ffa500;">${dataStatus.orderCount} orders, but SKUs don't match inventory</span>`;
+        } else {
+          statusMessage = `<span>Fact Layer: ${factLayerStats.validFacts || factLayerStats.salesFacts || 0} SKUs analyzed</span>`;
+        }
+
         html += `
           <div style="margin-top: 16px; padding: 12px 16px; background: #1a1a2a; border-radius: 8px; font-size: 0.75em; color: #666; display: flex; justify-content: space-between;">
-            <span>Fact Layer: ${factLayerStats.validFacts || factLayerStats.salesFacts || 0} SKUs analyzed</span>
+            ${statusMessage}
             <span>${totalClassified} classified · ${factLayerStats.excluded || 0} excluded</span>
           </div>
         `;

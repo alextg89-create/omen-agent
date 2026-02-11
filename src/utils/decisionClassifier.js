@@ -632,6 +632,30 @@ export function generateExecutiveActionBrief(snapshot) {
   console.log(`[ActionBrief] snapshot.velocity exists: ${!!snapshot.velocity}, has velocityMetrics: ${!!snapshot.velocity?.velocityMetrics}`);
 
   // ════════════════════════════════════════════════════════════════════════
+  // DETECT EMPTY DATA SCENARIOS
+  // ════════════════════════════════════════════════════════════════════════
+  const dataStatus = {
+    hasInventory: inventory.length > 0,
+    hasVelocity: velocityMetrics.length > 0,
+    inventoryCount: inventory.length,
+    velocityCount: velocityMetrics.length,
+    orderCount: snapshot.velocity?.orderCount || 0,
+    uniqueOrderSKUs: snapshot.velocity?.uniqueSKUs || 0,
+    issue: null
+  };
+
+  // Diagnose the issue
+  if (!dataStatus.hasInventory) {
+    dataStatus.issue = 'INVENTORY_EMPTY';
+    console.warn(`[ActionBrief] WARNING: No inventory data - facts cannot be built`);
+    console.warn(`[ActionBrief] This likely means inventory_virtual table is empty or query failed`);
+  } else if (!dataStatus.hasVelocity && dataStatus.orderCount > 0) {
+    dataStatus.issue = 'SKU_MISMATCH';
+    console.warn(`[ActionBrief] WARNING: ${dataStatus.orderCount} orders exist but 0 velocity matches`);
+    console.warn(`[ActionBrief] Order SKUs may not match inventory SKUs`);
+  }
+
+  // ════════════════════════════════════════════════════════════════════════
   // STEP 0: TRACK EXCLUDED ITEMS
   // ════════════════════════════════════════════════════════════════════════
   for (const item of inventory) {
@@ -770,6 +794,8 @@ export function generateExecutiveActionBrief(snapshot) {
       excluded: suppressedItems.length,
       validFacts: inventoryFacts.size
     },
+    // DATA STATUS - surfaces why fact layer might be empty
+    dataStatus,
     // DIAGNOSTIC: Suppressed items and why
     suppressedItems,
     generatedAt: new Date().toISOString()
