@@ -60,16 +60,10 @@ const THRESHOLDS = {
  * Build a SALES_FACT for a SKU that sold in the period.
  * Returns null if missing required sales data.
  *
- * HARD GATE: Items without valid identity are BLOCKED.
+ * NOTE: We do NOT check hasValidIdentity upfront anymore.
+ * Instead, we extract names from compound fields first, THEN validate.
  */
 function buildSalesFact(item, salesData) {
-  // ════════════════════════════════════════════════════════════════════════
-  // IDENTITY GATE: Block items with invalid identity
-  // ════════════════════════════════════════════════════════════════════════
-  if (item.hasValidIdentity === false) {
-    return null;
-  }
-
   // Must have sales in period
   const units_sold = salesData?.units_sold ?? salesData?.total_sold ?? salesData?.quantity_sold ?? 0;
   if (units_sold <= 0) {
@@ -154,16 +148,10 @@ function buildSalesFact(item, salesData) {
 /**
  * Build an INVENTORY_FACT for any sellable SKU.
  *
- * HARD GATE: Items without valid identity are BLOCKED.
+ * NOTE: We do NOT check hasValidIdentity upfront anymore.
+ * Instead, we extract names from compound fields first, THEN validate.
  */
 function buildInventoryFact(item, velocityData) {
-  // ════════════════════════════════════════════════════════════════════════
-  // IDENTITY GATE: Block items with invalid identity
-  // ════════════════════════════════════════════════════════════════════════
-  if (item.hasValidIdentity === false) {
-    return null;
-  }
-
   // Required: SKU
   const sku = item.sku;
   if (!sku || typeof sku !== 'string' || sku.trim() === '') {
