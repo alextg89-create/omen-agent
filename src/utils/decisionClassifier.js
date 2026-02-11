@@ -83,20 +83,44 @@ function buildSalesFact(item, salesData) {
   }
 
   // Required: Names (allow flexible sources)
-  const product_name = item.product_name || item.strain || item.name || null;
-  const variant_name = item.variant_name || item.unit || null;
+  // CRITICAL FIX: Extract variant from name when unit is "Unknown"
+  let product_name = item.product_name || item.strain || null;
+  let variant_name = item.variant_name || item.unit || null;
+  const fullName = item.name || product_name || '';
+
+  // If no product_name but we have a full name like "Mai Tai (28 G)", extract it
+  if (!product_name && fullName) {
+    product_name = fullName.split('(')[0].trim() || null;
+  }
+
+  // If variant is "Unknown" or missing, try to extract from name
+  if (!variant_name || variant_name.toLowerCase() === 'unknown') {
+    const match = fullName.match(/\(([^)]+)\)/);
+    if (match) {
+      variant_name = match[1];
+    }
+  }
+
   if (!product_name || !variant_name) {
     return null;
   }
 
-  // REJECT: Names containing 'MISSING' or 'Unknown' (case-insensitive)
-  const nameLower = (product_name + variant_name).toLowerCase();
-  if (nameLower.includes('missing') || nameLower.includes('unknown')) {
+  // Only reject if BOTH names are missing/unknown (not just one)
+  const productLower = product_name.toLowerCase();
+  if (productLower === 'missing' || productLower === 'unknown') {
     return null;
   }
 
-  // Revenue
-  const revenue = salesData?.revenue ?? salesData?.total_revenue ?? 0;
+  // Revenue - try multiple sources
+  let revenue = salesData?.revenue ?? salesData?.total_revenue ?? 0;
+
+  // CRITICAL FIX: Calculate revenue from pricing when missing
+  if (revenue === 0 && units_sold > 0) {
+    const retail = item.pricing?.retail || item.retail || item.price || 0;
+    if (retail > 0) {
+      revenue = units_sold * retail;
+    }
+  }
 
   // Cost (optional but preferred)
   const unit_cost = item.pricing?.cost ?? item.unit_cost ?? item.cost ?? null;
@@ -147,15 +171,31 @@ function buildInventoryFact(item, velocityData) {
   }
 
   // Required: Names
-  const product_name = item.product_name || item.strain || item.name || null;
-  const variant_name = item.variant_name || item.unit || null;
+  // CRITICAL FIX: Extract variant from name when unit is "Unknown"
+  let product_name = item.product_name || item.strain || null;
+  let variant_name = item.variant_name || item.unit || null;
+  const fullName = item.name || product_name || '';
+
+  // If no product_name but we have a full name like "Mai Tai (28 G)", extract it
+  if (!product_name && fullName) {
+    product_name = fullName.split('(')[0].trim() || null;
+  }
+
+  // If variant is "Unknown" or missing, try to extract from name
+  if (!variant_name || variant_name.toLowerCase() === 'unknown') {
+    const match = fullName.match(/\(([^)]+)\)/);
+    if (match) {
+      variant_name = match[1];
+    }
+  }
+
   if (!product_name || !variant_name) {
     return null;
   }
 
-  // REJECT: Names containing 'MISSING' or 'Unknown' (case-insensitive)
-  const nameLower = (product_name + variant_name).toLowerCase();
-  if (nameLower.includes('missing') || nameLower.includes('unknown')) {
+  // Only reject if product name is completely invalid
+  const productLower = product_name.toLowerCase();
+  if (productLower === 'missing' || productLower === 'unknown') {
     return null;
   }
 
@@ -222,34 +262,67 @@ export function buildFactTables(inventory, velocityMetrics = [], periodSalesMap 
   const salesFacts = new Map();
   const inventoryFacts = new Map();
 
-  // Build velocity lookup
+  // Build velocity lookup with normalized names
+  // CRITICAL FIX: Extract product_name and variant_name from velocity name field
   const velocityMap = new Map();
   for (const v of velocityMetrics) {
-    if (v.sku) velocityMap.set(v.sku, v);
+    if (v.sku) {
+      // Extract names from format like "Mai Tai (28 G)"
+      const fullName = v.name || '';
+      const match = fullName.match(/\(([^)]+)\)/);
+      velocityMap.set(v.sku, {
+        ...v,
+        // Add normalized field names
+        extracted_product_name: fullName.split('(')[0].trim() || null,
+        extracted_variant_name: match ? match[1] : (v.unit !== 'Unknown' ? v.unit : null)
+      });
+    }
   }
 
   // Build sales lookup from velocity metrics (which include sales data)
+  // CRITICAL: Accept both camelCase (from temporalAnalyzer) AND snake_case
   const salesMap = new Map();
   for (const v of velocityMetrics) {
-    if (v.sku && (v.total_sold > 0 || v.units_sold > 0)) {
+    const unitsSold = v.totalSold || v.total_sold || v.units_sold || 0;
+    const revenue = v.totalRevenue || v.total_revenue || v.revenue || 0;
+    if (v.sku && unitsSold > 0) {
       salesMap.set(v.sku, {
-        units_sold: v.total_sold || v.units_sold || 0,
-        revenue: v.total_revenue || v.revenue || 0
+        units_sold: unitsSold,
+        revenue: revenue
       });
     }
   }
-  // Merge with explicit period sales
+  // Merge with explicit period sales (accept both camelCase and snake_case)
   for (const [sku, sales] of Object.entries(periodSalesMap)) {
-    if (sales.units_sold > 0 || sales.total_sold > 0) {
+    const unitsSold = sales.totalSold || sales.units_sold || sales.total_sold || 0;
+    const revenue = sales.totalRevenue || sales.revenue || sales.total_revenue || 0;
+    if (unitsSold > 0) {
       salesMap.set(sku, {
-        units_sold: sales.units_sold || sales.total_sold || 0,
-        revenue: sales.revenue || sales.total_revenue || 0
+        units_sold: unitsSold,
+        revenue: revenue
       });
     }
   }
 
-  // Process each inventory item
-  for (const item of inventory) {
+  // CRITICAL FIX: Enhance inventory items with velocityMetrics names
+  // This ensures items missing product_name/variant_name get them from velocity data
+  const enhancedInventory = inventory.map(item => {
+    const velocity = velocityMap.get(item.sku);
+    if (velocity) {
+      // Merge velocity names if inventory item is missing them
+      return {
+        ...item,
+        // Use velocity extracted names as fallback
+        name: item.name || velocity.name || null,
+        product_name: item.product_name || item.strain || velocity.extracted_product_name || null,
+        variant_name: item.variant_name || (item.unit !== 'Unknown' ? item.unit : null) || velocity.extracted_variant_name || null
+      };
+    }
+    return item;
+  });
+
+  // Process each enhanced inventory item
+  for (const item of enhancedInventory) {
     const sku = item.sku;
     if (!sku) continue;
 

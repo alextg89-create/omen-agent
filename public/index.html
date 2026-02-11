@@ -309,6 +309,337 @@
       text-align: center;
     }
 
+    /* ═══════════════════════════════════════════════════════════════════════
+       MIND-BLOWING UI STYLES - Make Wix look like a joke
+       ═══════════════════════════════════════════════════════════════════════ */
+
+    /* URGENT ALERT BANNER */
+    .urgent-banner {
+      background: linear-gradient(135deg, #2a1a2a 0%, #1a1a2a 100%);
+      border: 1px solid #8b5cf6;
+      border-radius: 12px;
+      padding: 20px 24px;
+      margin-bottom: 24px;
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 20px;
+    }
+
+    .urgent-stat {
+      text-align: center;
+    }
+
+    .urgent-stat-icon {
+      font-size: 1.5em;
+      margin-bottom: 4px;
+    }
+
+    .urgent-stat-value {
+      font-size: 1.8em;
+      font-weight: 700;
+      color: #fff;
+    }
+
+    .urgent-stat-label {
+      font-size: 0.8em;
+      color: #a0a0a0;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    /* INVENTORY HEALTH BAR */
+    .health-section {
+      background: #1e1e2e;
+      border-radius: 12px;
+      padding: 24px;
+      margin-bottom: 24px;
+    }
+
+    .health-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 16px;
+    }
+
+    .health-title {
+      font-size: 1em;
+      color: #888;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+
+    .health-percentage {
+      font-size: 2em;
+      font-weight: 700;
+      color: #4ade80;
+    }
+
+    .health-bar-container {
+      background: #2a2a3a;
+      border-radius: 8px;
+      height: 24px;
+      overflow: hidden;
+      display: flex;
+      margin-bottom: 16px;
+    }
+
+    .health-bar-segment {
+      height: 100%;
+      transition: width 0.5s ease;
+    }
+
+    .health-bar-healthy { background: linear-gradient(90deg, #22c55e, #4ade80); }
+    .health-bar-slow { background: linear-gradient(90deg, #f59e0b, #fbbf24); }
+    .health-bar-critical { background: linear-gradient(90deg, #ef4444, #f87171); }
+    .health-bar-dead { background: linear-gradient(90deg, #6b7280, #9ca3af); }
+
+    .health-legend {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 12px;
+    }
+
+    .health-legend-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.85em;
+    }
+
+    .health-legend-dot {
+      width: 12px;
+      height: 12px;
+      border-radius: 3px;
+    }
+
+    .health-legend-count {
+      color: #fff;
+      font-weight: 600;
+    }
+
+    .health-legend-label {
+      color: #888;
+    }
+
+    /* PRIORITY ACTION CARDS */
+    .priority-section {
+      margin-bottom: 24px;
+    }
+
+    .priority-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 16px;
+    }
+
+    .priority-title {
+      font-size: 1.1em;
+      font-weight: 600;
+      color: #fff;
+    }
+
+    .priority-badge {
+      font-size: 0.75em;
+      padding: 4px 12px;
+      border-radius: 20px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+
+    .priority-badge-today { background: rgba(239, 68, 68, 0.2); color: #f87171; }
+    .priority-badge-week { background: rgba(245, 158, 11, 0.2); color: #fbbf24; }
+
+    .priority-card {
+      background: #1e1e2e;
+      border-radius: 12px;
+      padding: 20px 24px;
+      margin-bottom: 12px;
+      border-left: 4px solid #888;
+      transition: transform 0.2s, box-shadow 0.2s;
+    }
+
+    .priority-card:hover {
+      transform: translateX(4px);
+      box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+    }
+
+    .priority-card.urgent { border-left-color: #ef4444; background: linear-gradient(135deg, #2a1a1a 0%, #1e1e2e 100%); }
+    .priority-card.warning { border-left-color: #f59e0b; background: linear-gradient(135deg, #2a2a1a 0%, #1e1e2e 100%); }
+    .priority-card.success { border-left-color: #22c55e; background: linear-gradient(135deg, #1a2a1a 0%, #1e1e2e 100%); }
+
+    .priority-card-badge {
+      display: inline-block;
+      font-size: 0.7em;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      padding: 4px 10px;
+      border-radius: 4px;
+      margin-bottom: 12px;
+    }
+
+    .priority-card-badge.reorder { background: rgba(239, 68, 68, 0.2); color: #f87171; }
+    .priority-card-badge.promote { background: rgba(245, 158, 11, 0.2); color: #fbbf24; }
+    .priority-card-badge.protect { background: rgba(34, 197, 94, 0.2); color: #4ade80; }
+    .priority-card-badge.clear { background: rgba(107, 114, 128, 0.2); color: #9ca3af; }
+
+    .priority-card-name {
+      font-size: 1.2em;
+      font-weight: 600;
+      color: #fff;
+      margin-bottom: 12px;
+    }
+
+    .priority-card-section {
+      margin-bottom: 12px;
+    }
+
+    .priority-card-label {
+      font-size: 0.75em;
+      font-weight: 600;
+      color: #888;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 4px;
+    }
+
+    .priority-card-value {
+      color: #ccc;
+      line-height: 1.5;
+    }
+
+    .priority-card-outcome {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 12px 16px;
+      background: rgba(0,0,0,0.2);
+      border-radius: 6px;
+      margin-top: 12px;
+    }
+
+    .priority-card-outcome.risk { border: 1px solid rgba(239, 68, 68, 0.3); }
+    .priority-card-outcome.opportunity { border: 1px solid rgba(245, 158, 11, 0.3); }
+    .priority-card-outcome.protect { border: 1px solid rgba(34, 197, 94, 0.3); }
+
+    .priority-card-outcome-icon { font-size: 1.2em; }
+    .priority-card-outcome-text { font-weight: 600; }
+    .priority-card-outcome.risk .priority-card-outcome-text { color: #f87171; }
+    .priority-card-outcome.opportunity .priority-card-outcome-text { color: #fbbf24; }
+    .priority-card-outcome.protect .priority-card-outcome-text { color: #4ade80; }
+
+    .priority-card-action-btn {
+      display: inline-block;
+      margin-top: 12px;
+      padding: 8px 16px;
+      background: rgba(139, 92, 246, 0.2);
+      color: #a78bfa;
+      border: 1px solid rgba(139, 92, 246, 0.3);
+      border-radius: 6px;
+      font-size: 0.85em;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .priority-card-action-btn:hover {
+      background: rgba(139, 92, 246, 0.3);
+    }
+
+    /* PERFORMANCE SECTION */
+    .performance-section {
+      background: #1e1e2e;
+      border-radius: 12px;
+      padding: 24px;
+      margin-bottom: 24px;
+    }
+
+    .performance-title {
+      font-size: 1em;
+      color: #888;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin-bottom: 20px;
+    }
+
+    .performance-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 20px;
+      margin-bottom: 20px;
+    }
+
+    .performance-stat {
+      text-align: center;
+    }
+
+    .performance-stat-value {
+      font-size: 1.8em;
+      font-weight: 700;
+      color: #fff;
+    }
+
+    .performance-stat-label {
+      font-size: 0.8em;
+      color: #888;
+      margin-top: 4px;
+    }
+
+    .performance-insights {
+      border-top: 1px solid #333;
+      padding-top: 16px;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
+
+    .performance-insight {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+    }
+
+    .performance-insight-icon {
+      font-size: 1.2em;
+    }
+
+    .performance-insight-label {
+      font-size: 0.75em;
+      color: #888;
+      text-transform: uppercase;
+    }
+
+    .performance-insight-value {
+      color: #fff;
+      font-weight: 500;
+    }
+
+    /* EMPTY STATE */
+    .empty-actions {
+      background: #1e1e2e;
+      border-radius: 12px;
+      padding: 40px;
+      text-align: center;
+      margin-bottom: 24px;
+    }
+
+    .empty-actions-icon {
+      font-size: 3em;
+      margin-bottom: 16px;
+    }
+
+    .empty-actions-title {
+      font-size: 1.2em;
+      color: #fff;
+      margin-bottom: 8px;
+    }
+
+    .empty-actions-text {
+      color: #888;
+    }
+
     /* REFUSAL STATE */
     .refusal-state {
       background: rgba(220, 53, 69, 0.1);
@@ -1389,411 +1720,297 @@
       }
 
       const metrics = snapshot.metrics || {};
-      const recommendations = snapshot.recommendations || { promotions: [], pricing: [], inventory: [] };
       const velocity = snapshot.velocity || {};
       const temporal = snapshot.temporal || {};
       const orderContext = snapshot.orderContext || {};
+      const actionBrief = snapshot.actionBrief || {};
+      const actionBriefActions = actionBrief.actions || [];
+      const factLayerStats = actionBrief.factLayerStats || {};
+      const briefSummary = actionBrief.summary || {};
 
       const hasRealData = temporal.hasRealData === true || velocity.orderCount > 0;
       const timeframeOrders = orderContext.timeframe?.orderCount || velocity.orderCount || 0;
       const last30DaysOrders = orderContext.last30Days?.orderCount || 0;
-      const allTimeOrders = orderContext.allTime?.orderCount || 0;
 
       // Format timeframe label
       const timeframeLabel = snapshot.timeframe?.charAt(0).toUpperCase() + (snapshot.timeframe?.slice(1) || '');
       const dateRangeStr = snapshot.dateRange ?
         `${new Date(snapshot.dateRange.startDate).toLocaleDateString('en-US', {month: 'short', day: 'numeric'})} - ${new Date(snapshot.dateRange.endDate).toLocaleDateString('en-US', {month: 'short', day: 'numeric'})}` : '';
 
-      // Extract executive intelligence
-      const intelligence = snapshot.intelligence || {};
-      const executiveDecision = intelligence.executiveDecision || {};
-      const executiveSummary = intelligence.executiveSummary || {};
-      // FILTER: Exclude 0-count items from wowInsights
-      const rawWowInsights = intelligence.wowInsights || [];
-      const wowInsights = rawWowInsights.filter(wow => {
-        const qty = wow.data?.quantity || wow.data?.currentStock;
-        // Include if quantity is positive OR if quantity is not specified
-        return qty === undefined || qty === null || qty > 0;
+      // ═══════════════════════════════════════════════════════════════════════════
+      // CALCULATE INVENTORY HEALTH from actionBrief
+      // ═══════════════════════════════════════════════════════════════════════════
+      const reorderCount = briefSummary.reorderNow || 0;
+      const sellNowCount = briefSummary.sellNow || 0;
+      const holdLineCount = briefSummary.holdLine || 0;
+      const deprioritizeCount = briefSummary.deprioritize || 0;
+      const totalClassified = briefSummary.total || (reorderCount + sellNowCount + holdLineCount + deprioritizeCount) || 0;
+
+      // Health calculation: holdLine = healthy, sellNow = slow, reorderNow = critical, deprioritize = dead
+      const healthyCount = holdLineCount;
+      const slowCount = sellNowCount;
+      const criticalCount = reorderCount;
+      const deadCount = deprioritizeCount;
+
+      const healthPercent = totalClassified > 0 ? Math.round((healthyCount / totalClassified) * 100) : 0;
+
+      // ═══════════════════════════════════════════════════════════════════════════
+      // CALCULATE URGENT STATS from actions
+      // ═══════════════════════════════════════════════════════════════════════════
+      const urgentItems = actionBriefActions.filter(a => a.decision === 'REORDER_NOW').length;
+      const totalRevenueOpportunity = actionBriefActions.reduce((sum, a) => {
+        const impact = a.dollarImpact || 0;
+        return sum + (isFinite(impact) ? impact : 0);
+      }, 0);
+      const unitsAtRisk = actionBriefActions.filter(a => a.decision === 'REORDER_NOW').reduce((sum, a) => {
+        return sum + (a.metrics?.quantity || 0);
+      }, 0);
+
+      console.log('[UI] Mind-blowing UI data:', {
+        totalClassified,
+        healthPercent,
+        urgentItems,
+        totalRevenueOpportunity,
+        actions: actionBriefActions.length
       });
-      const primaryDecision = executiveDecision.primaryDecision;
-      const alternatives = executiveDecision.alternatives || [];
-      const inactionCost = executiveDecision.inactionCost || {};
 
-      // ════════════════════════════════════════════════════════════════════════════
-      // ACTION BRIEF - Built from SKU Fact Layer (pre-validated)
-      // ════════════════════════════════════════════════════════════════════════════
-      // Actions are validated at source - only grounded SKU-specific actions render
-      // Max 3 actions, each with numeric impact
-      // ════════════════════════════════════════════════════════════════════════════
-      const actionBrief = snapshot.actionBrief || {};
-      const actionBriefHeadline = actionBrief.headline || 'No high-confidence actions this period.';
-      const actionBriefActions = actionBrief.actions || []; // Pre-validated, max 3
-      const factLayerStats = actionBrief.factLayerStats || {};
-      const ignoreSummary = actionBrief.ignore || { count: 0 };
-      const briefSummary = actionBrief.summary || {};
+      let html = '';
 
-      let html = `
-        <h3 style="color: #fff; margin-bottom: 5px;">${timeframeLabel} Intelligence Brief</h3>
-        ${dateRangeStr ? `<div style="color: #666; margin-bottom: 15px; font-size: 0.85em;">${dateRangeStr}</div>` : ''}
-      `;
-
-      // ═══════════════════════════════════════════════════════════════════════
-      // THE EXECUTIVE DECISION - Lead with THE call
-      // ═══════════════════════════════════════════════════════════════════════
-      html += '<div class="executive-decision" style="background: linear-gradient(135deg, #1a2a3a 0%, #0a1a2a 100%); padding: 20px; border-radius: 8px; margin-bottom: 20px; border-left: 4px solid #4CAF50;">';
-
-      if (primaryDecision && primaryDecision.action) {
-        // THE DECISION
+      // ═══════════════════════════════════════════════════════════════════════════
+      // URGENT ALERT BANNER - The hook
+      // ═══════════════════════════════════════════════════════════════════════════
+      if (urgentItems > 0 || totalRevenueOpportunity > 0 || actionBriefActions.length > 0) {
         html += `
-          <div style="font-size: 0.75em; color: #4CAF50; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px;">THE CALL</div>
-          <div style="font-size: 1.2em; color: #fff; font-weight: 600; margin-bottom: 12px;">
-            ${primaryDecision.action}${primaryDecision.item ? ` — ${primaryDecision.item}` : ''}
+          <div class="urgent-banner">
+            <div class="urgent-stat">
+              <div class="urgent-stat-icon">🔥</div>
+              <div class="urgent-stat-value" style="color: ${urgentItems > 0 ? '#f87171' : '#4ade80'};">${urgentItems}</div>
+              <div class="urgent-stat-label">Need Attention NOW</div>
+            </div>
+            <div class="urgent-stat">
+              <div class="urgent-stat-icon">💰</div>
+              <div class="urgent-stat-value" style="color: #fbbf24;">${totalRevenueOpportunity > 0 ? '$' + totalRevenueOpportunity.toLocaleString() : '$0'}</div>
+              <div class="urgent-stat-label">Revenue Opportunity</div>
+            </div>
+            <div class="urgent-stat">
+              <div class="urgent-stat-icon">📦</div>
+              <div class="urgent-stat-value">${velocity.uniqueSKUs || metrics.totalItems || 0}</div>
+              <div class="urgent-stat-label">SKUs Tracked</div>
+            </div>
           </div>
-          <div style="color: #ccc; margin-bottom: 15px; line-height: 1.5;">
-            <strong style="color: #888;">WHY:</strong> ${primaryDecision.reason || 'Highest priority action identified.'}
+        `;
+      }
+
+      // ═══════════════════════════════════════════════════════════════════════════
+      // PRIORITY ACTIONS - The meat. WHY / DO THIS / OUTCOME format
+      // ═══════════════════════════════════════════════════════════════════════════
+      if (actionBriefActions.length > 0) {
+        html += `<div class="priority-section">`;
+        html += `
+          <div class="priority-header">
+            <div class="priority-title">Priority Actions</div>
+            <div class="priority-badge priority-badge-today">${timeframeLabel}</div>
           </div>
-          <div style="display: flex; gap: 20px; flex-wrap: wrap; margin-bottom: 15px;">
-            ${primaryDecision.dollarImpact > 0 ? `
-              <div>
-                <span style="color: #888; font-size: 0.85em;">IMPACT:</span>
-                <span style="color: #4CAF50; font-weight: 600; margin-left: 5px;">$${primaryDecision.dollarImpact.toLocaleString()}</span>
+        `;
+
+        actionBriefActions.forEach(action => {
+          // Skip invalid actions
+          if (!action || !action.name) return;
+          if (action.name.toLowerCase().includes('missing') || action.name.toLowerCase().includes('unknown')) return;
+
+          // Determine card style
+          let cardClass = 'success';
+          let badgeClass = 'protect';
+          let badgeText = 'PROTECT';
+          let outcomeClass = 'protect';
+          let outcomeIcon = '🛡️';
+
+          if (action.decision === 'REORDER_NOW') {
+            cardClass = 'urgent';
+            badgeClass = 'reorder';
+            badgeText = 'REORDER NOW';
+            outcomeClass = 'risk';
+            outcomeIcon = '⚠️';
+          } else if (action.decision === 'SELL_NOW' || action.decision === 'DISCOUNT_SLOW') {
+            cardClass = 'warning';
+            badgeClass = 'promote';
+            badgeText = action.decision === 'SELL_NOW' ? 'PROMOTE' : 'DISCOUNT';
+            outcomeClass = 'opportunity';
+            outcomeIcon = '💰';
+          } else if (action.decision === 'DEPRIORITIZE') {
+            cardClass = '';
+            badgeClass = 'clear';
+            badgeText = 'CLEAR';
+            outcomeClass = 'opportunity';
+            outcomeIcon = '📦';
+          }
+
+          // Build outcome text
+          let outcomeText = action.impactLabel || '';
+          if (!outcomeText && action.dollarImpact && isFinite(action.dollarImpact)) {
+            if (action.decision === 'REORDER_NOW') {
+              outcomeText = `Prevent $${action.dollarImpact.toLocaleString()} revenue loss`;
+            } else {
+              outcomeText = `$${action.dollarImpact.toLocaleString()} opportunity`;
+            }
+          }
+          if (!outcomeText && action.metrics?.quantity) {
+            outcomeText = `${action.metrics.quantity} units affected`;
+          }
+
+          html += `
+            <div class="priority-card ${cardClass}">
+              <div class="priority-card-badge ${badgeClass}">${badgeText}</div>
+              <div class="priority-card-name">${action.name}</div>
+
+              <div class="priority-card-section">
+                <div class="priority-card-label">WHY</div>
+                <div class="priority-card-value">${action.why || 'Action needed based on inventory analysis'}</div>
               </div>
-            ` : ''}
-            <div>
-              <span style="color: #888; font-size: 0.85em;">WHEN:</span>
-              <span style="color: #fff; margin-left: 5px;">${primaryDecision.timeframeFriendly || primaryDecision.timeframe || 'This week'}</span>
-            </div>
-          </div>
-          ${inactionCost.weeklyLoss > 0 ? `
-            <div style="background: rgba(244, 67, 54, 0.1); border: 1px solid rgba(244, 67, 54, 0.3); padding: 10px 12px; border-radius: 4px; margin-bottom: 15px;">
-              <span style="color: #f44336; font-weight: 500;">IF YOU DO NOTHING:</span>
-              <span style="color: #ff8a80; margin-left: 8px;">-$${inactionCost.weeklyLoss.toLocaleString()}/week</span>
-              ${inactionCost.explanation ? `<div style="color: #888; font-size: 0.85em; margin-top: 5px;">${inactionCost.explanation}</div>` : ''}
-            </div>
-          ` : ''}
-          ${(() => {
-            // ════════════════════════════════════════════════════════════════
-            // ALTERNATIVES - PART D: SKU-specific with quantified impact only
-            // ════════════════════════════════════════════════════════════════
-            // Filter: Must have SKU reference AND finite dollar impact
-            const validAlternatives = alternatives.filter(alt => {
-              // Must have SKU/item reference
-              const hasSKU = alt.item || alt.sku || alt.skuName;
-              // Must have quantified impact (finite number > 0)
-              const hasQuantifiedImpact = alt.dollarImpact && isFinite(alt.dollarImpact) && alt.dollarImpact > 0;
-              // Must have action text
-              const hasAction = alt.action && typeof alt.action === 'string' && alt.action.trim();
 
-              if (!hasAction) return false;
-              if (!hasSKU && !hasQuantifiedImpact) return false; // Need at least one
+              <div class="priority-card-section">
+                <div class="priority-card-label">DO THIS</div>
+                <div class="priority-card-value" style="color: #a78bfa; font-weight: 500;">${action.whatToDo || 'Take action on this item'}</div>
+              </div>
 
-              return true;
-            });
-
-            if (validAlternatives.length === 0) return '';
-
-            return `
-            <div style="border-top: 1px solid rgba(255,255,255,0.1); padding-top: 12px;">
-              <div style="color: #888; font-size: 0.8em; text-transform: uppercase; margin-bottom: 8px;">ALTERNATIVES</div>
-              ${validAlternatives.slice(0, 2).map(alt => `
-                <div style="color: #ccc; padding: 6px 0; display: flex; justify-content: space-between; align-items: center;">
-                  <span>→ ${alt.action}${alt.item ? ` (${alt.item})` : ''}</span>
-                  ${alt.dollarImpact > 0 ? `<span style="color: #888;">$${alt.dollarImpact.toLocaleString()}</span>` : ''}
+              ${outcomeText ? `
+                <div class="priority-card-outcome ${outcomeClass}">
+                  <span class="priority-card-outcome-icon">${outcomeIcon}</span>
+                  <span class="priority-card-outcome-text">${outcomeText}</span>
                 </div>
-              `).join('')}
+              ` : ''}
+
+              ${action.metrics ? `
+                <div style="margin-top: 12px; font-size: 0.8em; color: #666; display: flex; gap: 16px; flex-wrap: wrap;">
+                  ${action.metrics.quantity !== undefined && isFinite(action.metrics.quantity) ? `<span>${action.metrics.quantity} units</span>` : ''}
+                  ${action.metrics.velocity !== undefined && isFinite(action.metrics.velocity) && action.metrics.velocity > 0 ? `<span>${action.metrics.velocity.toFixed(1)}/day</span>` : ''}
+                  ${action.metrics.margin !== undefined && isFinite(action.metrics.margin) ? `<span>${action.metrics.margin.toFixed(0)}% margin</span>` : ''}
+                  ${action.metrics.daysSinceLastSale !== undefined && isFinite(action.metrics.daysSinceLastSale) ? `<span>${action.metrics.daysSinceLastSale}d since sale</span>` : ''}
+                </div>
+              ` : ''}
             </div>
           `;
-          })()}
-          ${executiveDecision.confidence && executiveDecision.confidence !== 'high' ? `
-            <div style="color: #888; font-size: 0.85em; margin-top: 10px;">
-              (${executiveDecision.confidence.charAt(0).toUpperCase() + executiveDecision.confidence.slice(1)} confidence${executiveDecision.confidenceExplanation ? `: ${executiveDecision.confidenceExplanation}` : ''})
+        });
+
+        html += `</div>`;
+      } else {
+        // Empty state - but still useful
+        html += `
+          <div class="empty-actions">
+            <div class="empty-actions-icon">✨</div>
+            <div class="empty-actions-title">All Systems Healthy</div>
+            <div class="empty-actions-text">No urgent actions needed right now. Your inventory is in good shape.</div>
+          </div>
+        `;
+      }
+
+      // ═══════════════════════════════════════════════════════════════════════════
+      // INVENTORY HEALTH BAR
+      // ═══════════════════════════════════════════════════════════════════════════
+      if (totalClassified > 0) {
+        const healthyPct = (healthyCount / totalClassified) * 100;
+        const slowPct = (slowCount / totalClassified) * 100;
+        const criticalPct = (criticalCount / totalClassified) * 100;
+        const deadPct = (deadCount / totalClassified) * 100;
+
+        html += `
+          <div class="health-section">
+            <div class="health-header">
+              <div class="health-title">Inventory Health</div>
+              <div class="health-percentage">${healthPercent}%</div>
+            </div>
+
+            <div class="health-bar-container">
+              <div class="health-bar-segment health-bar-healthy" style="width: ${healthyPct}%"></div>
+              <div class="health-bar-segment health-bar-slow" style="width: ${slowPct}%"></div>
+              <div class="health-bar-segment health-bar-critical" style="width: ${criticalPct}%"></div>
+              <div class="health-bar-segment health-bar-dead" style="width: ${deadPct}%"></div>
+            </div>
+
+            <div class="health-legend">
+              <div class="health-legend-item">
+                <div class="health-legend-dot" style="background: #22c55e;"></div>
+                <span class="health-legend-count">${healthyCount}</span>
+                <span class="health-legend-label">Healthy</span>
+              </div>
+              <div class="health-legend-item">
+                <div class="health-legend-dot" style="background: #f59e0b;"></div>
+                <span class="health-legend-count">${slowCount}</span>
+                <span class="health-legend-label">Slow</span>
+              </div>
+              <div class="health-legend-item">
+                <div class="health-legend-dot" style="background: #ef4444;"></div>
+                <span class="health-legend-count">${criticalCount}</span>
+                <span class="health-legend-label">Critical</span>
+              </div>
+              <div class="health-legend-item">
+                <div class="health-legend-dot" style="background: #6b7280;"></div>
+                <span class="health-legend-count">${deadCount}</span>
+                <span class="health-legend-label">Dead</span>
+              </div>
+            </div>
+          </div>
+        `;
+      }
+
+      // ═══════════════════════════════════════════════════════════════════════════
+      // PERFORMANCE METRICS - This period's numbers
+      // ═══════════════════════════════════════════════════════════════════════════
+      html += `
+        <div class="performance-section">
+          <div class="performance-title">${timeframeLabel} Performance ${dateRangeStr ? `<span style="font-weight: 400; color: #666;">(${dateRangeStr})</span>` : ''}</div>
+
+          <div class="performance-grid">
+            <div class="performance-stat">
+              <div class="performance-stat-value">${timeframeOrders}</div>
+              <div class="performance-stat-label">Orders</div>
+            </div>
+            <div class="performance-stat">
+              <div class="performance-stat-value">${velocity.uniqueSKUs || '—'}</div>
+              <div class="performance-stat-label">SKUs Sold</div>
+            </div>
+            <div class="performance-stat">
+              <div class="performance-stat-value">${metrics.averageMargin && isFinite(metrics.averageMargin) ? metrics.averageMargin.toFixed(0) + '%' : '—'}</div>
+              <div class="performance-stat-label">Avg Margin</div>
+            </div>
+          </div>
+
+          ${(orderContext.last30Days?.totalRevenue || orderContext.allTime?.orderCount) ? `
+            <div class="performance-insights">
+              ${orderContext.last30Days?.totalRevenue ? `
+                <div class="performance-insight">
+                  <span class="performance-insight-icon">📈</span>
+                  <div>
+                    <div class="performance-insight-label">Last 30 Days Revenue</div>
+                    <div class="performance-insight-value">$${orderContext.last30Days.totalRevenue.toLocaleString()}</div>
+                  </div>
+                </div>
+              ` : ''}
+              ${orderContext.allTime?.orderCount ? `
+                <div class="performance-insight">
+                  <span class="performance-insight-icon">📊</span>
+                  <div>
+                    <div class="performance-insight-label">All Time Orders</div>
+                    <div class="performance-insight-value">${orderContext.allTime.orderCount.toLocaleString()}</div>
+                  </div>
+                </div>
+              ` : ''}
             </div>
           ` : ''}
-        `;
-      } else if (executiveSummary.verdict) {
-        // Fall back to verdict if no executive decision
-        html += `
-          <div style="font-size: 1.1em; color: #fff; font-weight: 600; margin-bottom: 10px;">Current State</div>
-          <div style="color: #ccc; line-height: 1.5;">${executiveSummary.verdict}</div>
-          ${executiveSummary.topAction ? `<div style="color: #4CAF50; margin-top: 10px; font-weight: 500;">→ ${executiveSummary.topAction}</div>` : ''}
-        `;
-      } else {
-        // Minimum useful state
-        const avgMargin = metrics.averageMargin;
-        const profitPotential = metrics.totalProfit;
-        html += `
-          <div style="font-size: 1.1em; color: #fff; font-weight: 600; margin-bottom: 10px;">Inventory Status</div>
-          <div style="color: #ccc; line-height: 1.5;">
-            ${metrics.totalItems || 0} active SKUs tracked${avgMargin ? ` at ${avgMargin.toFixed(1)}% average margin` : ''}.
-            ${profitPotential ? ` $${profitPotential.toLocaleString()} profit potential in current inventory.` : ''}
-            ${timeframeOrders > 0 ? ` ${timeframeOrders} orders this ${snapshot.timeframe || 'period'}.` : ''}
-          </div>
-        `;
-      }
-
-      html += '</div>';
-
-      // ═══════════════════════════════════════════════════════════════════════
-      // KEY METRICS - Supporting data (not the lead)
-      // ═══════════════════════════════════════════════════════════════════════
-      html += '<div class="metrics-grid">';
-
-      // Order counts - show timeframe vs context
-      html += `
-        <div class="metric-card">
-          <div class="metric-label">${timeframeLabel} Orders</div>
-          ${timeframeOrders > 0 ? renderValue(timeframeOrders) : '<div class="metric-value" style="color: #888;">—</div>'}
-          ${timeframeOrders === 0 && last30DaysOrders > 0 ? `<div style="font-size: 0.8em; color: #888; margin-top: 5px;">${last30DaysOrders} in last 30 days</div>` : ''}
         </div>
       `;
 
-      // SKUs sold or inventory count
-      if (hasRealData && velocity.uniqueSKUs > 0) {
-        html += `
-          <div class="metric-card">
-            <div class="metric-label">SKUs Sold</div>
-            ${renderValue(velocity.uniqueSKUs)}
-          </div>
-        `;
-      } else {
-        html += `
-          <div class="metric-card">
-            <div class="metric-label">Active SKUs</div>
-            ${renderValue(metrics.totalItems)}
-          </div>
-        `;
-      }
-
-      // ════════════════════════════════════════════════════════════════════════
-      // AVG MARGIN - Computed from SALES_FACTS with coverage labels
-      // RECOVERY MODE: Show margin with confidence indicator
-      // ════════════════════════════════════════════════════════════════════════
-      const marginData = actionBrief.marginData || {};
-      const avgMarginValue = marginData.averageMargin ?? metrics.averageMargin;
-      const marginIsValid = avgMarginValue !== null && avgMarginValue !== undefined && isFinite(avgMarginValue);
-      const marginConfidence = marginData.confidence || 'none';
-      const marginCoverage = marginData.coveragePercent || 0;
-
-      if (marginIsValid) {
-        // Show margin with coverage label
-        const coverageLabel = marginConfidence === 'high'
-          ? `From ${marginData.skusWithMargin || 0} SKUs`
-          : `${marginCoverage}% coverage (${marginData.skusWithMargin || 0} of ${marginData.skusWithSales || 0} SKUs)`;
-
-        html += `
-          <div class="metric-card">
-            <div class="metric-label">Avg Margin${marginConfidence === 'partial' ? ' (partial)' : ''}</div>
-            ${renderValue(avgMarginValue, 'percent')}
-            <div style="font-size: 0.7em; color: ${marginConfidence === 'high' ? '#666' : '#ff9800'}; margin-top: 4px;">
-              ${coverageLabel}
-            </div>
-          </div>
-        `;
-      } else {
-        // EXPLICIT EXPLANATION - margin requires sales data
-        html += `
-          <div class="metric-card">
-            <div class="metric-label">Avg Margin</div>
-            <div class="metric-value" style="font-size: 0.9em; color: #888;">
-              —
-            </div>
-            <div style="font-size: 0.75em; color: #666; margin-top: 4px;">
-              ${marginData.reason || 'Margin requires sales with cost data'}
-            </div>
-          </div>
-        `;
-      }
-
-      // ════════════════════════════════════════════════════════════════════════
-      // INVENTORY VALUE AT COST - With partial coverage support
-      // RECOVERY MODE: Show partial cost data with coverage label
-      // ════════════════════════════════════════════════════════════════════════
-      const inventoryCostBasis = metrics.inventoryCostBasis || metrics.totalCostBasis || null;
-      const profitAtRiskValidated = metrics.profitStats?.validated === true;
-      const profitAtRisk = profitAtRiskValidated ? metrics.inventoryProfitPotential : null;
-      const costCoverage = metrics.costCoverage || metrics.profitStats?.coverage || null;
-
-      // Show inventory value even with partial coverage
-      if (inventoryCostBasis !== null && isFinite(inventoryCostBasis) && inventoryCostBasis > 0) {
-        const coverageLabel = costCoverage && costCoverage < 100
-          ? `(${costCoverage}% coverage)`
-          : '';
-        html += `
-          <div class="metric-card" title="Sum of (quantity × unit cost) for sellable inventory with cost data">
-            <div class="metric-label">Inventory at Cost ${coverageLabel ? '<span style="color: #ff9800;">' + coverageLabel + '</span>' : ''}</div>
-            ${renderValue(inventoryCostBasis, 'currency')}
-            <div style="font-size: 0.7em; color: #888; margin-top: 4px;">Capital tied up in stock</div>
-          </div>
-        `;
-      } else if (profitAtRisk !== null && isFinite(profitAtRisk) && profitAtRisk > 0) {
-        // Fallback to profit at risk if cost basis unavailable but profit is validated
-        html += `
-          <div class="metric-card" title="Sum of (quantity × unit margin) - validated">
-            <div class="metric-label">Profit Potential</div>
-            ${renderValue(profitAtRisk, 'currency')}
-            <div style="font-size: 0.7em; color: #888; margin-top: 4px;">If sold at current pricing</div>
-          </div>
-        `;
-      } else {
-        // Show unit count when no cost data
-        const totalUnits = metrics.totalUnits || metrics.totalQuantity || 0;
-        html += `
-          <div class="metric-card">
-            <div class="metric-label">Inventory</div>
-            <div class="metric-value" style="font-size: 1.1em;">${totalUnits > 0 ? totalUnits + ' units' : '—'}</div>
-            <div style="font-size: 0.75em; color: #666; margin-top: 4px;">
-              Cost data incomplete
-            </div>
-          </div>
-        `;
-      }
-
-      html += '</div>';
-
-      // ORDER CONTEXT BAR - Show 30-day and all-time context
-      if (last30DaysOrders > 0 || allTimeOrders > 0) {
-        html += `
-          <div style="display: flex; gap: 20px; margin: 15px 0; padding: 12px; background: #1a1a2e; border-radius: 4px; font-size: 0.9em;">
-            <div>
-              <span style="color: #888;">Last 30 days:</span>
-              <span style="color: #fff; margin-left: 5px;">${last30DaysOrders} orders</span>
-              ${orderContext.last30Days?.totalRevenue ? `<span style="color: #4CAF50; margin-left: 8px;">$${orderContext.last30Days.totalRevenue.toLocaleString()}</span>` : ''}
-            </div>
-            <div>
-              <span style="color: #888;">All time:</span>
-              <span style="color: #fff; margin-left: 5px;">${allTimeOrders} orders</span>
-              ${orderContext.allTime?.totalRevenue ? `<span style="color: #4CAF50; margin-left: 8px;">$${orderContext.allTime.totalRevenue.toLocaleString()}</span>` : ''}
-            </div>
-          </div>
-        `
-      }
-
-      // STATUS MESSAGE - Show reconciled status if available
-      if (snapshot.statusMessage) {
-        html += `<div style="color: #4CAF50; margin-bottom: 15px; font-size: 0.9em;">${snapshot.statusMessage}</div>`;
-      }
-
       // ═══════════════════════════════════════════════════════════════════════════
-      // ACTION BRIEF - Grounded in SKU Fact Layer
+      // FACT LAYER STATS - Small footer for debugging
       // ═══════════════════════════════════════════════════════════════════════════
-      // Actions are pre-validated by fact layer. Max 3, each with numeric impact.
-      // Zero actions → "No high-confidence actions this period."
-      // ═══════════════════════════════════════════════════════════════════════════
-
-      // ═══════════════════════════════════════════════════════════════════════════
-      // IMPACT BUCKETS - Quantified vs Unquantified (Recovery Mode)
-      // ═══════════════════════════════════════════════════════════════════════════
-      const impactBuckets = actionBrief.impactBuckets || {};
-      const quantifiedImpact = impactBuckets.quantifiedImpact || 0;
-      const unquantifiedUnits = impactBuckets.unquantifiedUnits || 0;
-
-      console.log('[UI] Action Brief from Fact Layer:', {
-        headline: actionBriefHeadline,
-        actionsCount: actionBriefActions.length,
-        factLayerStats,
-        impactBuckets
-      });
-
-      html += '<div class="action-brief">';
-
-      // HEADLINE - Computed from fact layer, reflects true action count
-      html += `
-        <div class="action-brief-headline" ${actionBriefActions.length === 0 ? 'style="color: #888;"' : ''}>
-          ${actionBriefHeadline}
-        </div>
-      `;
-
-      // IMPACT BUCKETS BAR - Show quantified vs unquantified
-      if (quantifiedImpact > 0 || unquantifiedUnits > 0) {
+      if (factLayerStats.validFacts !== undefined || factLayerStats.salesFacts !== undefined) {
         html += `
-          <div style="display: flex; gap: 15px; margin: 10px 0 15px; padding: 10px; background: #1a1a1a; border-radius: 4px; font-size: 0.85em;">
-            ${quantifiedImpact > 0 ? `
-              <div>
-                <span style="color: #4CAF50; font-weight: 600;">$${quantifiedImpact.toLocaleString()}</span>
-                <span style="color: #888; margin-left: 5px;">quantified impact</span>
-              </div>
-            ` : ''}
-            ${unquantifiedUnits > 0 ? `
-              <div>
-                <span style="color: #ff9800; font-weight: 600;">${unquantifiedUnits} units</span>
-                <span style="color: #888; margin-left: 5px;">unpriced exposure</span>
-              </div>
-            ` : ''}
+          <div style="margin-top: 16px; padding: 12px 16px; background: #1a1a2a; border-radius: 8px; font-size: 0.75em; color: #666; display: flex; justify-content: space-between;">
+            <span>Fact Layer: ${factLayerStats.validFacts || factLayerStats.salesFacts || 0} SKUs analyzed</span>
+            <span>${totalClassified} classified · ${factLayerStats.excluded || 0} excluded</span>
           </div>
         `;
       }
-
-      // ACTIONS - Max 3, each grounded in validated SKU fact
-      if (actionBriefActions.length > 0) {
-        html += `
-          <div class="action-brief-section">
-            <h4>ACTIONS</h4>
-            ${actionBriefActions.map(action => renderFactBasedAction(action)).join('')}
-          </div>
-        `;
-      }
-
-      // FACT LAYER STATS - Debug info (can be hidden in production)
-      if (factLayerStats.validFacts !== undefined) {
-        html += `
-          <div style="margin-top: 15px; padding: 10px; background: #1a1a1a; border-radius: 4px; font-size: 0.75em; color: #666;">
-            Fact layer: ${factLayerStats.validFacts} SKUs with complete data, ${factLayerStats.excluded || 0} excluded
-          </div>
-        `;
-      }
-
-      // SUMMARY STATS
-      if (briefSummary.total > 0) {
-        html += `
-          <div style="margin-top: 20px; padding: 15px; background: #1a1a1a; border-radius: 4px; font-size: 0.85em; color: #666;">
-            <strong>Summary:</strong>
-            ${briefSummary.reorderNow > 0 ? `<span style="color: #f44336; margin-left: 10px;">${briefSummary.reorderNow} reorder</span>` : ''}
-            ${briefSummary.sellNow > 0 ? `<span style="color: #ff9800; margin-left: 10px;">${briefSummary.sellNow} sell now</span>` : ''}
-            ${briefSummary.holdLine > 0 ? `<span style="color: #4CAF50; margin-left: 10px;">${briefSummary.holdLine} protect</span>` : ''}
-            ${briefSummary.deprioritize > 0 ? `<span style="margin-left: 10px;">${briefSummary.deprioritize} ignore</span>` : ''}
-            <span style="margin-left: 15px;">(${briefSummary.total} SKUs classified)</span>
-          </div>
-        `;
-      }
-
-      // ════════════════════════════════════════════════════════════════════════════
-      // DIAGNOSTIC: SUPPRESSED ITEMS
-      // Shows SKUs omitted from actions and WHY
-      // ════════════════════════════════════════════════════════════════════════════
-      const suppressedItems = actionBrief.suppressedItems || [];
-      const excludedForIdentity = snapshot.stats?.excludedForMissingIdentity || 0;
-
-      if (suppressedItems.length > 0 || excludedForIdentity > 0) {
-        html += `
-          <details style="margin-top: 20px; padding: 15px; background: #1a1a1a; border-radius: 4px; font-size: 0.85em; color: #666;">
-            <summary style="cursor: pointer; color: #888;">
-              📊 Data Quality: ${excludedForIdentity > 0 ? `${excludedForIdentity} SKUs excluded (missing identity)` : ''}
-              ${suppressedItems.length > 0 ? `${suppressedItems.length} actions suppressed` : ''}
-            </summary>
-            <div style="margin-top: 10px; border-top: 1px solid #333; padding-top: 10px;">
-              ${excludedForIdentity > 0 ? `
-                <div style="margin-bottom: 10px;">
-                  <strong style="color: #dc3545;">Missing Identity:</strong> ${excludedForIdentity} SKUs excluded
-                  <span style="color: #666;">(missing product_name or variant_name from Wix)</span>
-                </div>
-              ` : ''}
-              ${suppressedItems.length > 0 ? `
-                <div>
-                  <strong style="color: #ff9800;">Suppressed Actions:</strong>
-                  <ul style="margin: 5px 0 0 20px; padding: 0;">
-                    ${suppressedItems.slice(0, 10).map(item => `
-                      <li style="color: #888;">${item.sku || 'Unknown SKU'}: ${item.reason || 'Missing required data'}</li>
-                    `).join('')}
-                    ${suppressedItems.length > 10 ? `<li style="color: #666;">...and ${suppressedItems.length - 10} more</li>` : ''}
-                  </ul>
-                </div>
-              ` : ''}
-            </div>
-          </details>
-        `;
-      }
-
-      html += '</div>';
 
       document.getElementById('snapshotContent').innerHTML = html;
       document.getElementById('snapshotPreview').classList.add('show');
