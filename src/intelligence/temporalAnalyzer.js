@@ -58,10 +58,12 @@ async function computeOrderBasedMargin(orders) {
     }
   }
 
+
   let totalRevenue = 0;
   let totalProfit = 0;
   let lineItemsWithCost = 0;
   let lineItemsTotal = 0;
+  const missingCostSKUs = new Map();
 
   for (const order of orders) {
     const sku = order.sku || order.product_sku || order.item_sku;
@@ -80,6 +82,14 @@ async function computeOrderBasedMargin(orders) {
       const lineProfit = (price - cost) * quantity;
       totalProfit += lineProfit;
       lineItemsWithCost++;
+    } else {
+      // Track missing cost SKUs and their revenue impact
+      if (!missingCostSKUs.has(sku)) {
+        missingCostSKUs.set(sku, { sku, revenue: 0, quantity: 0 });
+      }
+      const entry = missingCostSKUs.get(sku);
+      entry.revenue += lineRevenue;
+      entry.quantity += quantity;
     }
   }
 
@@ -92,7 +102,12 @@ async function computeOrderBasedMargin(orders) {
       lineItemsWithCost: 0,
       lineItemsTotal,
       coveragePercent: 0,
-      reason: 'No cost data available for sold items in this period'
+      reason: 'No cost data available for sold items in this period',
+      skusWithSales: lineItemsTotal,
+      skusWithMargin: 0,
+      topMissingCostSKUs: Array.from(missingCostSKUs.values())
+        .sort((a, b) => b.revenue - a.revenue)
+        .slice(0, 5)
     };
   }
 
@@ -109,7 +124,12 @@ async function computeOrderBasedMargin(orders) {
     coveragePercent,
     reason: coveragePercent < 100
       ? `Based on ${coveragePercent}% of line items (${lineItemsWithCost} of ${lineItemsTotal} have cost data)`
-      : null
+      : null,
+    skusWithSales: lineItemsTotal,
+    skusWithMargin: lineItemsWithCost,
+    topMissingCostSKUs: Array.from(missingCostSKUs.values())
+      .sort((a, b) => b.revenue - a.revenue)
+      .slice(0, 5)
   };
 }
 
