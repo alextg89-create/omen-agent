@@ -1,4 +1,51 @@
 /**
+ * Diagnostic: List SKUs in orders missing from sku_costs and missing retail price in inventory.
+ * Returns { missingCostSKUs: string[], missingRetailSKUs: string[], countMissingCost: number, countMissingRetail: number }
+ *
+ * @param {Array} orders - Array of order line items (must have .sku)
+ * @param {Array} skuCosts - Array of { sku, unit_cost }
+ * @param {Array} inventory - Array of inventory items (must have .sku, .retail or .pricing.retail)
+ */
+export function diagnosticMissingCostAndRetail(orders, skuCosts, inventory) {
+  // Build fast lookup sets
+  const costSKUs = new Set(skuCosts.map(c => c.sku));
+  const inventoryMap = new Map();
+  for (const item of inventory) {
+    inventoryMap.set(item.sku, item);
+  }
+
+  // 1. SKUs in orders missing from sku_costs
+  const missingCostSet = new Set();
+  // 2. SKUs in orders missing retail price in inventory
+  const missingRetailSet = new Set();
+
+  for (const order of orders) {
+    const sku = order.sku || order.product_sku || order.item_sku;
+    if (!sku) continue;
+    // Check cost
+    if (!costSKUs.has(sku)) {
+      missingCostSet.add(sku);
+    }
+    // Check retail price
+    const inv = inventoryMap.get(sku);
+    let retail = null;
+    if (inv) {
+      if (typeof inv.retail === 'number') retail = inv.retail;
+      else if (inv.pricing && typeof inv.pricing.retail === 'number') retail = inv.pricing.retail;
+    }
+    if (retail === null || retail === undefined || !isFinite(retail) || retail <= 0) {
+      missingRetailSet.add(sku);
+    }
+  }
+
+  return {
+    missingCostSKUs: Array.from(missingCostSet),
+    missingRetailSKUs: Array.from(missingRetailSet),
+    countMissingCost: missingCostSet.size,
+    countMissingRetail: missingRetailSet.size
+  };
+}
+/**
  * Temporal Intelligence Analyzer
  *
  * Analyzes order velocity, depletion rates, and generates actionable insights
@@ -10,6 +57,16 @@
 import { queryOrderEvents, queryLineItemOrders } from '../db/supabaseQueries.js';
 import { calculateDateRange } from '../utils/dateCalculations.js';
 import { getSupabaseClient, isSupabaseAvailable } from '../db/supabaseClient.js';
+
+/**
+ * Pure normalization for cost matching only.
+ * Strips all non-alphanumeric chars, lowercases.
+ * Does NOT alter any database values.
+ */
+function normKey(input) {
+  if (!input) return '';
+  return input.toLowerCase().replace(/[^a-z0-9]/g, '');
+}
 
 /**
  * Compute margin DIRECTLY from order line items + sku_costs table.
@@ -37,7 +94,9 @@ async function computeOrderBasedMargin(orders) {
   }
 
   // Load cost data from sku_costs table
-  let costMap = new Map();
+  const costByRaw = new Map();
+  const costByNorm = new Map();
+  const costEntries = []; // structured entries for containment, sorted longest first
   if (isSupabaseAvailable()) {
     try {
       const client = getSupabaseClient();
@@ -48,11 +107,16 @@ async function computeOrderBasedMargin(orders) {
       if (!error && costs) {
         for (const row of costs) {
           if (row.sku && row.unit_cost !== null) {
-            costMap.set(row.sku, parseFloat(row.unit_cost));
+            const unitCost = parseFloat(row.unit_cost);
+            costByRaw.set(row.sku, unitCost);
+            const nk = normKey(row.sku);
+            costByNorm.set(nk, unitCost);
+            costEntries.push({ norm: nk, unitCost });
           }
         }
       }
-      console.log(`[TemporalAnalyzer] Loaded ${costMap.size} SKU costs for margin calculation`);
+      costEntries.sort((a, b) => b.norm.length - a.norm.length);
+      console.log(`[TemporalAnalyzer] Loaded ${costByRaw.size} SKU costs for margin calculation`);
     } catch (err) {
       console.warn(`[TemporalAnalyzer] Failed to load sku_costs: ${err.message}`);
     }
@@ -76,8 +140,20 @@ async function computeOrderBasedMargin(orders) {
     const lineRevenue = price * quantity;
     totalRevenue += lineRevenue;
 
-    // Get cost from sku_costs table
-    const cost = costMap.get(sku);
+    // Three-step cost resolution: raw → normalized exact → containment
+    let cost = costByRaw.get(sku);
+    if (cost === undefined) {
+      const normOrderKey = normKey(sku);
+      cost = costByNorm.get(normOrderKey);
+      if (cost === undefined && normOrderKey.length >= 4) {
+        for (const entry of costEntries) {
+          if (normOrderKey.includes(entry.norm)) {
+            cost = entry.unitCost;
+            break;
+          }
+        }
+      }
+    }
     if (cost !== undefined && cost !== null) {
       const lineProfit = (price - cost) * quantity;
       totalProfit += lineProfit;
@@ -92,6 +168,8 @@ async function computeOrderBasedMargin(orders) {
       entry.quantity += quantity;
     }
   }
+
+  console.log(`[TemporalAnalyzer] Margin coverage: ${lineItemsWithCost}/${lineItemsTotal} matched, ${lineItemsTotal - lineItemsWithCost} unmatched`);
 
   // Compute margin
   if (lineItemsWithCost === 0 || totalRevenue <= 0) {
