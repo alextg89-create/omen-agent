@@ -3221,7 +3221,8 @@ app.post("/snapshot/generate", async (req, res) => {
         orderCount: velocityAnalysis.orderCount,
         uniqueSKUs: velocityAnalysis.uniqueSKUs,
         insights: velocityAnalysis.insights,
-        velocityMetrics: velocityAnalysis.velocityMetrics
+        velocityMetrics: velocityAnalysis.velocityMetrics,
+        orderBasedMargin: velocityAnalysis.orderBasedMargin
       } : null,
       // Multi-scope order context (timeframe, 30-day, lifetime)
       orderContext: {
@@ -3872,7 +3873,8 @@ app.post("/cron/daily-snapshot", async (req, res) => {
       velocity: velocityAnalysis.ok ? {
         orderCount: velocityAnalysis.orderCount,
         uniqueSKUs: velocityAnalysis.uniqueSKUs,
-        insights: velocityAnalysis.insights
+        insights: velocityAnalysis.insights,
+        orderBasedMargin: velocityAnalysis.orderBasedMargin
       } : null,
       recommendations: velocityAnalysis.ok && velocityAnalysis.insights?.length > 0
         ? convertInsightsToRecommendations(velocityAnalysis.insights)
@@ -3966,7 +3968,8 @@ app.post("/cron/weekly-snapshot", async (req, res) => {
         orderCount: velocityAnalysis.orderCount,
         uniqueSKUs: velocityAnalysis.uniqueSKUs,
         insights: velocityAnalysis.insights,
-        velocityMetrics: velocityAnalysis.velocityMetrics
+        velocityMetrics: velocityAnalysis.velocityMetrics,
+        orderBasedMargin: velocityAnalysis.orderBasedMargin
       } : null,
       recommendations: velocityAnalysis.ok && velocityAnalysis.insights?.length > 0
         ? convertInsightsToRecommendations(velocityAnalysis.insights)
