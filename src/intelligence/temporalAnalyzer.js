@@ -140,7 +140,7 @@ async function computeOrderBasedMargin(orders) {
     const lineRevenue = price * quantity;
     totalRevenue += lineRevenue;
 
-    // Three-step cost resolution: raw → normalized exact → containment
+    // Four-step cost resolution: raw → normalized exact → containment → strain+unit
     let cost = costByRaw.get(sku);
     if (cost === undefined) {
       const normOrderKey = normKey(sku);
@@ -150,6 +150,21 @@ async function computeOrderBasedMargin(orders) {
           if (normOrderKey.includes(entry.norm)) {
             cost = entry.unitCost;
             break;
+          }
+        }
+      }
+      // d) strain+unit fallback for unmatched/unknown SKUs
+      if (cost === undefined && order.strain && order.unit) {
+        const strainUnitKey = normKey(order.strain + order.unit);
+        if (strainUnitKey.length >= 4) {
+          cost = costByNorm.get(strainUnitKey);
+          if (cost === undefined) {
+            for (const entry of costEntries) {
+              if (strainUnitKey.includes(entry.norm)) {
+                cost = entry.unitCost;
+                break;
+              }
+            }
           }
         }
       }
