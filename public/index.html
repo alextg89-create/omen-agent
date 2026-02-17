@@ -2072,7 +2072,7 @@
                   <span class="performance-insight-icon">🔍</span>
                   <div>
                     <div class="performance-insight-label">Top SKUs Missing Cost</div>
-                    <div class="performance-insight-value">${marginData.topMissingCostSKUs.map(sku => sku).join(', ')}</div>
+                    <div class="performance-insight-value">${marginData.topMissingCostSKUs.map(s => s.sku || s).join(', ')}</div>
                   </div>
                 </div>
               ` : ''}
