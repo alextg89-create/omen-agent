@@ -375,44 +375,87 @@ function aggregateOrdersBySKU(orders) {
 }
 
 /**
- * Calculate velocity metrics for each SKU
+ * Calculate velocity metrics for each SKU.
+ *
+ * Velocity is a pure sales metric — computed from orders alone.
+ * Inventory data (stock, depletion) is joined secondarily when available.
+ * A SKU missing from inventory still gets a velocity reading.
  */
 function calculateVelocityMetrics(ordersBySkU, currentInventory, dateRange) {
   const metrics = [];
-  const daysInPeriod = Math.max(1, Math.ceil((new Date(dateRange.endDate) - new Date(dateRange.startDate)) / (1000 * 60 * 60 * 24)));
+  const daysInPeriod = Math.max(1, Math.ceil(
+    (new Date(dateRange.endDate) - new Date(dateRange.startDate)) / (1000 * 60 * 60 * 24)
+  ));
 
-  for (const [key, orderData] of ordersBySkU) {
-    // Find matching inventory item by SKU only (unit matching is unreliable from Wix)
-    const inventoryItem = currentInventory.find(item => item.sku === orderData.sku);
+  // Build inventory lookup — secondary, non-blocking
+  const inventoryBySku = new Map();
+  for (const item of currentInventory) {
+    if (item.sku) inventoryBySku.set(item.sku, item);
+  }
 
-    if (!inventoryItem) {
-      console.warn(`[TemporalAnalyzer] SKU ${orderData.sku} has orders but not in inventory`);
-      continue;
+  for (const [, orderData] of ordersBySkU) {
+    const { sku, unit, totalSold, orderCount, orders: orderEvents, firstOrder, lastOrder } = orderData;
+
+    // Velocity = units sold / days in period
+    // Always computed — never skipped due to missing inventory
+    const dailyVelocity   = totalSold / daysInPeriod;
+    const weeklyVelocity  = dailyVelocity * 7;
+    const thirtyDayVelocity = dailyVelocity * 30;
+
+    // Confidence scoring
+    const daysWithSales = new Set(
+      orderEvents.map(o => o.date.toISOString().split('T')[0])
+    ).size;
+
+    let confidence;
+    if (daysWithSales >= 14 && totalSold >= 10) {
+      confidence = 'high';
+    } else if (daysWithSales >= 5 && totalSold >= 3) {
+      confidence = 'medium';
+    } else {
+      confidence = 'low';
     }
 
-    const currentStock = inventoryItem.quantity || 0;
-    const dailyVelocity = orderData.totalSold / daysInPeriod;
-    const daysUntilStockout = currentStock > 0 && dailyVelocity > 0
+    // Inventory enrichment — optional, does not block velocity
+    const inventoryItem   = inventoryBySku.get(sku) || null;
+    const currentStock    = inventoryItem?.quantity ?? null;
+    const daysUntilStockout = (currentStock !== null && currentStock > 0 && dailyVelocity > 0)
       ? Math.ceil(currentStock / dailyVelocity)
       : null;
 
     metrics.push({
-      sku: orderData.sku,
-      unit: orderData.unit,
-      name: inventoryItem.name || inventoryItem.product || orderData.sku,
+      sku,
+      unit,
+      name: inventoryItem?.name || inventoryItem?.product || sku,
+      // Velocity — computed from orders, never null
+      dailyVelocity:       parseFloat(dailyVelocity.toFixed(3)),
+      weeklyVelocity:      parseFloat(weeklyVelocity.toFixed(2)),
+      thirtyDayVelocity:   parseFloat(thirtyDayVelocity.toFixed(1)),
+      // Sales facts
+      totalSold,
+      orderCount,
+      daysWithSales,
+      firstSale:           firstOrder,
+      lastSale:            lastOrder,
+      daysObserved:        daysInPeriod,
+      // Confidence
+      confidence,
+      // Inventory (null when not in inventory_virtual — not an error)
       currentStock,
-      totalSold: orderData.totalSold,
-      orderCount: orderData.orderCount,
-      dailyVelocity: parseFloat(dailyVelocity.toFixed(2)),
       daysUntilStockout,
-      margin: inventoryItem.pricing?.margin ?? null,  // NULL if missing - never fabricate
-      totalRevenue: inventoryItem.pricing?.retail ? orderData.totalSold * inventoryItem.pricing.retail : null,  // NULL if no retail price
-      isMoving: dailyVelocity > 0,
-      isAccelerating: calculateAcceleration(orderData.orders, daysInPeriod)
+      inInventory:         inventoryItem !== null,
+      // Signals
+      isMoving:            dailyVelocity > 0,
+      isAccelerating:      calculateAcceleration(orderEvents, daysInPeriod),
+      // Financial (null if no retail price — never fabricate)
+      margin:              inventoryItem?.pricing?.margin ?? null,
+      totalRevenue:        inventoryItem?.pricing?.retail
+                             ? parseFloat((totalSold * inventoryItem.pricing.retail).toFixed(2))
+                             : null
     });
   }
 
-  // Sort by velocity (fastest moving first)
+  // Sort by velocity descending — fastest movers first
   return metrics.sort((a, b) => b.dailyVelocity - a.dailyVelocity);
 }
 
