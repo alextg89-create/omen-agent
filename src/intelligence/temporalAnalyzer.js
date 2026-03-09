@@ -60,19 +60,42 @@ import { getSupabaseClient, isSupabaseAvailable } from '../db/supabaseClient.js'
 
 /**
  * Pure normalization for cost matching only.
- * Resolves unit synonyms then strips all non-alphanumeric chars.
+ * Resolves unit synonyms and product-type tokens, then strips all
+ * non-alphanumeric characters so keys can be compared with containment.
  * Does NOT alter any database values.
  *
- * Canonical unit mappings (dispensary standard):
- *   eighth / 1/8          → 35g   (3.5g = 1/8 oz)
- *   quarter / 1/4         → 7g    (7g   = 1/4 oz)
- *   half / 1/2            → 14g   (14g  = 1/2 oz)
- *   ounce / oz / 1oz      → 28g   (28g  = 1 oz)
+ * Weight mappings (dispensary standard):
+ *   eighth / 1/8          → 35g    (3.5g = 1/8 oz)
+ *   quarter / 1/4         → 7g     (7g   = 1/4 oz)
+ *   half / 1/2            → 14g    (14g  = 1/2 oz)
+ *   ounce / oz / 1oz      → 28g    (28g  = 1 oz)
  *   gram / grams          → g
+ *
+ * Product-type tokens (survive the strip step as alphanumeric strings):
+ *   cart / carts          → cartridge
+ *   gummy / gummies       → gummies
+ *   pre-roll / preroll    → preroll
+ *   disposable            → 1g     (disposables are 1g units)
+ *
+ * Examples:
+ *   "Bubble Hash Eighth"  → bubblehash35g
+ *   "GG4 1/8"            → gg435g
+ *   "Zoap Quarter"       → zoap7g
+ *   "Blue Dream Cart"    → bluedreamcartridge
+ *   "Faded Gummies"      → fadedgummies
  */
 function normKey(input) {
   if (!input) return '';
   let s = input.toLowerCase();
+
+  // ── Combined fraction+unit patterns (must run first to avoid double-fire) ──
+  // "Half Oz/Ounce" = 14g, "Quarter Oz" = 7g, "One Oz/Ounce" = 28g
+  s = s
+    .replace(/\bhalf\s*(?:oz|ounces?)\b/g,     '14g')
+    .replace(/\bquarter\s*(?:oz|ounces?)\b/g,  '7g')
+    .replace(/\bone\s*(?:oz|ounces?)\b/g,      '28g');
+
+  // ── Weight synonyms ───────────────────────────────────────────────────────
   s = s
     .replace(/\beighths?\b/g,               '35g')
     .replace(/\b1\s*\/\s*8\b/g,             '35g')
@@ -84,6 +107,22 @@ function normKey(input) {
     .replace(/\b1\s*oz\b/g,                 '28g')
     .replace(/\boz\b/g,                     '28g')
     .replace(/\bgrams?\b/g,                 'g');
+
+  // Collapse space in weights so '28 g' → '28g' before stripping
+  s = s.replace(/(\d+\.?\d*)\s+g\b/g, '$1g');
+
+  // Strip trailing product-type descriptor after an explicit weight:
+  // "1g disposable" → "1g",  "3.5g pre-roll" → "3.5g"
+  s = s.replace(/\b(\d+\.?\d*g)\s+(?:disposable|pre-?roll|preroll|cart|cartridge|gumm(?:y|ies)?)s?\b/g, '$1');
+
+  // ── Product-type tokens (replace BEFORE stripping) ────────────────────────
+  s = s.replace(/\bcarts?\b/g,              'cartridge');
+  s = s.replace(/\bgumm(?:y|ies)?\b/g,     'gummies');
+  s = s.replace(/\bpre-?rolls?\b/g,        'preroll');
+  s = s.replace(/\bprerolls?\b/g,          'preroll');
+  s = s.replace(/\bdisposables?\b/g,       '1g');
+
+  // ── Strip non-alphanumeric ────────────────────────────────────────────────
   return s.replace(/[^a-z0-9]/g, '');
 }
 

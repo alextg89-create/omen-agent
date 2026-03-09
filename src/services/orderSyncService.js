@@ -215,27 +215,36 @@ export async function syncOrdersFromWebhooks(lookbackDays = 30) {
         const itemName = item.itemName || item.productName?.original || 'Unknown';
         let { strain, unit } = parseProductName(itemName);
 
-        // Extract unit from descriptionLines if name parsing returned Unknown
-        // Wix sends variant info in descriptionLines[{name:"Weight", description:"28 G"}]
-        if (unit === 'Unknown' && Array.isArray(item.descriptionLines)) {
+        // Priority 1: descriptionLines — Wix sends variant in
+        //   descriptionLines[{name:"Weight", description:"28 G"}]
+        if (unit === 'unknown' && Array.isArray(item.descriptionLines)) {
           for (const line of item.descriptionLines) {
             if (line && line.name) {
               const lineName = line.name.toLowerCase();
               if (lineName === 'weight' || lineName === 'size' || lineName === 'unit') {
                 const extracted = (line.description || line.value || '').trim();
-                if (extracted) { unit = extracted; break; }
+                if (extracted) {
+                  unit = normalizeUnit(extracted);
+                  break;
+                }
               }
             }
           }
         }
 
-        // Fallback: check item.options for a weight selection
-        if (unit === 'Unknown' && Array.isArray(item.options)) {
+        // Priority 2: item.options weight field
+        if (unit === 'unknown' && Array.isArray(item.options)) {
           const weightOpt = item.options.find(
             opt => opt.option && opt.option.toLowerCase().includes('weight')
           );
-          if (weightOpt && weightOpt.selection) unit = weightOpt.selection;
+          if (weightOpt && weightOpt.selection) {
+            unit = normalizeUnit(weightOpt.selection);
+          }
         }
+
+        // Ensure final unit is always normalized (guards against any raw value
+        // that made it through without hitting normalizeUnit above)
+        unit = normalizeUnit(unit);
 
         // Map to inventory_live SKU format (async catalog lookup)
         const sku = await findMatchingSKU(strain, unit, inventoryItems, itemName);
@@ -290,42 +299,120 @@ export async function syncOrdersFromWebhooks(lookbackDays = 30) {
 }
 
 /**
- * Parse product name to extract strain and unit
- * Examples:
- *   "Blue River Rosin Cartridge" -> { strain: "Blue River Rosin", unit: "Cartridge" }
- *   "Ice cream mintz (1 G)" -> { strain: "Ice cream mintz", unit: "1 G" }
+ * Normalize a raw unit string to a canonical stored form.
+ *
+ * Canonical values:
+ *   Weight:       '3.5g', '7g', '14g', '28g', '1g', '2g'
+ *   Product type: 'cartridge', 'gummies', 'preroll'
+ *   Unknown:      'unknown'
+ *
+ * This runs on EVERY unit value before it is written to orders.unit.
+ * It is the single source of truth for unit normalization in JS.
+ */
+function normalizeUnit(raw) {
+  if (!raw) return 'unknown';
+
+  let u = raw.toLowerCase().trim();
+
+  // Literal 'unit' / 'units' is not a measurement
+  if (u === 'unit' || u === 'units' || u === '') return 'unknown';
+
+  // Collapse space between number and g: '28 G' → '28g', '3.5 G' → '3.5g'
+  u = u.replace(/(\d+\.?\d*)\s+g\b/gi, '$1g');
+
+  // Fraction forms
+  if (/^1\s*\/\s*8$/.test(u)) return '3.5g';
+  if (/^1\s*\/\s*4$/.test(u)) return '7g';
+  if (/^1\s*\/\s*2$/.test(u)) return '14g';
+  if (/^(1\s*oz|one\s*oz|1\s*ounce|ounce)$/i.test(u)) return '28g';
+
+  // Word synonyms (whole-string only — avoids mangling compound names)
+  if (/^eighths?$/.test(u)) return '3.5g';
+  if (/^quarters?$/.test(u)) return '7g';
+  if (/^half$/.test(u)) return '14g';
+  if (/^ounces?$/.test(u)) return '28g';
+
+  // Strip trailing descriptor after a weight: '1g disposable' → '1g', '2g flavored' → '2g'
+  const weightDesc = u.match(/^(\d+\.?\d*g)\s+\S/);
+  if (weightDesc) u = weightDesc[1];
+
+  // Product-type detection (check after weight stripping)
+  if (/cart/.test(u))                        return 'cartridge';
+  if (/gumm/.test(u))                        return 'gummies';
+  if (/^disposable$/.test(u))                return '1g';
+  if (/(pre.?roll|preroll|^roll$)/.test(u))  return 'preroll';
+
+  // Already a canonical weight
+  if (/^\d+\.?\d*g$/.test(u)) return u;
+
+  // Return lowercased as-is (better than 'unknown' for debugging)
+  return u;
+}
+
+/**
+ * Parse product name to extract strain and unit.
+ *
+ * Priority order:
+ *   1. Parenthesised weight/variant at end: "Ice cream mintz (1 G)"
+ *   2. Explicit weight/synonym token at end of name string
+ *   3. Weight token embedded anywhere in name: "Bubble Hash 28G"
+ *   4. Product-type suffix: "Blue River Rosin Cartridge"
+ *   5. Fallback: entire name is strain, unit = 'unknown'
+ *
+ * All returned units pass through normalizeUnit() so values are
+ * always in canonical form before being stored.
  */
 function parseProductName(name) {
-  // Remove parentheses content and extract
-  const match = name.match(/^(.+?)\s*\(([^)]+)\)$/);
+  if (!name || name === 'Unknown') {
+    return { strain: 'Unknown', unit: 'unknown' };
+  }
 
-  if (match) {
+  // 1. Parenthesised weight/variant at end: "Ice cream mintz (1 G)"
+  const parenMatch = name.match(/^(.+?)\s*\(([^)]+)\)$/);
+  if (parenMatch) {
     return {
-      strain: match[1].trim(),
-      unit: match[2].trim()
+      strain: parenMatch[1].trim(),
+      unit: normalizeUnit(parenMatch[2].trim()),
     };
   }
 
-  // No parentheses - try to detect unit at end
-  const unitPatterns = [
-    /\s+(1\s*G|2\s*G|3\.5\s*G|7\s*G|14\s*G|28\s*G)$/i,
-    /\s+(Cartridge|Cart|Pre-?Roll|Edible|Gummy|Gummies)$/i
-  ];
-
-  for (const pattern of unitPatterns) {
-    const match = name.match(pattern);
-    if (match) {
-      return {
-        strain: name.replace(pattern, '').trim(),
-        unit: match[1].trim()
-      };
-    }
+  // 2. Explicit weight token at end (handles space-separated formats)
+  const weightSuffix = name.match(
+    /^(.+?)\s+((?:\d+\.?\d*)\s*[Gg]|1\/[248]|eighth|quarter|half|ounce|oz)(\s+.*)?$/i
+  );
+  if (weightSuffix) {
+    const rawUnit = (weightSuffix[2] + (weightSuffix[3] || '')).trim();
+    return {
+      strain: weightSuffix[1].trim(),
+      unit: normalizeUnit(rawUnit),
+    };
   }
 
-  // Default: entire name is strain, unknown unit
+  // 3. Weight token embedded anywhere in name: "Bubble Hash 28G OG"
+  const embeddedWeight = name.match(/(.*?)\s*\b(\d+\.?\d*)\s*[Gg]\b(.*)/);
+  if (embeddedWeight) {
+    const strain = (embeddedWeight[1] + embeddedWeight[3]).trim().replace(/\s+/g, ' ');
+    return {
+      strain: strain || name.trim(),
+      unit: normalizeUnit(embeddedWeight[2] + 'g'),
+    };
+  }
+
+  // 4. Product-type suffix
+  const typeSuffix = name.match(
+    /^(.+?)\s+(cartridge|cart|pre-?roll|preroll|gumm(?:y|ies)|disposable|edible)s?$/i
+  );
+  if (typeSuffix) {
+    return {
+      strain: typeSuffix[1].trim(),
+      unit: normalizeUnit(typeSuffix[2].trim()),
+    };
+  }
+
+  // 5. Fallback: entire name is strain
   return {
     strain: name.trim(),
-    unit: 'Unknown'
+    unit: 'unknown',
   };
 }
 
