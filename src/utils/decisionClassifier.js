@@ -805,6 +805,164 @@ export function generateExecutiveActionBrief(snapshot) {
 }
 
 // ============================================================================
+// INVENTORY STATUS RULES ENGINE
+// ============================================================================
+
+export const STATUS = {
+  RESTOCK:         'restock',
+  DEAD:            'dead',
+  CAPITAL_AT_RISK: 'capital_at_risk',
+  SLOW:            'slow',
+  HEALTHY:         'healthy',
+};
+
+const STATUS_THRESHOLDS = {
+  DEAD_DAYS:             30,   // days without a sale = dead
+  CAPITAL_AT_RISK_FLOOR: 500,  // minimum cost basis ($) to flag as capital at risk
+};
+
+// Priority order for sorting / tiebreaking
+const STATUS_ORDER = {
+  restock: 0,
+  dead: 1,
+  capital_at_risk: 2,
+  slow: 3,
+  healthy: 4,
+};
+
+/**
+ * Classify every in-stock SKU by inventory status.
+ *
+ * Rules evaluated in priority order:
+ *   1. restock        — velocity >= HIGH_VELOCITY AND days_of_coverage <= LOW_STOCK_DAYS
+ *   2. dead           — velocity == 0 AND days_since_last_sale > 30 (or never sold)
+ *   3. capital_at_risk — qty * cost > $500 AND velocity < LOW_VELOCITY
+ *   4. slow           — velocity < LOW_VELOCITY (some sales, moving slowly)
+ *   5. healthy        — all other in-stock SKUs
+ *
+ * @param {Map} inventoryFacts  — from buildFactTables()
+ * @returns {Array<{sku, name, status, action, reasoning, capital_at_risk, metrics}>}
+ */
+export function classifyInventoryStatus(inventoryFacts) {
+  const results = [];
+
+  for (const [sku, fact] of inventoryFacts) {
+    const velocity          = isFinite(fact.velocity) ? fact.velocity : 0;
+    const qty               = fact.available_quantity || 0;
+    const cost              = (fact.unit_cost !== null && isFinite(fact.unit_cost)) ? fact.unit_cost : null;
+    const daysSinceLastSale = fact.days_since_last_sale;
+    const daysOfCoverage    = fact.days_of_coverage;
+    const capitalAtRisk     = cost !== null ? parseFloat((qty * cost).toFixed(2)) : null;
+
+    let status, action, reasoning;
+
+    // Rule 1: RESTOCK — selling fast and running low
+    if (velocity >= THRESHOLDS.HIGH_VELOCITY &&
+        daysOfCoverage !== null &&
+        isFinite(daysOfCoverage) &&
+        daysOfCoverage <= THRESHOLDS.LOW_STOCK_DAYS) {
+      status    = STATUS.RESTOCK;
+      action    = daysOfCoverage <= THRESHOLDS.CRITICAL_STOCK_DAYS
+        ? 'Reorder immediately'
+        : 'Place reorder this week';
+      reasoning = `Selling ${velocity.toFixed(2)}/day with only ${daysOfCoverage} days of stock remaining`;
+    }
+    // Rule 2: DEAD — zero velocity, no recent or no sale at all
+    else if (velocity === 0 &&
+             (daysSinceLastSale === null || daysSinceLastSale > STATUS_THRESHOLDS.DEAD_DAYS)) {
+      status    = STATUS.DEAD;
+      action    = 'Write off or liquidate — no sales activity';
+      reasoning = daysSinceLastSale !== null
+        ? `No sales in ${daysSinceLastSale} days (>${STATUS_THRESHOLDS.DEAD_DAYS}d threshold)`
+        : `Never sold — ${qty} units sitting idle`;
+    }
+    // Rule 3: CAPITAL AT RISK — significant cost basis locked in slow stock
+    else if (capitalAtRisk !== null &&
+             capitalAtRisk > STATUS_THRESHOLDS.CAPITAL_AT_RISK_FLOOR &&
+             velocity < THRESHOLDS.LOW_VELOCITY) {
+      status    = STATUS.CAPITAL_AT_RISK;
+      action    = 'Discount to release capital — high cost basis stalled';
+      reasoning = `$${Math.round(capitalAtRisk).toLocaleString()} cost basis in slow-moving stock (${velocity.toFixed(2)}/day)`;
+    }
+    // Rule 4: SLOW — low velocity, not yet capital-critical
+    else if (velocity < THRESHOLDS.LOW_VELOCITY) {
+      status    = STATUS.SLOW;
+      action    = 'Monitor — consider promotional pricing';
+      reasoning = `Low velocity: ${velocity.toFixed(2)} units/day` +
+        (daysSinceLastSale !== null ? `, last sale ${daysSinceLastSale} days ago` : '');
+    }
+    // Rule 5: HEALTHY
+    else {
+      status    = STATUS.HEALTHY;
+      action    = 'No action required';
+      reasoning = `Selling ${velocity.toFixed(2)}/day` +
+        (daysOfCoverage !== null ? `, ${daysOfCoverage} days of stock` : '');
+    }
+
+    results.push({
+      sku,
+      name:           fact.display_name || sku,
+      status,
+      action,
+      reasoning,
+      capital_at_risk: capitalAtRisk,
+      metrics: {
+        velocity,
+        quantity:            qty,
+        unit_cost:           cost,
+        days_of_coverage:    daysOfCoverage,
+        days_since_last_sale: daysSinceLastSale,
+      },
+    });
+  }
+
+  // Sort: restock → dead → capital_at_risk → slow → healthy
+  // Within same status, highest capital_at_risk first (null last)
+  results.sort((a, b) => {
+    const orderDiff = (STATUS_ORDER[a.status] ?? 5) - (STATUS_ORDER[b.status] ?? 5);
+    if (orderDiff !== 0) return orderDiff;
+    return (b.capital_at_risk ?? -1) - (a.capital_at_risk ?? -1);
+  });
+
+  return results;
+}
+
+/**
+ * Top-level status report from a snapshot.
+ * Builds fact tables then classifies every in-stock SKU.
+ *
+ * @param {object} snapshot
+ * @returns {{
+ *   skus: Array,
+ *   counts: {restock, dead, capital_at_risk, slow, healthy, total},
+ *   totalCapitalAtRisk: number,
+ *   generatedAt: string
+ * }}
+ */
+export function generateStatusReport(snapshot) {
+  const inventory       = snapshot.enrichedInventory || [];
+  const velocityMetrics = snapshot.velocity?.velocityMetrics || [];
+
+  const { inventoryFacts } = buildFactTables(inventory, velocityMetrics, {});
+  const skus = classifyInventoryStatus(inventoryFacts);
+
+  const counts = { restock: 0, dead: 0, capital_at_risk: 0, slow: 0, healthy: 0, total: skus.length };
+  let totalCapitalAtRisk = 0;
+
+  for (const s of skus) {
+    counts[s.status] = (counts[s.status] || 0) + 1;
+    if (s.capital_at_risk) totalCapitalAtRisk += s.capital_at_risk;
+  }
+
+  return {
+    skus,
+    counts,
+    totalCapitalAtRisk: parseFloat(totalCapitalAtRisk.toFixed(2)),
+    generatedAt: new Date().toISOString(),
+  };
+}
+
+// ============================================================================
 // LEGACY EXPORTS
 // ============================================================================
 

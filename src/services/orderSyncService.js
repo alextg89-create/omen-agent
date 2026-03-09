@@ -213,7 +213,29 @@ export async function syncOrdersFromWebhooks(lookbackDays = 30) {
       for (const item of lineItems) {
         // Parse product name to extract strain and unit
         const itemName = item.itemName || item.productName?.original || 'Unknown';
-        const { strain, unit } = parseProductName(itemName);
+        let { strain, unit } = parseProductName(itemName);
+
+        // Extract unit from descriptionLines if name parsing returned Unknown
+        // Wix sends variant info in descriptionLines[{name:"Weight", description:"28 G"}]
+        if (unit === 'Unknown' && Array.isArray(item.descriptionLines)) {
+          for (const line of item.descriptionLines) {
+            if (line && line.name) {
+              const lineName = line.name.toLowerCase();
+              if (lineName === 'weight' || lineName === 'size' || lineName === 'unit') {
+                const extracted = (line.description || line.value || '').trim();
+                if (extracted) { unit = extracted; break; }
+              }
+            }
+          }
+        }
+
+        // Fallback: check item.options for a weight selection
+        if (unit === 'Unknown' && Array.isArray(item.options)) {
+          const weightOpt = item.options.find(
+            opt => opt.option && opt.option.toLowerCase().includes('weight')
+          );
+          if (weightOpt && weightOpt.selection) unit = weightOpt.selection;
+        }
 
         // Map to inventory_live SKU format (async catalog lookup)
         const sku = await findMatchingSKU(strain, unit, inventoryItems, itemName);
