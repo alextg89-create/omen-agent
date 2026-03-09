@@ -60,12 +60,31 @@ import { getSupabaseClient, isSupabaseAvailable } from '../db/supabaseClient.js'
 
 /**
  * Pure normalization for cost matching only.
- * Strips all non-alphanumeric chars, lowercases.
+ * Resolves unit synonyms then strips all non-alphanumeric chars.
  * Does NOT alter any database values.
+ *
+ * Canonical unit mappings (dispensary standard):
+ *   eighth / 1/8          → 35g   (3.5g = 1/8 oz)
+ *   quarter / 1/4         → 7g    (7g   = 1/4 oz)
+ *   half / 1/2            → 14g   (14g  = 1/2 oz)
+ *   ounce / oz / 1oz      → 28g   (28g  = 1 oz)
+ *   gram / grams          → g
  */
 function normKey(input) {
   if (!input) return '';
-  return input.toLowerCase().replace(/[^a-z0-9]/g, '');
+  let s = input.toLowerCase();
+  s = s
+    .replace(/\beighths?\b/g,               '35g')
+    .replace(/\b1\s*\/\s*8\b/g,             '35g')
+    .replace(/\bquarters?\b/g,              '7g')
+    .replace(/\b1\s*\/\s*4\b/g,             '7g')
+    .replace(/\bhalf\b/g,                   '14g')
+    .replace(/\b1\s*\/\s*2\b/g,             '14g')
+    .replace(/\b(?:one\s*)?ounces?\b/g,     '28g')
+    .replace(/\b1\s*oz\b/g,                 '28g')
+    .replace(/\boz\b/g,                     '28g')
+    .replace(/\bgrams?\b/g,                 'g');
+  return s.replace(/[^a-z0-9]/g, '');
 }
 
 /**
@@ -154,8 +173,10 @@ async function computeOrderBasedMargin(orders) {
         }
       }
       // d) strain+unit fallback for unmatched/unknown SKUs
+      // Space separator ensures word boundaries work for synonym substitution
+      // e.g. "Bubble Hash" + " " + "Eighth" → normKey resolves "eighth" → "35g"
       if (cost === undefined && order.strain && order.unit) {
-        const strainUnitKey = normKey(order.strain + order.unit);
+        const strainUnitKey = normKey(order.strain + ' ' + order.unit);
         if (strainUnitKey.length >= 4) {
           cost = costByNorm.get(strainUnitKey);
           if (cost === undefined) {
