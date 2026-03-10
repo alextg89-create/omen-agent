@@ -31,13 +31,13 @@ WHERE order_date >= CURRENT_DATE - INTERVAL '30 days'
 
 SELECT
   COUNT(DISTINCT iv.sku)                                       AS slow_sku_count,
-  ROUND(SUM(iv.available_qty * COALESCE(sp.retail, 0)), 2)     AS revenue_opportunity,
-  ROUND(SUM(iv.available_qty * COALESCE(sc.unit_cost, 0)), 2)  AS capital_at_risk
+  ROUND(SUM(iv.available_quantity * COALESCE(sp.retail, 0)), 2)     AS revenue_opportunity,
+  ROUND(SUM(iv.available_quantity * COALESCE(sc.unit_cost, 0)), 2)  AS capital_at_risk
 FROM inventory_virtual iv
 LEFT JOIN sku_profitability sp   ON sp.sku = iv.sku
 LEFT JOIN sku_costs sc           ON sc.sku = iv.sku
 LEFT JOIN sold_by_sku sbs        ON sbs.sku = iv.sku
-WHERE iv.available_qty > 0
+WHERE iv.available_quantity > 0
   AND (
     COALESCE(sbs.avg_daily_velocity, sbs.daily_velocity, 0) <= 0.1
     OR sbs.last_sold_at < CURRENT_DATE - INTERVAL '14 days'
@@ -71,7 +71,7 @@ FROM (
     sbs.last_sold_at
   FROM inventory_virtual iv
   LEFT JOIN sold_by_sku sbs ON sbs.sku = iv.sku
-  WHERE iv.available_qty > 0
+  WHERE iv.available_quantity > 0
     AND iv.visible = true
 ) classified;
 
@@ -176,4 +176,4 @@ SELECT
   (SELECT COUNT(*) FROM sku_costs)                                  AS cost_skus,
   (SELECT COUNT(*) FROM sku_profitability)                          AS profitability_skus,
   (SELECT COUNT(*) FROM sold_by_sku)                                AS velocity_skus,
-  (SELECT COUNT(*) FROM inventory_virtual WHERE available_qty > 0) AS in_stock_skus;
+  (SELECT COUNT(*) FROM inventory_virtual WHERE available_quantity > 0) AS in_stock_skus;

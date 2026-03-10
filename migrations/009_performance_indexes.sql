@@ -82,39 +82,32 @@ CREATE INDEX IF NOT EXISTS idx_webhook_order_number_nested
 
 
 -- =============================================================================
--- sold_by_sku table (velocity view / materialized)
+-- sold_by_sku — SKIPPED: this is a VIEW, not a base table.
+-- Views cannot be indexed directly.
+-- Index the underlying orders table instead (already done above).
+-- If sold_by_sku is ever converted to a MATERIALIZED VIEW, add indexes then:
+--   CREATE INDEX ON sold_by_sku (sku);
+--   CREATE INDEX ON sold_by_sku (avg_daily_velocity DESC NULLS LAST);
+--   CREATE INDEX ON sold_by_sku (last_sold_at DESC NULLS LAST);
 -- =============================================================================
-
--- Primary lookup by sku
-CREATE INDEX IF NOT EXISTS idx_sold_by_sku_sku
-  ON sold_by_sku (sku);
-
--- Velocity-based sorts (dashboard health breakdown)
-CREATE INDEX IF NOT EXISTS idx_sold_by_sku_velocity
-  ON sold_by_sku (avg_daily_velocity DESC NULLS LAST);
-
--- Last-sold-at (dead/slow mover detection)
-CREATE INDEX IF NOT EXISTS idx_sold_by_sku_last_sold
-  ON sold_by_sku (last_sold_at DESC NULLS LAST);
 
 
 -- =============================================================================
--- inventory_virtual table
+-- inventory_virtual — SKIPPED: this is a VIEW, not a base table.
+-- Views cannot be indexed directly.
+-- Index the underlying wix_inventory_live table instead.
 -- =============================================================================
 
--- Primary SKU lookup (all join paths)
-CREATE INDEX IF NOT EXISTS idx_inventory_virtual_sku
-  ON inventory_virtual (sku);
+CREATE INDEX IF NOT EXISTS idx_wix_inventory_sku
+  ON wix_inventory_live (sku);
 
--- In-stock filter (dashboard health, revenue opportunity)
-CREATE INDEX IF NOT EXISTS idx_inventory_virtual_available
-  ON inventory_virtual (available_qty)
-  WHERE available_qty > 0;
+CREATE INDEX IF NOT EXISTS idx_wix_inventory_qty
+  ON wix_inventory_live (quantity_on_hand)
+  WHERE quantity_on_hand > 0;
 
--- Visible items only (health breakdown query uses visible = true)
-CREATE INDEX IF NOT EXISTS idx_inventory_virtual_visible
-  ON inventory_virtual (sku)
-  WHERE visible = true AND available_qty > 0;
+CREATE INDEX IF NOT EXISTS idx_wix_inventory_visible_qty
+  ON wix_inventory_live (sku)
+  WHERE visible = true AND quantity_on_hand > 0;
 
 
 -- =============================================================================
