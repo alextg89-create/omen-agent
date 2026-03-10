@@ -39,7 +39,7 @@ LEFT JOIN sku_costs sc           ON sc.sku = iv.sku
 LEFT JOIN sold_by_sku sbs        ON sbs.sku = iv.sku
 WHERE iv.available_quantity > 0
   AND (
-    COALESCE(sbs.avg_daily_velocity, sbs.daily_velocity, 0) <= 0.1
+    COALESCE(sbs.daily_velocity, 0) <= 0.1
     OR sbs.last_sold_at < CURRENT_DATE - INTERVAL '14 days'
     OR sbs.last_sold_at IS NULL
   );
@@ -67,7 +67,7 @@ SELECT
 FROM (
   SELECT
     iv.sku,
-    COALESCE(sbs.avg_daily_velocity, sbs.daily_velocity, 0)    AS velocity,
+    COALESCE(sbs.daily_velocity, 0)    AS velocity,
     sbs.last_sold_at
   FROM inventory_virtual iv
   LEFT JOIN sold_by_sku sbs ON sbs.sku = iv.sku

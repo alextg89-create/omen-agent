@@ -144,10 +144,10 @@ FROM matched;
 
 SELECT
   COUNT(*)                                                           AS total_tracked_skus,
-  COUNT(CASE WHEN COALESCE(avg_daily_velocity, daily_velocity, 0) >= 0.5 THEN 1 END) AS healthy,
-  COUNT(CASE WHEN COALESCE(avg_daily_velocity, daily_velocity, 0) BETWEEN 0.01 AND 0.49 THEN 1 END) AS slow,
-  COUNT(CASE WHEN COALESCE(avg_daily_velocity, daily_velocity, 0) = 0 THEN 1 END) AS zero_velocity,
-  ROUND(AVG(COALESCE(avg_daily_velocity, daily_velocity, 0))::numeric, 3) AS avg_velocity,
+  COUNT(CASE WHEN COALESCE(daily_velocity, 0) >= 0.5 THEN 1 END) AS healthy,
+  COUNT(CASE WHEN COALESCE(daily_velocity, 0) BETWEEN 0.01 AND 0.49 THEN 1 END) AS slow,
+  COUNT(CASE WHEN COALESCE(daily_velocity, 0) = 0 THEN 1 END) AS zero_velocity,
+  ROUND(AVG(COALESCE(daily_velocity, 0))::numeric, 3) AS avg_velocity,
   MAX(last_sold_at)::date                                            AS most_recent_sale
 FROM sold_by_sku;
 
@@ -229,7 +229,7 @@ SELECT
 FROM (
   SELECT
     iv.sku,
-    COALESCE(sbs.avg_daily_velocity, sbs.daily_velocity, 0) AS velocity,
+    COALESCE(sbs.daily_velocity, 0) AS velocity,
     sbs.last_sold_at
   FROM inventory_virtual iv
   LEFT JOIN sold_by_sku sbs ON sbs.sku = iv.sku
@@ -252,7 +252,7 @@ LEFT JOIN sku_costs sc           ON sc.sku = iv.sku
 LEFT JOIN sold_by_sku sbs        ON sbs.sku = iv.sku
 WHERE iv.available_quantity > 0
   AND (
-    COALESCE(sbs.avg_daily_velocity, sbs.daily_velocity, 0) <= 0.1
+    COALESCE(sbs.daily_velocity, 0) <= 0.1
     OR sbs.last_sold_at < CURRENT_DATE - INTERVAL '14 days'
     OR sbs.last_sold_at IS NULL
   );
@@ -288,11 +288,11 @@ SELECT
   iv.product_name                                                    AS strain,
   iv.variant_name                                                    AS unit,
   iv.available_quantity                                                   AS qty_on_hand,
-  COALESCE(sbs.avg_daily_velocity, sbs.daily_velocity, 0)           AS daily_velocity,
+  COALESCE(sbs.daily_velocity, 0)           AS daily_velocity,
   CASE
-    WHEN COALESCE(sbs.avg_daily_velocity, sbs.daily_velocity, 0) > 0
+    WHEN COALESCE(sbs.daily_velocity, 0) > 0
     THEN ROUND(iv.available_quantity
-           / COALESCE(sbs.avg_daily_velocity, sbs.daily_velocity, 1), 0)
+           / COALESCE(sbs.daily_velocity, 1), 0)
     ELSE NULL
   END                                                               AS days_of_coverage,
   sbs.last_sold_at::date                                            AS last_sale,
@@ -300,16 +300,16 @@ SELECT
   sc.unit_cost,
   ROUND(iv.available_quantity * COALESCE(sc.unit_cost, 0), 2)           AS capital_at_risk,
   CASE
-    WHEN COALESCE(sbs.avg_daily_velocity, 0) >= 0.5
-         AND ROUND(iv.available_quantity / NULLIF(sbs.avg_daily_velocity, 0), 0) <= 10
+    WHEN COALESCE(sbs.daily_velocity, 0) >= 0.5
+         AND ROUND(iv.available_quantity / NULLIF(sbs.daily_velocity, 0), 0) <= 10
       THEN 'RESTOCK'
-    WHEN COALESCE(sbs.avg_daily_velocity, 0) = 0
+    WHEN COALESCE(sbs.daily_velocity, 0) = 0
          AND (sbs.last_sold_at IS NULL OR sbs.last_sold_at < CURRENT_DATE - 30)
       THEN 'DEAD'
-    WHEN COALESCE(sbs.avg_daily_velocity, 0) < 0.1
+    WHEN COALESCE(sbs.daily_velocity, 0) < 0.1
          AND iv.available_quantity * COALESCE(sc.unit_cost, 0) > 500
       THEN 'CAPITAL_AT_RISK'
-    WHEN COALESCE(sbs.avg_daily_velocity, 0) < 0.1
+    WHEN COALESCE(sbs.daily_velocity, 0) < 0.1
       THEN 'SLOW'
     ELSE 'HEALTHY'
   END                                                               AS status

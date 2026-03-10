@@ -127,11 +127,12 @@ CREATE INDEX IF NOT EXISTS idx_sku_costs_sku_lower
 -- VERIFICATION — confirm indexes exist and show size estimates
 -- =============================================================================
 
+-- pg_stat_user_indexes uses relname (table) and indexrelname (index), not tablename/indexname
 SELECT
   schemaname,
-  tablename,
-  indexname,
+  relname        AS tablename,
+  indexrelname   AS indexname,
   pg_size_pretty(pg_relation_size(indexrelid)) AS index_size
 FROM pg_stat_user_indexes
-WHERE tablename IN ('orders', 'webhook_events', 'sold_by_sku', 'inventory_virtual', 'sku_costs')
-ORDER BY tablename, indexname;
+WHERE relname IN ('orders', 'webhook_events', 'wix_inventory_live', 'sku_costs')
+ORDER BY relname, indexrelname;
